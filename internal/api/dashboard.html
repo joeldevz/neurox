@@ -1,0 +1,376 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>neurox — brain</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: 'SF Mono', 'Cascadia Code', 'Fira Code', monospace;
+    background: #0a0a0f;
+    color: #e0e0e0;
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+  .header {
+    text-align: center;
+    padding: 2rem 1rem 1rem;
+  }
+  .header h1 {
+    font-size: 1.8rem;
+    font-weight: 300;
+    letter-spacing: 0.3em;
+    color: #8b5cf6;
+    text-transform: uppercase;
+  }
+  .header .pulse {
+    display: inline-block;
+    width: 8px; height: 8px;
+    background: #10b981;
+    border-radius: 50%;
+    margin-left: 0.5rem;
+    animation: pulse 2s ease-in-out infinite;
+  }
+  @keyframes pulse {
+    0%, 100% { opacity: 1; box-shadow: 0 0 0 0 rgba(16,185,129,0.4); }
+    50% { opacity: 0.6; box-shadow: 0 0 0 8px rgba(16,185,129,0); }
+  }
+
+  /* Brain visualization */
+  .brain {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    gap: 2rem;
+    padding: 2rem 1rem;
+    flex-wrap: wrap;
+  }
+  .layer {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    border-radius: 50%;
+    transition: all 0.6s cubic-bezier(0.4, 0, 0.2, 1);
+  }
+  .layer-core {
+    width: 180px; height: 180px;
+    background: radial-gradient(circle, rgba(139,92,246,0.3) 0%, rgba(139,92,246,0.05) 70%);
+    border: 2px solid rgba(139,92,246,0.6);
+    box-shadow: 0 0 30px rgba(139,92,246,0.2), inset 0 0 30px rgba(139,92,246,0.1);
+  }
+  .layer-working {
+    width: 220px; height: 220px;
+    background: radial-gradient(circle, rgba(59,130,246,0.2) 0%, rgba(59,130,246,0.03) 70%);
+    border: 2px solid rgba(59,130,246,0.4);
+    box-shadow: 0 0 25px rgba(59,130,246,0.15);
+  }
+  .layer-buffer {
+    width: 260px; height: 260px;
+    background: radial-gradient(circle, rgba(16,185,129,0.15) 0%, rgba(16,185,129,0.02) 70%);
+    border: 2px dashed rgba(16,185,129,0.3);
+    box-shadow: 0 0 20px rgba(16,185,129,0.1);
+  }
+  .layer .count {
+    font-size: 2.5rem;
+    font-weight: 700;
+    transition: all 0.3s;
+  }
+  .layer-core .count { color: #8b5cf6; }
+  .layer-working .count { color: #3b82f6; }
+  .layer-buffer .count { color: #10b981; }
+  .layer .label {
+    font-size: 0.7rem;
+    text-transform: uppercase;
+    letter-spacing: 0.15em;
+    opacity: 0.7;
+    margin-top: 0.25rem;
+  }
+  .layer .sublabel {
+    font-size: 0.6rem;
+    opacity: 0.4;
+    margin-top: 0.15rem;
+  }
+
+  /* Stats bar */
+  .stats {
+    display: flex;
+    justify-content: center;
+    gap: 2rem;
+    padding: 1.5rem;
+    flex-wrap: wrap;
+  }
+  .stat {
+    text-align: center;
+    padding: 0.75rem 1.5rem;
+    background: rgba(255,255,255,0.03);
+    border: 1px solid rgba(255,255,255,0.06);
+    border-radius: 8px;
+  }
+  .stat .value {
+    font-size: 1.4rem;
+    font-weight: 600;
+    color: #f59e0b;
+  }
+  .stat .name {
+    font-size: 0.65rem;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    opacity: 0.5;
+    margin-top: 0.2rem;
+  }
+  .stat.stale .value { color: #ef4444; }
+  .stat.links .value { color: #06b6d4; }
+  .stat.sessions .value { color: #8b5cf6; }
+
+  /* Observations list */
+  .observations {
+    max-width: 900px;
+    margin: 1rem auto;
+    padding: 0 1rem 2rem;
+  }
+  .observations h2 {
+    font-size: 0.8rem;
+    text-transform: uppercase;
+    letter-spacing: 0.15em;
+    color: #666;
+    margin-bottom: 1rem;
+    padding-bottom: 0.5rem;
+    border-bottom: 1px solid rgba(255,255,255,0.06);
+  }
+  .obs {
+    padding: 0.75rem 1rem;
+    margin-bottom: 0.5rem;
+    background: rgba(255,255,255,0.02);
+    border-left: 3px solid;
+    border-radius: 0 6px 6px 0;
+    transition: all 0.2s;
+    cursor: default;
+  }
+  .obs:hover {
+    background: rgba(255,255,255,0.05);
+    transform: translateX(4px);
+  }
+  .obs.layer-0 { border-color: #10b981; }
+  .obs.layer-1 { border-color: #3b82f6; }
+  .obs.layer-2 { border-color: #8b5cf6; }
+  .obs .obs-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 0.3rem;
+  }
+  .obs .obs-title {
+    font-weight: 600;
+    font-size: 0.85rem;
+  }
+  .obs .obs-meta {
+    display: flex;
+    gap: 0.5rem;
+    align-items: center;
+  }
+  .obs .obs-type {
+    font-size: 0.6rem;
+    padding: 0.15rem 0.4rem;
+    border-radius: 3px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+  .obs .obs-type.decision { background: rgba(139,92,246,0.2); color: #8b5cf6; }
+  .obs .obs-type.bugfix { background: rgba(239,68,68,0.2); color: #ef4444; }
+  .obs .obs-type.discovery { background: rgba(59,130,246,0.2); color: #3b82f6; }
+  .obs .obs-type.pattern { background: rgba(16,185,129,0.2); color: #10b981; }
+  .obs .obs-type.gotcha { background: rgba(245,158,11,0.2); color: #f59e0b; }
+  .obs .obs-type.config { background: rgba(107,114,128,0.2); color: #6b7280; }
+  .obs .obs-type.preference { background: rgba(236,72,153,0.2); color: #ec4899; }
+  .obs .obs-type.question { background: rgba(6,182,212,0.2); color: #06b6d4; }
+  .obs .obs-layer {
+    font-size: 0.55rem;
+    opacity: 0.5;
+  }
+  .obs .obs-content {
+    font-size: 0.75rem;
+    opacity: 0.6;
+    line-height: 1.4;
+    white-space: pre-line;
+    max-height: 3.5em;
+    overflow: hidden;
+  }
+  .obs .obs-tags {
+    margin-top: 0.3rem;
+    display: flex;
+    gap: 0.3rem;
+  }
+  .obs .tag {
+    font-size: 0.55rem;
+    padding: 0.1rem 0.35rem;
+    background: rgba(255,255,255,0.05);
+    border-radius: 3px;
+    opacity: 0.5;
+  }
+
+  /* Importance bar */
+  .imp-bar {
+    width: 40px; height: 4px;
+    background: rgba(255,255,255,0.1);
+    border-radius: 2px;
+    overflow: hidden;
+  }
+  .imp-bar .imp-fill {
+    height: 100%;
+    border-radius: 2px;
+    background: linear-gradient(90deg, #10b981, #f59e0b);
+    transition: width 0.3s;
+  }
+
+  .footer {
+    text-align: center;
+    padding: 2rem;
+    font-size: 0.6rem;
+    opacity: 0.3;
+  }
+
+  /* Animate new observations */
+  @keyframes fadeIn {
+    from { opacity: 0; transform: translateY(-10px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  .obs { animation: fadeIn 0.3s ease-out; }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>neurox<span class="pulse"></span></h1>
+</div>
+
+<div class="brain">
+  <div class="layer layer-buffer">
+    <span class="count" id="buffer-count">0</span>
+    <span class="label">Buffer</span>
+    <span class="sublabel">short-term</span>
+  </div>
+  <div class="layer layer-working">
+    <span class="count" id="working-count">0</span>
+    <span class="label">Working</span>
+    <span class="sublabel">consolidating</span>
+  </div>
+  <div class="layer layer-core">
+    <span class="count" id="core-count">0</span>
+    <span class="label">Core</span>
+    <span class="sublabel">permanent</span>
+  </div>
+</div>
+
+<div class="stats">
+  <div class="stat">
+    <div class="value" id="total-count">0</div>
+    <div class="name">Total</div>
+  </div>
+  <div class="stat stale">
+    <div class="value" id="stale-count">0</div>
+    <div class="name">Stale</div>
+  </div>
+  <div class="stat links">
+    <div class="value" id="links-count">0</div>
+    <div class="name">Links</div>
+  </div>
+  <div class="stat sessions">
+    <div class="value" id="sessions-count">0</div>
+    <div class="name">Sessions</div>
+  </div>
+</div>
+
+<div class="observations">
+  <h2>Recent Memories</h2>
+  <div id="obs-list"></div>
+</div>
+
+<div class="footer">neurox v0.1.0 — refreshes every 3s</div>
+
+<script>
+const API = window.location.origin;
+const layers = ['Buffer', 'Working', 'Core'];
+
+async function fetchJSON(url) {
+  const r = await fetch(url);
+  return r.json();
+}
+
+function animateCount(el, target) {
+  const current = parseInt(el.textContent) || 0;
+  if (current === target) return;
+  el.textContent = target;
+  el.style.transform = 'scale(1.2)';
+  setTimeout(() => el.style.transform = 'scale(1)', 200);
+}
+
+function renderObs(items) {
+  const list = document.getElementById('obs-list');
+  if (!items || items.length === 0) {
+    list.innerHTML = '<div style="text-align:center;opacity:0.3;padding:2rem">No memories yet</div>';
+    return;
+  }
+  list.innerHTML = items.map(o => {
+    const tags = (o.tags || []).map(t => `<span class="tag">${esc(t)}</span>`).join('');
+    const impPct = Math.round((o.importance || 0.5) * 100);
+    return `
+      <div class="obs layer-${o.layer}">
+        <div class="obs-header">
+          <span class="obs-title">${esc(o.title)}</span>
+          <div class="obs-meta">
+            <span class="obs-type ${o.observation_type}">${o.observation_type}</span>
+            <div class="imp-bar"><div class="imp-fill" style="width:${impPct}%"></div></div>
+            <span class="obs-layer">${layers[o.layer] || 'L'+o.layer}</span>
+          </div>
+        </div>
+        <div class="obs-content">${esc(o.content)}</div>
+        ${tags ? `<div class="obs-tags">${tags}</div>` : ''}
+      </div>`;
+  }).join('');
+}
+
+function esc(s) {
+  if (!s) return '';
+  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+async function refresh() {
+  try {
+    const status = await fetchJSON(API + '/api/v1/status');
+    animateCount(document.getElementById('buffer-count'), status.buffer);
+    animateCount(document.getElementById('working-count'), status.working);
+    animateCount(document.getElementById('core-count'), status.core);
+    animateCount(document.getElementById('total-count'), status.total);
+    animateCount(document.getElementById('stale-count'), status.stale);
+    animateCount(document.getElementById('links-count'), status.links);
+    animateCount(document.getElementById('sessions-count'), status.active_sessions);
+
+    // Scale circles based on count
+    const maxSize = Math.max(status.buffer, status.working, status.core, 1);
+    scaleLayer('.layer-buffer', status.buffer, maxSize, 260);
+    scaleLayer('.layer-working', status.working, maxSize, 220);
+    scaleLayer('.layer-core', status.core, maxSize, 180);
+
+    const ctx = await fetchJSON(API + '/api/v1/observations/context?namespace=default&limit=30');
+    renderObs(ctx.items);
+  } catch(e) {
+    console.error('refresh error:', e);
+  }
+}
+
+function scaleLayer(sel, count, max, baseSize) {
+  const el = document.querySelector(sel);
+  const scale = count === 0 ? 1 : 0.7 + 0.3 * (count / Math.max(max, 1));
+  const size = Math.round(baseSize * scale);
+  el.style.width = size + 'px';
+  el.style.height = size + 'px';
+}
+
+refresh();
+setInterval(refresh, 3000);
+</script>
+</body>
+</html>

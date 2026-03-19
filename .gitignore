@@ -1,0 +1,8 @@
+# Binary
+neurox
+
+# Runtime databases
+*.db
+
+# Erroneous tilde directory
+~/

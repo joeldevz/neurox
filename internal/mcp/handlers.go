@@ -1,0 +1,645 @@
+package mcp
+
+import (
+	"context"
+	"database/sql"
+	"encoding/json"
+	"fmt"
+	"strings"
+
+	"github.com/mark3labs/mcp-go/mcp"
+
+	"neurox/internal/consolidate"
+	"neurox/internal/facts"
+	"neurox/internal/links"
+	"neurox/internal/llm"
+	"neurox/internal/observation"
+	"neurox/internal/proactive"
+	"neurox/internal/recall"
+	reflectpkg "neurox/internal/reflect"
+	"neurox/internal/session"
+)
+
+type Deps struct {
+	ObservationStore *observation.Store
+	RecallEngine     *recall.Engine
+	LinkStore        *links.Store
+	FactStore        *facts.Store
+	FactExtractor    *facts.Extractor
+	ReflectEngine    *reflectpkg.Engine
+	SessionManager   *session.Manager
+	ProactiveEngine  *proactive.Engine
+	Pipeline         *consolidate.Pipeline
+	DB               *sql.DB
+	LLMProvider      llm.Provider
+	LLMGate          *llm.Gate
+}
+
+func (d *Deps) handleSave(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	title := req.GetString("title", "")
+	content := req.GetString("content", "")
+
+	obs := observation.Observation{
+		Title:           title,
+		Content:         content,
+		ObservationType: observation.ObservationType(req.GetString("observation_type", "")),
+		Kind:            observation.Kind(req.GetString("kind", "")),
+		TopicKey:        req.GetString("topic_key", ""),
+		Namespace:       req.GetString("namespace", ""),
+	}
+
+	if args := req.GetArguments(); args != nil {
+		if v, ok := args["confidence"]; ok {
+			if f, ok := v.(float64); ok {
+				obs.Confidence = f
+			}
+		}
+	}
+
+	if tags := req.GetString("tags", ""); tags != "" {
+		obs.Tags = splitCSV(tags)
+	}
+	if files := req.GetString("files", ""); files != "" {
+		obs.Files = splitCSV(files)
+	}
+
+	// Quality gate: check if worth saving
+	if d.LLMGate != nil {
+		decision, _ := d.LLMGate.SaveGateDecide(ctx, llm.SaveInput{
+			Title:           obs.Title,
+			Content:         obs.Content,
+			ObservationType: string(obs.ObservationType),
+		})
+		if decision == llm.SaveReject {
+			return toolResultJSON(map[string]string{
+				"message": "observation rejected by quality gate (not worth persisting)",
+				"title":   obs.Title,
+			})
+		}
+	}
+
+	saved, err := d.ObservationStore.Save(ctx, obs)
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("save failed: %v", err)), nil
+	}
+
+	// Extract facts in background if LLM available
+	if d.FactExtractor != nil {
+		go d.FactExtractor.ExtractAndSave(context.Background(), saved.ID, saved.Title, saved.Content, saved.Namespace)
+	}
+
+	return toolResultJSON(saveResponse{
+		ID:        saved.ID,
+		Title:     saved.Title,
+		Layer:     saved.Layer,
+		Namespace: saved.Namespace,
+		TopicKey:  saved.TopicKey,
+		Message:   "observation saved to Buffer",
+	})
+}
+
+func (d *Deps) handleRecall(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	query := req.GetString("query", "")
+
+	opts := recall.SearchOptions{
+		Query:           query,
+		ObservationType: observation.ObservationType(req.GetString("observation_type", "")),
+		Kind:            observation.Kind(req.GetString("kind", "")),
+		Namespace:       req.GetString("namespace", ""),
+	}
+
+	if files := req.GetString("files", ""); files != "" {
+		opts.Files = splitCSV(files)
+	}
+
+	if args := req.GetArguments(); args != nil {
+		if v, ok := args["include_stale"]; ok {
+			if b, ok := v.(bool); ok {
+				opts.IncludeStale = b
+			}
+		}
+		if v, ok := args["limit"]; ok {
+			if f, ok := v.(float64); ok {
+				opts.Limit = int(f)
+			}
+		}
+	}
+
+	results, err := d.RecallEngine.Search(ctx, opts)
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("recall failed: %v", err)), nil
+	}
+
+	items := make([]recallResponseItem, 0, len(results))
+	for _, r := range results {
+		items = append(items, recallResponseItem{
+			ID:              r.ID,
+			Title:           r.Title,
+			Content:         r.Content,
+			Score:           r.Score,
+			Layer:           r.Layer,
+			ObservationType: string(r.ObservationType),
+			Kind:            string(r.Kind),
+			Confidence:      r.Confidence,
+			Tags:            r.Tags,
+			Staleness:       r.Staleness,
+			LinkedFiles:     r.LinkedFiles,
+		})
+	}
+
+	return toolResultJSON(recallResponse{
+		Query:   query,
+		Count:   len(items),
+		Results: items,
+	})
+}
+
+func (d *Deps) handleContext(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	namespace := req.GetString("namespace", "default")
+	limit := 20
+	if args := req.GetArguments(); args != nil {
+		if v, ok := args["limit"]; ok {
+			if f, ok := v.(float64); ok && f > 0 {
+				limit = int(f)
+			}
+		}
+	}
+
+	var files []string
+	if f := req.GetString("files", ""); f != "" {
+		files = splitCSV(f)
+	}
+
+	if d.ProactiveEngine != nil {
+		result, err := d.ProactiveEngine.GetContext(ctx, namespace, files, limit)
+		if err != nil {
+			return mcp.NewToolResultError(fmt.Sprintf("context failed: %v", err)), nil
+		}
+		return toolResultJSON(result)
+	}
+
+	// Fallback: simple query if proactive engine not available
+	query := "SELECT id, title, content, observation_type, layer, confidence, importance, kind, tags, staleness, created_at FROM observations WHERE deleted_at IS NULL AND namespace = ? AND valid_until IS NULL ORDER BY layer DESC, importance DESC, created_at DESC LIMIT ?"
+	args := []any{namespace, limit}
+
+	rows, err := d.DB.QueryContext(ctx, query, args...)
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("context query failed: %v", err)), nil
+	}
+	defer rows.Close()
+
+	var items []contextResponseItem
+	for rows.Next() {
+		var item contextResponseItem
+		var tags sql.NullString
+		var createdAt string
+		if err := rows.Scan(&item.ID, &item.Title, &item.Content, &item.ObservationType, &item.Layer, &item.Confidence, &item.Importance, &item.Kind, &tags, &item.Staleness, &createdAt); err != nil {
+			return mcp.NewToolResultError(fmt.Sprintf("scan context row: %v", err)), nil
+		}
+		if tags.Valid {
+			item.Tags = observation.ParseTags(tags.String)
+		}
+		item.CreatedAt = createdAt
+		items = append(items, item)
+	}
+
+	return toolResultJSON(contextResponse{
+		Namespace: namespace,
+		Count:     len(items),
+		Items:     items,
+	})
+}
+
+func (d *Deps) handleUpdate(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	id := req.GetString("id", "")
+	title := req.GetString("title", "")
+	content := req.GetString("content", "")
+
+	obs := observation.Observation{
+		ID:              id,
+		Title:           title,
+		Content:         content,
+		ObservationType: observation.ObservationType(req.GetString("observation_type", "")),
+		Kind:            observation.Kind(req.GetString("kind", "")),
+	}
+
+	if args := req.GetArguments(); args != nil {
+		if v, ok := args["confidence"]; ok {
+			if f, ok := v.(float64); ok {
+				obs.Confidence = f
+			}
+		}
+	}
+
+	if tags := req.GetString("tags", ""); tags != "" {
+		obs.Tags = splitCSV(tags)
+	}
+	if files := req.GetString("files", ""); files != "" {
+		obs.Files = splitCSV(files)
+	}
+
+	updated, err := d.ObservationStore.Update(ctx, obs)
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("update failed: %v", err)), nil
+	}
+
+	return toolResultJSON(saveResponse{
+		ID:        updated.ID,
+		Title:     updated.Title,
+		Layer:     updated.Layer,
+		Namespace: updated.Namespace,
+		Message:   "observation updated",
+	})
+}
+
+func (d *Deps) handleForget(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	id := req.GetString("id", "")
+	if strings.TrimSpace(id) == "" {
+		return mcp.NewToolResultError("id is required"), nil
+	}
+
+	if err := d.ObservationStore.SoftDelete(ctx, id); err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("forget failed: %v", err)), nil
+	}
+
+	return toolResultJSON(map[string]string{
+		"id":      id,
+		"message": "observation forgotten (soft-deleted)",
+	})
+}
+
+func (d *Deps) handleInvalidate(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	input := observation.InvalidateInput{
+		ObservationID:      req.GetString("observation_id", ""),
+		Reason:             req.GetString("reason", ""),
+		ReplacementTitle:   req.GetString("replacement_title", ""),
+		ReplacementContent: req.GetString("replacement_content", ""),
+	}
+
+	result, err := d.ObservationStore.Invalidate(ctx, d.LinkStore, input)
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("invalidate failed: %v", err)), nil
+	}
+
+	resp := map[string]string{
+		"invalidated_id": result.InvalidatedID,
+		"message":        "observation marked as stale",
+	}
+	if result.ReplacementID != "" {
+		resp["replacement_id"] = result.ReplacementID
+		resp["link_id"] = result.LinkID
+		resp["message"] = "observation invalidated and replaced"
+	}
+
+	return toolResultJSON(resp)
+}
+
+func (d *Deps) handleStatus(ctx context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	var total, buffer, working, core int
+	var staleCount, expiredCount int
+
+	d.DB.QueryRowContext(ctx, "SELECT COUNT(*) FROM observations WHERE deleted_at IS NULL").Scan(&total)
+	d.DB.QueryRowContext(ctx, "SELECT COUNT(*) FROM observations WHERE deleted_at IS NULL AND layer = 0").Scan(&buffer)
+	d.DB.QueryRowContext(ctx, "SELECT COUNT(*) FROM observations WHERE deleted_at IS NULL AND layer = 1").Scan(&working)
+	d.DB.QueryRowContext(ctx, "SELECT COUNT(*) FROM observations WHERE deleted_at IS NULL AND layer = 2").Scan(&core)
+	d.DB.QueryRowContext(ctx, "SELECT COUNT(*) FROM observations WHERE deleted_at IS NULL AND staleness = 'stale'").Scan(&staleCount)
+	d.DB.QueryRowContext(ctx, "SELECT COUNT(*) FROM observations WHERE deleted_at IS NULL AND staleness = 'expired'").Scan(&expiredCount)
+
+	var linkCount int
+	d.DB.QueryRowContext(ctx, "SELECT COUNT(*) FROM observation_links").Scan(&linkCount)
+
+	var sessionCount int
+	d.DB.QueryRowContext(ctx, "SELECT COUNT(*) FROM sessions WHERE status = 'active'").Scan(&sessionCount)
+
+	var factCount int
+	if d.FactStore != nil {
+		factCount, _ = d.FactStore.Count(ctx, "")
+		// Count across all namespaces
+		d.DB.QueryRowContext(ctx, "SELECT COUNT(*) FROM facts WHERE valid_until IS NULL").Scan(&factCount)
+	}
+
+	llmName := "disabled"
+	gateMode := "off"
+	if d.LLMProvider != nil {
+		llmName = d.LLMProvider.Name()
+	}
+	if d.LLMGate != nil {
+		gateMode = string(d.LLMGate.Mode())
+	}
+
+	return toolResultJSON(statusResponse{
+		Total:          total,
+		Buffer:         buffer,
+		Working:        working,
+		Core:           core,
+		Stale:          staleCount,
+		Expired:        expiredCount,
+		Links:          linkCount,
+		Facts:          factCount,
+		ActiveSessions: sessionCount,
+		LLMProvider:    llmName,
+		GateMode:       gateMode,
+	})
+}
+
+func (d *Deps) handleSessionStart(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	title := req.GetString("title", "")
+	directory := req.GetString("directory", "")
+	branch := req.GetString("branch", "")
+	namespace := req.GetString("namespace", "default")
+
+	if d.SessionManager != nil {
+		startResult, err := d.SessionManager.Start(ctx, title, directory, branch, namespace)
+		if err != nil {
+			return mcp.NewToolResultError(fmt.Sprintf("start session failed: %v", err)), nil
+		}
+
+		// Get proactive context for this session
+		var contextResult *proactive.ContextResult
+		if d.ProactiveEngine != nil {
+			cr, err := d.ProactiveEngine.GetSessionContext(ctx, namespace, title, directory, branch, 15)
+			if err == nil {
+				contextResult = &cr
+			}
+		}
+
+		resp := map[string]any{
+			"session_id": startResult.SessionID,
+			"namespace":  startResult.Namespace,
+			"abandoned":  startResult.Abandoned,
+			"message":    "session started",
+		}
+		if contextResult != nil && contextResult.Count > 0 {
+			resp["context"] = contextResult.Items
+			resp["context_count"] = contextResult.Count
+			if len(contextResult.Reflections) > 0 {
+				resp["reflections"] = contextResult.Reflections
+			}
+		}
+
+		return toolResultJSON(resp)
+	}
+
+	// Fallback without session manager
+	d.DB.ExecContext(ctx, `
+		UPDATE sessions SET status = 'abandoned', ended_at = datetime('now')
+		WHERE status = 'active' AND namespace = ?
+	`, namespace)
+
+	id := d.LinkStore.IDGen()
+	_, err := d.DB.ExecContext(ctx, `
+		INSERT INTO sessions(id, title, directory, branch, namespace, status)
+		VALUES(?, ?, ?, ?, ?, 'active')
+	`, id, nullableString(title), nullableString(directory), nullableString(branch), namespace)
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("start session failed: %v", err)), nil
+	}
+
+	return toolResultJSON(map[string]string{
+		"session_id": id,
+		"namespace":  namespace,
+		"message":    "session started",
+	})
+}
+
+func (d *Deps) handleSessionEnd(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	sessionID := req.GetString("session_id", "")
+	summary := req.GetString("summary", "")
+
+	if strings.TrimSpace(sessionID) == "" {
+		return mcp.NewToolResultError("session_id is required"), nil
+	}
+	if strings.TrimSpace(summary) == "" {
+		return mcp.NewToolResultError("summary is required"), nil
+	}
+
+	if d.SessionManager != nil {
+		endResult, err := d.SessionManager.End(ctx, sessionID, summary)
+		if err != nil {
+			return mcp.NewToolResultError(fmt.Sprintf("end session failed: %v", err)), nil
+		}
+
+		return toolResultJSON(map[string]any{
+			"session_id":              endResult.SessionID,
+			"observations_extracted":  endResult.ObservationsExtracted,
+			"message":                 "session completed",
+		})
+	}
+
+	// Fallback
+	result, err := d.DB.ExecContext(ctx, `
+		UPDATE sessions SET status = 'completed', summary = ?, ended_at = datetime('now')
+		WHERE id = ? AND status = 'active'
+	`, summary, sessionID)
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("end session failed: %v", err)), nil
+	}
+	affected, _ := result.RowsAffected()
+	if affected == 0 {
+		return mcp.NewToolResultError("session not found or already ended"), nil
+	}
+
+	return toolResultJSON(map[string]string{
+		"session_id": sessionID,
+		"message":    "session completed",
+	})
+}
+
+func (d *Deps) handleGitHook(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	changedFilesStr := req.GetString("changed_files", "")
+	commitSha := req.GetString("commit_sha", "")
+
+	if strings.TrimSpace(changedFilesStr) == "" {
+		return mcp.NewToolResultError("changed_files is required"), nil
+	}
+	if strings.TrimSpace(commitSha) == "" {
+		return mcp.NewToolResultError("commit_sha is required"), nil
+	}
+
+	changedFiles := splitCSV(changedFilesStr)
+	if len(changedFiles) == 0 {
+		return mcp.NewToolResultError("no valid files provided"), nil
+	}
+
+	// Find observations linked to changed files and mark them stale
+	placeholders := make([]string, len(changedFiles))
+	args := make([]any, len(changedFiles))
+	for i, f := range changedFiles {
+		placeholders[i] = "?"
+		args[i] = f
+	}
+
+	// Mark file_observations as expired
+	updateFileQuery := fmt.Sprintf(`
+		UPDATE file_observations
+		SET valid_until = datetime('now'), commit_sha_until = ?
+		WHERE file_path IN (%s) AND valid_until IS NULL
+	`, strings.Join(placeholders, ","))
+	fileArgs := append([]any{commitSha}, args...)
+	d.DB.ExecContext(ctx, updateFileQuery, fileArgs...)
+
+	// Mark linked observations as stale
+	markStaleQuery := fmt.Sprintf(`
+		UPDATE observations
+		SET staleness = 'stale',
+		    confidence = MAX(0.01, confidence * 0.5),
+		    updated_at = datetime('now'),
+		    modified_epoch = modified_epoch + 1
+		WHERE deleted_at IS NULL
+		  AND staleness = 'fresh'
+		  AND id IN (
+		    SELECT DISTINCT observation_id FROM file_observations
+		    WHERE file_path IN (%s)
+		  )
+	`, strings.Join(placeholders, ","))
+
+	result, err := d.DB.ExecContext(ctx, markStaleQuery, args...)
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("mark stale failed: %v", err)), nil
+	}
+	affected, _ := result.RowsAffected()
+
+	return toolResultJSON(map[string]any{
+		"commit_sha":           commitSha,
+		"files_processed":      len(changedFiles),
+		"observations_staled":  affected,
+		"message":              "git hook processed",
+	})
+}
+
+func (d *Deps) handleReflect(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	namespace := req.GetString("namespace", "default")
+
+	if d.ReflectEngine == nil {
+		return mcp.NewToolResultError("reflection engine not configured"), nil
+	}
+
+	result, err := d.ReflectEngine.ForceReflect(ctx, namespace)
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("reflection failed: %v", err)), nil
+	}
+
+	return toolResultJSON(map[string]any{
+		"namespace":            namespace,
+		"source_observations":  result.SourceCount,
+		"reflections_created":  result.ReflectionsCreated,
+		"message":              "reflection completed",
+	})
+}
+
+func (d *Deps) handleConsolidate(ctx context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	if d.Pipeline == nil {
+		return mcp.NewToolResultError("consolidation pipeline not available"), nil
+	}
+
+	if err := d.Pipeline.ForceRun(ctx); err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("consolidation failed: %v", err)), nil
+	}
+
+	var buffer, working, core int
+	d.DB.QueryRowContext(ctx, "SELECT COUNT(*) FROM observations WHERE deleted_at IS NULL AND layer = 0").Scan(&buffer)
+	d.DB.QueryRowContext(ctx, "SELECT COUNT(*) FROM observations WHERE deleted_at IS NULL AND layer = 1").Scan(&working)
+	d.DB.QueryRowContext(ctx, "SELECT COUNT(*) FROM observations WHERE deleted_at IS NULL AND layer = 2").Scan(&core)
+
+	return toolResultJSON(map[string]any{
+		"message": "consolidation completed",
+		"buffer":  buffer,
+		"working": working,
+		"core":    core,
+	})
+}
+
+// helpers
+
+func splitCSV(s string) []string {
+	parts := strings.Split(s, ",")
+	result := make([]string, 0, len(parts))
+	for _, p := range parts {
+		trimmed := strings.TrimSpace(p)
+		if trimmed != "" {
+			result = append(result, trimmed)
+		}
+	}
+	return result
+}
+
+func nullableString(value string) any {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return nil
+	}
+	return trimmed
+}
+
+func toolResultJSON(data any) (*mcp.CallToolResult, error) {
+	b, err := json.Marshal(data)
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("marshal response: %v", err)), nil
+	}
+	return mcp.NewToolResultText(string(b)), nil
+}
+
+// response types
+
+type saveResponse struct {
+	ID        string `json:"id"`
+	Title     string `json:"title"`
+	Layer     int    `json:"layer"`
+	Namespace string `json:"namespace"`
+	TopicKey  string `json:"topic_key,omitempty"`
+	Message   string `json:"message"`
+}
+
+type recallResponse struct {
+	Query   string               `json:"query"`
+	Count   int                  `json:"count"`
+	Results []recallResponseItem `json:"results"`
+}
+
+type recallResponseItem struct {
+	ID              string   `json:"id"`
+	Title           string   `json:"title"`
+	Content         string   `json:"content"`
+	Score           float64  `json:"score"`
+	Layer           int      `json:"layer"`
+	ObservationType string   `json:"observation_type"`
+	Kind            string   `json:"kind"`
+	Confidence      float64  `json:"confidence"`
+	Tags            []string `json:"tags,omitempty"`
+	Staleness       string   `json:"staleness"`
+	LinkedFiles     []string `json:"linked_files,omitempty"`
+}
+
+type contextResponse struct {
+	Namespace string                `json:"namespace"`
+	Count     int                   `json:"count"`
+	Items     []contextResponseItem `json:"items"`
+}
+
+type contextResponseItem struct {
+	ID              string   `json:"id"`
+	Title           string   `json:"title"`
+	Content         string   `json:"content"`
+	ObservationType string   `json:"observation_type"`
+	Layer           int      `json:"layer"`
+	Confidence      float64  `json:"confidence"`
+	Importance      float64  `json:"importance"`
+	Kind            string   `json:"kind"`
+	Tags            []string `json:"tags,omitempty"`
+	Staleness       string   `json:"staleness"`
+	CreatedAt       string   `json:"created_at"`
+}
+
+type statusResponse struct {
+	Total          int    `json:"total"`
+	Buffer         int    `json:"buffer"`
+	Working        int    `json:"working"`
+	Core           int    `json:"core"`
+	Stale          int    `json:"stale"`
+	Expired        int    `json:"expired"`
+	Links          int    `json:"links"`
+	Facts          int    `json:"facts"`
+	ActiveSessions int    `json:"active_sessions"`
+	LLMProvider    string `json:"llm_provider"`
+	GateMode       string `json:"gate_mode"`
+}
