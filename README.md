@@ -264,6 +264,30 @@ neurox graph --output neurox-graph.html
 neurox install-hook
 ```
 
+Most CLI commands print JSON, which makes them easy to pipe into other tools or shell scripts.
+
+## CLI Reference
+
+| Command | What it does | Useful flags |
+|---|---|---|
+| `neurox mcp` | Starts the MCP server over stdio | none |
+| `neurox serve` | Starts the HTTP server on port `7438` | none |
+| `neurox save "title"` | Saves an observation into Buffer | `--content`, `--type`, `--kind`, `--confidence`, `--topic-key`, `--tags`, `--files`, `--namespace` |
+| `neurox recall "query"` | Searches memory with temporal-aware ranking | `--type`, `--kind`, `--namespace`, `--files`, `--include-stale`, `--limit` |
+| `neurox context` | Returns proactive context for a namespace or files | `--namespace`, `--files`, `--limit` |
+| `neurox invalidate <id>` | Marks an observation incorrect and can create a replacement | `--reason`, `--replacement-title`, `--replacement-content` |
+| `neurox status` | Shows brain, provider, and database stats | none |
+| `neurox consolidate` | Forces a full consolidation run immediately | none |
+| `neurox graph` | Generates an interactive HTML graph view | `--namespace`, `--type`, `--tags`, `--min-importance`, `--limit`, `--linked-only`, `--output`, `--no-browser` |
+| `neurox config` | Prints the resolved runtime config | none |
+| `neurox install-hook` | Installs the git `post-commit` hook in the current repo | none |
+
+### CLI Notes
+
+- `save`, `recall`, `context`, `invalidate`, `status`, and `config` return JSON to stdout.
+- `graph` writes `neurox-graph.html` by default and opens the browser unless `--no-browser` is set.
+- `install-hook` does not overwrite an existing hook; remove `.git/hooks/post-commit` first if you want to replace it.
+
 ## Agent Setup
 
 ### Claude Code
@@ -327,6 +351,25 @@ neurox serve  # REST API on port 7438
 | **`reflect`** | Synthesize Working-layer observations into high-level insights |
 | **`consolidate`** | Force immediate full consolidation cycle |
 
+### MCP Tool Inputs
+
+| Tool | Key inputs |
+|---|---|
+| `save` | `title`, `content`, `observation_type`, `kind`, `confidence`, `topic_key`, `tags`, `files`, `namespace` |
+| `recall` | `query`, `observation_type`, `kind`, `namespace`, `files`, `include_stale`, `limit` |
+| `context` | `namespace`, `files`, `limit` |
+| `update` | `id`, `title`, `content`, `observation_type`, `kind`, `confidence`, `tags`, `files` |
+| `forget` | `id` |
+| `invalidate` | `observation_id`, `reason`, `replacement_title`, `replacement_content` |
+| `status` | no inputs |
+| `session_start` | `title`, `directory`, `branch`, `namespace` |
+| `session_end` | `session_id`, `summary` |
+| `git_hook` | `changed_files`, `commit_sha`, `branch` |
+| `reflect` | `namespace` |
+| `consolidate` | no inputs |
+
+The MCP surface is the best choice for coding agents; the CLI and HTTP API expose the same core engine for local scripts, dashboards, and debugging.
+
 ## REST API
 
 ```
@@ -347,6 +390,42 @@ POST   /api/v1/hooks/git                    Git hook
 GET    /api/v1/graph                        Interactive graph view (or JSON with ?format=json)
 POST   /api/v1/reflect                      Trigger reflection
 ```
+
+### REST Query Parameters
+
+| Route | Supported query params |
+|---|---|
+| `GET /api/v1/observations/search` | `q`, `type`, `kind`, `namespace`, `files`, `staleness`, `include_stale`, `limit` |
+| `GET /api/v1/observations/context` | `namespace`, `files`, `limit` |
+| `GET /api/v1/observations/browse` | `limit`, `offset`, `type`, `layer`, `namespace`, `kind`, `staleness` |
+| `GET /api/v1/graph` | `namespace`, `type`, `tags`, `min_importance`, `limit`, `linked_only`, `format=json` |
+
+### REST Payload Examples
+
+```json
+POST /api/v1/observations
+{
+  "title": "JWT auth middleware",
+  "content": "What: Added RS256 middleware\nWhy: Standardize API auth\nWhere: internal/auth/middleware.go",
+  "observation_type": "decision",
+  "kind": "semantic",
+  "confidence": 0.9,
+  "tags": ["auth", "jwt"],
+  "files": ["internal/auth/middleware.go"],
+  "namespace": "neurox"
+}
+```
+
+```json
+POST /api/v1/hooks/git
+{
+  "changed_files": ["README.md", "main.go"],
+  "commit_sha": "b04b533",
+  "branch": "main"
+}
+```
+
+`POST /api/v1/reflect` currently returns a placeholder response; reflective synthesis is fully exposed through MCP and the internal engine, while the REST entry point is still minimal.
 
 ## Configuration
 
@@ -383,6 +462,20 @@ NEUROX_LLM_PROVIDER=ollama
 NEUROX_LLM_GATE_MODE=auto
 NEUROX_EMBED_PROVIDER=ollama
 ```
+
+Common overrides:
+
+| Variable | Purpose |
+|---|---|
+| `NEUROX_CONFIG_DIR` | Override the default config directory |
+| `NEUROX_CONFIG_PATH` | Load config from a custom YAML path |
+| `NEUROX_DATABASE_PATH` | Point Neurox to a custom SQLite database |
+| `NEUROX_LLM_PROVIDER` | Set `ollama`, `remote`, or leave empty for auto-detect |
+| `NEUROX_LLM_GATE_MODE` | Set `auto`, `full`, or `off` |
+| `NEUROX_LLM_OLLAMA_URL` / `NEUROX_LLM_OLLAMA_MODEL` | Override the Ollama LLM endpoint/model |
+| `NEUROX_LLM_REMOTE_URL` / `NEUROX_LLM_REMOTE_API_KEY` / `NEUROX_LLM_REMOTE_MODEL` | Override remote OpenAI-compatible LLM settings |
+| `NEUROX_EMBED_PROVIDER` | Set embeddings provider |
+| `NEUROX_EMBED_REMOTE_URL` / `NEUROX_EMBED_REMOTE_API_KEY` / `NEUROX_EMBED_REMOTE_MODEL` | Override remote embedding settings |
 
 ### Graceful Degradation
 
