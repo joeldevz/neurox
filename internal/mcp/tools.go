@@ -43,7 +43,7 @@ func saveTool() mcp.Tool {
 
 func recallTool() mcp.Tool {
 	return mcp.NewTool("recall",
-		mcp.WithDescription("Search memories using FTS5 keyword search with tri-factor scoring (recency x importance x relevance). Returns ranked results."),
+		mcp.WithDescription("Search memories using FTS5 keyword search with tri-factor scoring (recency x importance x relevance). Returns ranked results. Automatically detects temporal intent in queries (current, history, when, duration) and adjusts ranking accordingly. Temporal keywords are stripped from FTS to improve recall."),
 		mcp.WithString("query",
 			mcp.Required(),
 			mcp.Description("Search query (keywords)"),

@@ -8,6 +8,7 @@ import (
 	"neurox/internal/db"
 	"neurox/internal/llm"
 	"neurox/internal/observation"
+	"neurox/internal/temporal"
 )
 
 type mockLLM struct {
@@ -123,6 +124,70 @@ discovery | Redis caching improves latency | What: Adding Redis cache reduced AP
 	database.QueryRowContext(ctx, "SELECT COUNT(*) FROM observations WHERE namespace = 'ns' AND source = 'consolidator' AND deleted_at IS NULL").Scan(&count)
 	if count != 2 {
 		t.Errorf("observations in DB = %d, want 2", count)
+	}
+}
+
+func TestEndSessionWithLLMExtractsTemporalMentions(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "neurox.db")
+	database, err := db.Open(context.Background(), dbPath)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	t.Cleanup(func() { database.Close() })
+
+	mock := &mockLLM{response: `discovery | SQLite migration | What: We migrated to SQLite yesterday. Currently running in production.`}
+
+	idGen := observation.NewULIDGenerator()
+	mgr := NewManager(database, mock, idGen)
+
+	// Wire temporal extraction.
+	temporalStore := temporal.NewStore(database, idGen)
+	temporalExtractor := temporal.NewExtractor(temporal.NewParser(), temporalStore)
+	mgr.SetTemporalExtractor(temporalExtractor)
+
+	ctx := context.Background()
+	start, _ := mgr.Start(ctx, "Test", "", "", "ns")
+	result, err := mgr.End(ctx, start.SessionID, "We migrated to SQLite yesterday and it is currently working.")
+	if err != nil {
+		t.Fatalf("end: %v", err)
+	}
+	if result.ObservationsExtracted != 1 {
+		t.Fatalf("extracted = %d, want 1", result.ObservationsExtracted)
+	}
+
+	// Verify temporal mentions were created for the extracted observation.
+	var mentionCount int
+	database.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM temporal_mentions tm
+		JOIN observations o ON o.id = tm.observation_id
+		WHERE o.namespace = 'ns' AND o.source = 'consolidator'
+	`).Scan(&mentionCount)
+	if mentionCount < 1 {
+		t.Errorf("temporal mentions = %d, want >= 1", mentionCount)
+	}
+}
+
+func TestEndSessionWithoutTemporalExtractorStillWorks(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "neurox.db")
+	database, err := db.Open(context.Background(), dbPath)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	t.Cleanup(func() { database.Close() })
+
+	mock := &mockLLM{response: `decision | Use Redis | What: Decided to use Redis for caching yesterday.`}
+	idGen := observation.NewULIDGenerator()
+	mgr := NewManager(database, mock, idGen)
+	// No SetTemporalExtractor call — should still work fine.
+
+	ctx := context.Background()
+	start, _ := mgr.Start(ctx, "Test", "", "", "ns")
+	result, err := mgr.End(ctx, start.SessionID, "We decided on Redis.")
+	if err != nil {
+		t.Fatalf("end: %v", err)
+	}
+	if result.ObservationsExtracted != 1 {
+		t.Fatalf("extracted = %d, want 1", result.ObservationsExtracted)
 	}
 }
 

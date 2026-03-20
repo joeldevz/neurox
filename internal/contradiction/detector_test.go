@@ -4,12 +4,14 @@ import (
 	"context"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"neurox/internal/db"
 	"neurox/internal/embed"
 	"neurox/internal/links"
 	"neurox/internal/llm"
 	"neurox/internal/observation"
+	"neurox/internal/temporal"
 )
 
 type mockLLM struct {
@@ -180,7 +182,7 @@ func TestResolveWithLLMYes(t *testing.T) {
 	resolved, err := d.resolveWithLLM(ctx, candidate{
 		newID: "NEW2", newTitle: "Postgres 16", newContent: "Migrated",
 		oldID: "OLD2", oldTitle: "Postgres 14", oldContent: "Using 14",
-	})
+	}, nil, nil)
 	if err != nil {
 		t.Fatalf("resolveWithLLM: %v", err)
 	}
@@ -188,7 +190,7 @@ func TestResolveWithLLMYes(t *testing.T) {
 		t.Error("expected resolved = true")
 	}
 
-	// Verify old is expired
+	// Verify old is expired (no temporal context → hard supersession)
 	var staleness string
 	tdb.DB.QueryRowContext(ctx, "SELECT staleness FROM observations WHERE id = 'OLD2'").Scan(&staleness)
 	if staleness != "expired" {
@@ -210,7 +212,7 @@ func TestResolveWithLLMNo(t *testing.T) {
 	resolved, err := d.resolveWithLLM(ctx, candidate{
 		newID: "A2", newTitle: "Feature A", newContent: "Content A",
 		oldID: "B2", oldTitle: "Feature B", oldContent: "Content B",
-	})
+	}, nil, nil)
 	if err != nil {
 		t.Fatalf("resolveWithLLM: %v", err)
 	}
@@ -224,4 +226,186 @@ func TestResolveWithLLMNo(t *testing.T) {
 	if staleness != "fresh" {
 		t.Errorf("staleness = %q, want 'fresh'", staleness)
 	}
+}
+
+// --- Temporal-aware contradiction tests ---
+
+func TestTemporalSupersessionPreservesAsStale(t *testing.T) {
+	d, tdb := setupTest(t)
+	ctx := context.Background()
+
+	tdb.Exec(t, `INSERT INTO observations(id, title, content, observation_type, layer, confidence, importance, kind, namespace)
+		VALUES('CUR1', 'DB is SQLite', 'Currently using SQLite', 'decision', 1, 0.9, 0.8, 'semantic', 'default')`)
+	tdb.Exec(t, `INSERT INTO observations(id, title, content, observation_type, layer, confidence, importance, kind, namespace)
+		VALUES('OLD3', 'DB is Postgres', 'Using Postgres', 'decision', 1, 0.9, 0.8, 'semantic', 'default')`)
+
+	err := d.markTemporalSupersession(ctx, "CUR1", "OLD3")
+	if err != nil {
+		t.Fatalf("markTemporalSupersession: %v", err)
+	}
+
+	// Verify old observation is stale (NOT expired)
+	var staleness string
+	var validUntil, invalidatedBy *string
+	tdb.DB.QueryRowContext(ctx, "SELECT staleness, valid_until, invalidated_by FROM observations WHERE id = 'OLD3'").
+		Scan(&staleness, &validUntil, &invalidatedBy)
+
+	if staleness != "stale" {
+		t.Errorf("staleness = %q, want 'stale' (temporal supersession should preserve history)", staleness)
+	}
+	if validUntil == nil {
+		t.Error("valid_until should be set")
+	}
+	if invalidatedBy == nil || *invalidatedBy != "CUR1" {
+		t.Error("invalidated_by should be CUR1")
+	}
+
+	// Verify supersedes link exists
+	linkList, err := d.linkStore.GetBySource(ctx, "CUR1", links.RelationSupersedes)
+	if err != nil {
+		t.Fatalf("get links: %v", err)
+	}
+	if len(linkList) != 1 {
+		t.Fatalf("expected 1 supersedes link, got %d", len(linkList))
+	}
+}
+
+func TestResolveWithLLMUsesTemporalSupersessionWhenContextExists(t *testing.T) {
+	d, tdb := setupTest(t)
+	ctx := context.Background()
+
+	d.llm = &mockLLM{response: "YES"}
+
+	tdb.Exec(t, `INSERT INTO observations(id, title, content, observation_type, layer, confidence, importance, kind, namespace)
+		VALUES('NEW3', 'Now using SQLite', 'Migrated to SQLite', 'decision', 1, 0.9, 0.8, 'semantic', 'default')`)
+	tdb.Exec(t, `INSERT INTO observations(id, title, content, observation_type, layer, confidence, importance, kind, namespace)
+		VALUES('OLD4', 'Using Postgres', 'We use Postgres', 'decision', 1, 0.9, 0.8, 'semantic', 'default')`)
+
+	// Provide temporal mentions → should use temporal supersession
+	march := time.Date(2026, 3, 15, 0, 0, 0, 0, time.UTC)
+	newMentions := []temporal.Mention{{Kind: temporal.KindCurrentState}}
+	oldMentions := []temporal.Mention{{Kind: temporal.KindAbsolute, NormalizedStart: &march}}
+
+	resolved, err := d.resolveWithLLM(ctx, candidate{
+		newID: "NEW3", newTitle: "Now using SQLite", newContent: "Migrated to SQLite",
+		oldID: "OLD4", oldTitle: "Using Postgres", oldContent: "We use Postgres",
+	}, newMentions, oldMentions)
+	if err != nil {
+		t.Fatalf("resolveWithLLM: %v", err)
+	}
+	if !resolved {
+		t.Error("expected resolved = true")
+	}
+
+	// Verify old is stale (not expired) because temporal context triggered soft supersession
+	var staleness string
+	tdb.DB.QueryRowContext(ctx, "SELECT staleness FROM observations WHERE id = 'OLD4'").Scan(&staleness)
+	if staleness != "stale" {
+		t.Errorf("staleness = %q, want 'stale' (temporal context should trigger soft supersession)", staleness)
+	}
+}
+
+func TestIsTemporalSequence(t *testing.T) {
+	march := time.Date(2026, 3, 6, 0, 0, 0, 0, time.UTC)
+	jan := time.Date(2026, 1, 15, 0, 0, 0, 0, time.UTC)
+
+	tests := []struct {
+		name        string
+		newMentions []temporal.Mention
+		oldMentions []temporal.Mention
+		want        bool
+	}{
+		{
+			name: "no mentions → false",
+			want: false,
+		},
+		{
+			name:        "only new mentions → false",
+			newMentions: []temporal.Mention{{Kind: temporal.KindAbsolute, NormalizedStart: &march}},
+			want:        false,
+		},
+		{
+			name:        "only old mentions → false",
+			oldMentions: []temporal.Mention{{Kind: temporal.KindAbsolute, NormalizedStart: &jan}},
+			want:        false,
+		},
+		{
+			name:        "new after old → true",
+			newMentions: []temporal.Mention{{Kind: temporal.KindAbsolute, NormalizedStart: &march}},
+			oldMentions: []temporal.Mention{{Kind: temporal.KindAbsolute, NormalizedStart: &jan}},
+			want:        true,
+		},
+		{
+			name:        "old after new → false",
+			newMentions: []temporal.Mention{{Kind: temporal.KindAbsolute, NormalizedStart: &jan}},
+			oldMentions: []temporal.Mention{{Kind: temporal.KindAbsolute, NormalizedStart: &march}},
+			want:        false,
+		},
+		{
+			name:        "new is current_state + old has date → true",
+			newMentions: []temporal.Mention{{Kind: temporal.KindCurrentState}},
+			oldMentions: []temporal.Mention{{Kind: temporal.KindAbsolute, NormalizedStart: &jan}},
+			want:        true,
+		},
+		{
+			name:        "both current_state no dates → false",
+			newMentions: []temporal.Mention{{Kind: temporal.KindCurrentState}},
+			oldMentions: []temporal.Mention{{Kind: temporal.KindCurrentState}},
+			want:        false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := isTemporalSequence(tt.newMentions, tt.oldMentions)
+			if got != tt.want {
+				t.Errorf("isTemporalSequence() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestBuildContradictionPromptWithTemporalContext(t *testing.T) {
+	c := candidate{
+		newTitle:   "DB is SQLite",
+		newContent: "Using SQLite now",
+		oldTitle:   "DB is Postgres",
+		oldContent: "Using Postgres",
+	}
+
+	march := time.Date(2026, 3, 6, 0, 0, 0, 0, time.UTC)
+	d, _ := setupTest(t)
+
+	// Without temporal context
+	prompt1 := d.buildContradictionPrompt(c, nil, nil)
+	if !containsStr(prompt1, "contradict each other") {
+		t.Error("prompt without temporal context should ask about contradiction")
+	}
+	if containsStr(prompt1, "Temporal context") {
+		t.Error("prompt without temporal context should not include temporal section")
+	}
+
+	// With temporal context
+	newM := []temporal.Mention{{Kind: temporal.KindCurrentState}}
+	oldM := []temporal.Mention{{Kind: temporal.KindAbsolute, NormalizedStart: &march}}
+	prompt2 := d.buildContradictionPrompt(c, newM, oldM)
+	if !containsStr(prompt2, "Temporal context") {
+		t.Error("prompt with temporal context should include temporal section")
+	}
+	if !containsStr(prompt2, "supersedes") {
+		t.Error("prompt with temporal context should ask about supersession")
+	}
+}
+
+func containsStr(s, substr string) bool {
+	return len(s) >= len(substr) && (s == substr || len(s) > 0 && findSubstring(s, substr))
+}
+
+func findSubstring(s, substr string) bool {
+	for i := 0; i <= len(s)-len(substr); i++ {
+		if s[i:i+len(substr)] == substr {
+			return true
+		}
+	}
+	return false
 }

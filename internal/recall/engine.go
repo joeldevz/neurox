@@ -89,7 +89,15 @@ func (e *Engine) Search(ctx context.Context, options SearchOptions) ([]Result, e
 		return nil, err
 	}
 
-	query, args := buildSearchQuery(normalized)
+	// Detect temporal intent from the query
+	intent := DetectTemporalIntent(normalized.Query, normalized.Now)
+
+	// Adjust search options based on temporal intent
+	if intent.Kind == IntentHistory {
+		normalized.IncludeStale = true
+	}
+
+	query, args := buildSearchQuery(normalized, intent)
 	rows, err := e.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("search observations: %w", err)
@@ -112,28 +120,24 @@ func (e *Engine) Search(ctx context.Context, options SearchOptions) ([]Result, e
 	if embed.IsAvailable(e.embedder) {
 		semScores, semErr := semanticSearch(ctx, e.db, e.embedder, normalized.Query, normalized.Limit*2)
 		if semErr == nil && len(semScores) > 0 {
-			// Build FTS candidate set
-			ftsIDs := make(map[string]bool, len(candidates))
-			for _, c := range candidates {
-				ftsIDs[c.ID] = true
-			}
-
-			// Apply cross-signal boost: items in both FTS and semantic get boosted
 			for i := range candidates {
 				if semScore, ok := semScores[candidates[i].ID]; ok {
-					// Use max(FTS relevance normalized, cosine) as relevance
 					if semScore > 0 {
 						candidates[i].SemanticScore = semScore
 					}
 				}
 			}
-
-			// TODO: Add semantic-only results that didn't appear in FTS
-			// (would need to load full candidate data from DB)
 		}
 	}
 
-	applyScores(candidates, normalized.Weights, normalized.Now)
+	// Load temporal mentions for candidates to inform temporal scoring
+	candidateIDs := make([]string, len(candidates))
+	for i, c := range candidates {
+		candidateIDs[i] = c.ID
+	}
+	mentionMap, _ := loadCandidateMentions(ctx, e.db, candidateIDs)
+
+	applyScores(candidates, normalized.Weights, normalized.Now, intent, mentionMap)
 	sort.SliceStable(candidates, func(i int, j int) bool {
 		if candidates[i].Score == candidates[j].Score {
 			if candidates[i].RawRelevance == candidates[j].RawRelevance {

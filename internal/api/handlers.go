@@ -8,6 +8,8 @@ import (
 	"strconv"
 	"strings"
 
+	"time"
+
 	"neurox/internal/observation"
 	"neurox/internal/recall"
 )
@@ -116,9 +118,14 @@ func (s *Server) handleRecall(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
-	writeJSON(w, http.StatusOK, map[string]any{
+	resp := map[string]any{
 		"query": query, "count": len(items), "results": items,
-	})
+	}
+	intent := recall.DetectTemporalIntent(query, time.Now().UTC())
+	if intent.Kind != recall.IntentNone {
+		resp["temporal_intent"] = string(intent.Kind)
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 func (s *Server) handleContext(w http.ResponseWriter, r *http.Request) {

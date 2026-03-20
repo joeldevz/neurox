@@ -29,6 +29,7 @@ func TestOpenCreatesSchemaAndWALMode(t *testing.T) {
 	assertTableExists(t, database, "facts")
 	assertTableExists(t, database, "consolidation_runs")
 	assertTableExists(t, database, "reflections")
+	assertTableExists(t, database, "temporal_mentions")
 
 	var mode string
 	if err := database.QueryRowContext(ctx, "PRAGMA journal_mode;").Scan(&mode); err != nil {
@@ -69,8 +70,8 @@ func TestMigrateIsIdempotent(t *testing.T) {
 	if err := database.QueryRowContext(ctx, "SELECT COUNT(1) FROM schema_migrations").Scan(&migrationCount); err != nil {
 		t.Fatalf("migration query failed: %v", err)
 	}
-	if migrationCount != 1 {
-		t.Fatalf("migrationCount = %d, want 1", migrationCount)
+	if migrationCount != len(migrations) {
+		t.Fatalf("migrationCount = %d, want %d", migrationCount, len(migrations))
 	}
 }
 

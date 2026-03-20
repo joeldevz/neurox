@@ -6,367 +6,675 @@
 <title>neurox — brain</title>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
+  :root {
+    --bg: #07080d;
+    --surface: rgba(255,255,255,0.03);
+    --border: rgba(255,255,255,0.06);
+    --text: #c8cad0;
+    --text-dim: rgba(255,255,255,0.35);
+    --purple: #8b5cf6;
+    --blue: #3b82f6;
+    --green: #10b981;
+    --amber: #f59e0b;
+    --red: #ef4444;
+    --cyan: #06b6d4;
+    --pink: #ec4899;
+  }
   body {
-    font-family: 'SF Mono', 'Cascadia Code', 'Fira Code', monospace;
-    background: #0a0a0f;
-    color: #e0e0e0;
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+    background: var(--bg);
+    color: var(--text);
     min-height: 100vh;
     overflow-x: hidden;
   }
+
+  /* ── Header ── */
   .header {
-    text-align: center;
-    padding: 2rem 1rem 1rem;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 1.2rem 2rem;
+    border-bottom: 1px solid var(--border);
   }
-  .header h1 {
-    font-size: 1.8rem;
-    font-weight: 300;
-    letter-spacing: 0.3em;
-    color: #8b5cf6;
-    text-transform: uppercase;
+  .logo {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
   }
-  .header .pulse {
-    display: inline-block;
+  .logo h1 {
+    font-size: 1.1rem;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    background: linear-gradient(135deg, var(--purple), var(--blue));
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+  }
+  .status-dot {
     width: 8px; height: 8px;
-    background: #10b981;
     border-radius: 50%;
-    margin-left: 0.5rem;
-    animation: pulse 2s ease-in-out infinite;
+    background: var(--green);
+    box-shadow: 0 0 8px rgba(16,185,129,0.5);
+    animation: blink 3s ease-in-out infinite;
   }
-  @keyframes pulse {
-    0%, 100% { opacity: 1; box-shadow: 0 0 0 0 rgba(16,185,129,0.4); }
-    50% { opacity: 0.6; box-shadow: 0 0 0 8px rgba(16,185,129,0); }
+  .status-dot.error { background: var(--red); box-shadow: 0 0 8px rgba(239,68,68,0.5); }
+  @keyframes blink {
+    0%,100% { opacity: 1; }
+    50% { opacity: 0.4; }
+  }
+  .provider-info {
+    font-size: 0.7rem;
+    color: var(--text-dim);
+    display: flex;
+    gap: 1rem;
+  }
+  .provider-info span { display: flex; align-items: center; gap: 0.3rem; }
+  .provider-tag {
+    padding: 0.1rem 0.4rem;
+    background: rgba(139,92,246,0.15);
+    border-radius: 3px;
+    color: var(--purple);
+    font-size: 0.6rem;
   }
 
-  /* Brain visualization */
-  .brain {
-    display: flex;
-    justify-content: center;
-    align-items: center;
-    gap: 2rem;
-    padding: 2rem 1rem;
-    flex-wrap: wrap;
+  /* ── Main layout ── */
+  .main {
+    display: grid;
+    grid-template-columns: 1fr 400px;
+    gap: 0;
+    min-height: calc(100vh - 56px);
   }
-  .layer {
-    position: relative;
+  @media (max-width: 900px) {
+    .main { grid-template-columns: 1fr; }
+  }
+
+  /* ── Brain panel ── */
+  .brain-panel {
     display: flex;
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    border-radius: 50%;
-    transition: all 0.6s cubic-bezier(0.4, 0, 0.2, 1);
+    padding: 2rem;
+    position: relative;
   }
-  .layer-core {
-    width: 180px; height: 180px;
-    background: radial-gradient(circle, rgba(139,92,246,0.3) 0%, rgba(139,92,246,0.05) 70%);
-    border: 2px solid rgba(139,92,246,0.6);
-    box-shadow: 0 0 30px rgba(139,92,246,0.2), inset 0 0 30px rgba(139,92,246,0.1);
+
+  /* ── SVG Brain ── */
+  .brain-svg {
+    width: 420px;
+    height: 420px;
+    position: relative;
   }
-  .layer-working {
-    width: 220px; height: 220px;
-    background: radial-gradient(circle, rgba(59,130,246,0.2) 0%, rgba(59,130,246,0.03) 70%);
-    border: 2px solid rgba(59,130,246,0.4);
-    box-shadow: 0 0 25px rgba(59,130,246,0.15);
+  .brain-svg svg { width: 100%; height: 100%; }
+
+  /* Layer rings */
+  .ring { fill: none; transition: all 0.8s ease; }
+  .ring-buffer {
+    stroke: var(--green);
+    stroke-width: 2;
+    stroke-dasharray: 8 4;
+    opacity: 0.5;
+    animation: rotate 60s linear infinite;
   }
-  .layer-buffer {
-    width: 260px; height: 260px;
-    background: radial-gradient(circle, rgba(16,185,129,0.15) 0%, rgba(16,185,129,0.02) 70%);
-    border: 2px dashed rgba(16,185,129,0.3);
-    box-shadow: 0 0 20px rgba(16,185,129,0.1);
+  .ring-working {
+    stroke: var(--blue);
+    stroke-width: 2.5;
+    opacity: 0.6;
   }
-  .layer .count {
-    font-size: 2.5rem;
+  .ring-core {
+    stroke: var(--purple);
+    stroke-width: 3;
+    opacity: 0.8;
+  }
+  @keyframes rotate { to { transform: rotate(360deg); transform-origin: center; } }
+
+  /* Glow fills */
+  .glow-core {
+    fill: url(#glow-purple);
+    opacity: 0.4;
+    animation: breathe 4s ease-in-out infinite;
+  }
+  .glow-working {
+    fill: url(#glow-blue);
+    opacity: 0.2;
+    animation: breathe 4s ease-in-out infinite 1s;
+  }
+  .glow-buffer {
+    fill: url(#glow-green);
+    opacity: 0.1;
+    animation: breathe 4s ease-in-out infinite 2s;
+  }
+  @keyframes breathe {
+    0%,100% { opacity: 0.15; }
+    50% { opacity: 0.35; }
+  }
+
+  /* Neural particles */
+  .particle {
+    fill: var(--purple);
+    opacity: 0;
+    animation: particle-move 3s ease-in-out infinite;
+  }
+  .particle:nth-child(2) { animation-delay: 0.8s; fill: var(--blue); }
+  .particle:nth-child(3) { animation-delay: 1.6s; fill: var(--green); }
+  .particle:nth-child(4) { animation-delay: 2.4s; fill: var(--cyan); }
+  @keyframes particle-move {
+    0% { opacity: 0; r: 2; }
+    20% { opacity: 0.8; }
+    80% { opacity: 0.8; }
+    100% { opacity: 0; r: 1; }
+  }
+
+  /* Synapse lines */
+  .synapse {
+    stroke: var(--purple);
+    stroke-width: 0.5;
+    opacity: 0;
+    animation: synapse-fire 4s ease-in-out infinite;
+  }
+  .synapse:nth-child(2) { animation-delay: 1.3s; stroke: var(--blue); }
+  .synapse:nth-child(3) { animation-delay: 2.6s; stroke: var(--green); }
+  @keyframes synapse-fire {
+    0%,100% { opacity: 0; }
+    50% { opacity: 0.4; }
+  }
+
+  /* Layer labels on brain */
+  .brain-label {
+    position: absolute;
+    font-size: 0.6rem;
+    text-transform: uppercase;
+    letter-spacing: 0.15em;
+    color: var(--text-dim);
+  }
+  .brain-count {
+    font-size: 1.8rem;
     font-weight: 700;
     transition: all 0.3s;
+    text-align: center;
   }
-  .layer-core .count { color: #8b5cf6; }
-  .layer-working .count { color: #3b82f6; }
-  .layer-buffer .count { color: #10b981; }
-  .layer .label {
-    font-size: 0.7rem;
+  .brain-count.core { color: var(--purple); }
+  .brain-count.working { color: var(--blue); }
+  .brain-count.buffer { color: var(--green); }
+  .brain-count-label {
+    font-size: 0.55rem;
     text-transform: uppercase;
-    letter-spacing: 0.15em;
-    opacity: 0.7;
-    margin-top: 0.25rem;
+    letter-spacing: 0.12em;
+    opacity: 0.5;
+    text-align: center;
   }
-  .layer .sublabel {
-    font-size: 0.6rem;
-    opacity: 0.4;
+
+  /* Stats row under brain */
+  .stats-row {
+    display: flex;
+    gap: 0.8rem;
+    margin-top: 1.5rem;
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+  .stat-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 0.6rem 1rem;
+    text-align: center;
+    min-width: 72px;
+    transition: border-color 0.3s;
+  }
+  .stat-card:hover { border-color: rgba(255,255,255,0.12); }
+  .stat-value {
+    font-size: 1.2rem;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+  }
+  .stat-label {
+    font-size: 0.55rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--text-dim);
     margin-top: 0.15rem;
   }
+  .stat-value.total { color: var(--text); }
+  .stat-value.facts { color: var(--amber); }
+  .stat-value.links { color: var(--cyan); }
+  .stat-value.stale { color: var(--red); }
+  .stat-value.temporal { color: var(--pink); }
+  .stat-value.sessions { color: var(--purple); }
 
-  /* Stats bar */
-  .stats {
+  /* ── Side panel ── */
+  .side-panel {
+    border-left: 1px solid var(--border);
     display: flex;
-    justify-content: center;
-    gap: 2rem;
-    padding: 1.5rem;
-    flex-wrap: wrap;
+    flex-direction: column;
+    overflow: hidden;
   }
-  .stat {
-    text-align: center;
-    padding: 0.75rem 1.5rem;
-    background: rgba(255,255,255,0.03);
-    border: 1px solid rgba(255,255,255,0.06);
-    border-radius: 8px;
-  }
-  .stat .value {
-    font-size: 1.4rem;
-    font-weight: 600;
-    color: #f59e0b;
-  }
-  .stat .name {
-    font-size: 0.65rem;
-    text-transform: uppercase;
-    letter-spacing: 0.1em;
-    opacity: 0.5;
-    margin-top: 0.2rem;
-  }
-  .stat.stale .value { color: #ef4444; }
-  .stat.links .value { color: #06b6d4; }
-  .stat.sessions .value { color: #8b5cf6; }
 
-  /* Observations list */
-  .observations {
-    max-width: 900px;
-    margin: 1rem auto;
-    padding: 0 1rem 2rem;
+  /* Search */
+  .search-bar {
+    padding: 1rem;
+    border-bottom: 1px solid var(--border);
   }
-  .observations h2 {
+  .search-input {
+    width: 100%;
+    padding: 0.6rem 0.8rem;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text);
     font-size: 0.8rem;
-    text-transform: uppercase;
-    letter-spacing: 0.15em;
-    color: #666;
-    margin-bottom: 1rem;
-    padding-bottom: 0.5rem;
-    border-bottom: 1px solid rgba(255,255,255,0.06);
+    font-family: inherit;
+    outline: none;
+    transition: border-color 0.2s;
   }
-  .obs {
-    padding: 0.75rem 1rem;
-    margin-bottom: 0.5rem;
-    background: rgba(255,255,255,0.02);
-    border-left: 3px solid;
+  .search-input:focus { border-color: var(--purple); }
+  .search-input::placeholder { color: var(--text-dim); }
+
+  /* Memory list */
+  .memory-list {
+    flex: 1;
+    overflow-y: auto;
+    padding: 0.5rem;
+  }
+  .memory-list::-webkit-scrollbar { width: 4px; }
+  .memory-list::-webkit-scrollbar-track { background: transparent; }
+  .memory-list::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 2px; }
+
+  .section-title {
+    font-size: 0.6rem;
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    color: var(--text-dim);
+    padding: 0.8rem 0.5rem 0.4rem;
+  }
+
+  .mem {
+    padding: 0.6rem 0.7rem;
+    margin-bottom: 0.3rem;
+    background: var(--surface);
+    border-left: 3px solid transparent;
     border-radius: 0 6px 6px 0;
     transition: all 0.2s;
     cursor: default;
   }
-  .obs:hover {
+  .mem:hover {
     background: rgba(255,255,255,0.05);
-    transform: translateX(4px);
+    transform: translateX(2px);
   }
-  .obs.layer-0 { border-color: #10b981; }
-  .obs.layer-1 { border-color: #3b82f6; }
-  .obs.layer-2 { border-color: #8b5cf6; }
-  .obs .obs-header {
+  .mem.l0 { border-left-color: var(--green); }
+  .mem.l1 { border-left-color: var(--blue); }
+  .mem.l2 { border-left-color: var(--purple); }
+
+  .mem-title {
+    font-size: 0.78rem;
+    font-weight: 500;
     display: flex;
     justify-content: space-between;
     align-items: center;
-    margin-bottom: 0.3rem;
-  }
-  .obs .obs-title {
-    font-weight: 600;
-    font-size: 0.85rem;
-  }
-  .obs .obs-meta {
-    display: flex;
     gap: 0.5rem;
-    align-items: center;
   }
-  .obs .obs-type {
-    font-size: 0.6rem;
-    padding: 0.15rem 0.4rem;
+  .mem-type {
+    font-size: 0.5rem;
+    padding: 0.1rem 0.35rem;
     border-radius: 3px;
     text-transform: uppercase;
-    letter-spacing: 0.05em;
+    letter-spacing: 0.04em;
+    white-space: nowrap;
+    flex-shrink: 0;
   }
-  .obs .obs-type.decision { background: rgba(139,92,246,0.2); color: #8b5cf6; }
-  .obs .obs-type.bugfix { background: rgba(239,68,68,0.2); color: #ef4444; }
-  .obs .obs-type.discovery { background: rgba(59,130,246,0.2); color: #3b82f6; }
-  .obs .obs-type.pattern { background: rgba(16,185,129,0.2); color: #10b981; }
-  .obs .obs-type.gotcha { background: rgba(245,158,11,0.2); color: #f59e0b; }
-  .obs .obs-type.config { background: rgba(107,114,128,0.2); color: #6b7280; }
-  .obs .obs-type.preference { background: rgba(236,72,153,0.2); color: #ec4899; }
-  .obs .obs-type.question { background: rgba(6,182,212,0.2); color: #06b6d4; }
-  .obs .obs-layer {
-    font-size: 0.55rem;
-    opacity: 0.5;
-  }
-  .obs .obs-content {
-    font-size: 0.75rem;
-    opacity: 0.6;
+  .mem-type.decision    { background: rgba(139,92,246,0.2); color: var(--purple); }
+  .mem-type.bugfix      { background: rgba(239,68,68,0.2);  color: var(--red); }
+  .mem-type.discovery   { background: rgba(59,130,246,0.2);  color: var(--blue); }
+  .mem-type.pattern     { background: rgba(16,185,129,0.2);  color: var(--green); }
+  .mem-type.gotcha      { background: rgba(245,158,11,0.2);  color: var(--amber); }
+  .mem-type.config      { background: rgba(107,114,128,0.2); color: #9ca3af; }
+  .mem-type.preference  { background: rgba(236,72,153,0.2);  color: var(--pink); }
+  .mem-type.question    { background: rgba(6,182,212,0.2);   color: var(--cyan); }
+
+  .mem-content {
+    font-size: 0.68rem;
+    color: var(--text-dim);
+    margin-top: 0.25rem;
     line-height: 1.4;
-    white-space: pre-line;
-    max-height: 3.5em;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
     overflow: hidden;
   }
-  .obs .obs-tags {
-    margin-top: 0.3rem;
+  .mem-tags {
     display: flex;
-    gap: 0.3rem;
+    gap: 0.25rem;
+    margin-top: 0.3rem;
+    flex-wrap: wrap;
   }
-  .obs .tag {
-    font-size: 0.55rem;
-    padding: 0.1rem 0.35rem;
+  .mem-tag {
+    font-size: 0.5rem;
+    padding: 0.05rem 0.3rem;
     background: rgba(255,255,255,0.05);
     border-radius: 3px;
-    opacity: 0.5;
+    color: var(--text-dim);
   }
-
-  /* Importance bar */
+  .mem-footer {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-top: 0.3rem;
+  }
+  .mem-time {
+    font-size: 0.5rem;
+    color: var(--text-dim);
+  }
   .imp-bar {
-    width: 40px; height: 4px;
-    background: rgba(255,255,255,0.1);
+    width: 36px; height: 3px;
+    background: rgba(255,255,255,0.08);
     border-radius: 2px;
     overflow: hidden;
   }
-  .imp-bar .imp-fill {
+  .imp-fill {
     height: 100%;
     border-radius: 2px;
-    background: linear-gradient(90deg, #10b981, #f59e0b);
-    transition: width 0.3s;
+    background: linear-gradient(90deg, var(--green), var(--amber));
+  }
+
+  /* Search results */
+  .search-results .mem { border-left-color: var(--amber); }
+  .search-score {
+    font-size: 0.5rem;
+    color: var(--amber);
+    font-weight: 600;
+  }
+
+  /* Empty state */
+  .empty {
+    text-align: center;
+    padding: 3rem 1rem;
+    color: var(--text-dim);
+    font-size: 0.75rem;
+  }
+
+  /* Temporal intent badge */
+  .temporal-badge {
+    display: inline-block;
+    font-size: 0.5rem;
+    padding: 0.1rem 0.4rem;
+    border-radius: 3px;
+    background: rgba(236,72,153,0.15);
+    color: var(--pink);
+    margin-left: 0.3rem;
   }
 
   .footer {
+    padding: 0.5rem 1rem;
+    border-top: 1px solid var(--border);
+    font-size: 0.55rem;
+    color: var(--text-dim);
     text-align: center;
-    padding: 2rem;
-    font-size: 0.6rem;
-    opacity: 0.3;
   }
-
-  /* Animate new observations */
-  @keyframes fadeIn {
-    from { opacity: 0; transform: translateY(-10px); }
-    to { opacity: 1; transform: translateY(0); }
-  }
-  .obs { animation: fadeIn 0.3s ease-out; }
 </style>
 </head>
 <body>
 
 <div class="header">
-  <h1>neurox<span class="pulse"></span></h1>
-</div>
-
-<div class="brain">
-  <div class="layer layer-buffer">
-    <span class="count" id="buffer-count">0</span>
-    <span class="label">Buffer</span>
-    <span class="sublabel">short-term</span>
+  <div class="logo">
+    <h1>NEUROX</h1>
+    <div class="status-dot" id="status-dot"></div>
   </div>
-  <div class="layer layer-working">
-    <span class="count" id="working-count">0</span>
-    <span class="label">Working</span>
-    <span class="sublabel">consolidating</span>
-  </div>
-  <div class="layer layer-core">
-    <span class="count" id="core-count">0</span>
-    <span class="label">Core</span>
-    <span class="sublabel">permanent</span>
+  <div class="provider-info">
+    <span>LLM <span class="provider-tag" id="llm-tag">-</span></span>
+    <span>Embed <span class="provider-tag" id="embed-tag">-</span></span>
+    <span>Gate <span class="provider-tag" id="gate-tag">-</span></span>
   </div>
 </div>
 
-<div class="stats">
-  <div class="stat">
-    <div class="value" id="total-count">0</div>
-    <div class="name">Total</div>
+<div class="main">
+  <!-- Brain visualization -->
+  <div class="brain-panel">
+    <div class="brain-svg">
+      <svg viewBox="0 0 420 420" xmlns="http://www.w3.org/2000/svg">
+        <defs>
+          <radialGradient id="glow-purple" cx="50%" cy="50%" r="50%">
+            <stop offset="0%" stop-color="#8b5cf6" stop-opacity="0.4"/>
+            <stop offset="100%" stop-color="#8b5cf6" stop-opacity="0"/>
+          </radialGradient>
+          <radialGradient id="glow-blue" cx="50%" cy="50%" r="50%">
+            <stop offset="0%" stop-color="#3b82f6" stop-opacity="0.3"/>
+            <stop offset="100%" stop-color="#3b82f6" stop-opacity="0"/>
+          </radialGradient>
+          <radialGradient id="glow-green" cx="50%" cy="50%" r="50%">
+            <stop offset="0%" stop-color="#10b981" stop-opacity="0.2"/>
+            <stop offset="100%" stop-color="#10b981" stop-opacity="0"/>
+          </radialGradient>
+
+          <!-- Particle paths -->
+          <path id="path-in" d="M210 30 Q210 120 210 160" fill="none"/>
+          <path id="path-mid" d="M210 145 Q240 180 210 200" fill="none"/>
+          <path id="path-out" d="M100 210 Q140 200 160 210" fill="none"/>
+        </defs>
+
+        <!-- Glow fills -->
+        <circle class="glow-buffer" cx="210" cy="210" r="190"/>
+        <circle class="glow-working" cx="210" cy="210" r="140"/>
+        <circle class="glow-core" cx="210" cy="210" r="80"/>
+
+        <!-- Synapse lines -->
+        <g class="synapses">
+          <line class="synapse" x1="100" y1="80" x2="180" y2="150"/>
+          <line class="synapse" x1="320" y1="100" x2="250" y2="170"/>
+          <line class="synapse" x1="80" y1="300" x2="170" y2="250"/>
+          <line class="synapse" x1="340" y1="310" x2="260" y2="250"/>
+          <line class="synapse" x1="210" y1="30" x2="210" y2="120"/>
+          <line class="synapse" x1="210" y1="300" x2="210" y2="390"/>
+        </g>
+
+        <!-- Layer rings -->
+        <circle class="ring ring-buffer" cx="210" cy="210" r="190" style="transform-origin:210px 210px"/>
+        <circle class="ring ring-working" cx="210" cy="210" r="140"/>
+        <circle class="ring ring-core" cx="210" cy="210" r="80"/>
+
+        <!-- Particles flowing inward -->
+        <circle class="particle" r="3">
+          <animateMotion dur="3s" repeatCount="indefinite" path="M210,20 C180,80 240,120 210,160"/>
+        </circle>
+        <circle class="particle" r="2.5">
+          <animateMotion dur="3.5s" repeatCount="indefinite" begin="1s" path="M380,210 C320,180 280,220 260,210"/>
+        </circle>
+        <circle class="particle" r="2">
+          <animateMotion dur="4s" repeatCount="indefinite" begin="2s" path="M60,300 C120,280 160,250 180,230"/>
+        </circle>
+        <circle class="particle" r="3">
+          <animateMotion dur="3.2s" repeatCount="indefinite" begin="0.5s" path="M350,120 C300,150 270,180 240,200"/>
+        </circle>
+
+        <!-- Layer counts (positioned in SVG) -->
+        <text x="210" y="200" text-anchor="middle" class="brain-count core" font-size="36" font-weight="700" fill="#8b5cf6" id="svg-core">0</text>
+        <text x="210" y="220" text-anchor="middle" font-size="9" fill="#8b5cf6" opacity="0.6" letter-spacing="2">CORE</text>
+
+        <text x="320" y="145" text-anchor="middle" class="brain-count working" font-size="28" font-weight="600" fill="#3b82f6" id="svg-working">0</text>
+        <text x="320" y="162" text-anchor="middle" font-size="8" fill="#3b82f6" opacity="0.5" letter-spacing="2">WORKING</text>
+
+        <text x="105" y="100" text-anchor="middle" class="brain-count buffer" font-size="24" font-weight="600" fill="#10b981" id="svg-buffer">0</text>
+        <text x="105" y="115" text-anchor="middle" font-size="8" fill="#10b981" opacity="0.5" letter-spacing="2">BUFFER</text>
+      </svg>
+    </div>
+
+    <!-- Stats row -->
+    <div class="stats-row">
+      <div class="stat-card">
+        <div class="stat-value total" id="s-total">0</div>
+        <div class="stat-label">Total</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-value facts" id="s-facts">0</div>
+        <div class="stat-label">Facts</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-value links" id="s-links">0</div>
+        <div class="stat-label">Links</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-value temporal" id="s-temporal">0</div>
+        <div class="stat-label">Temporal</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-value stale" id="s-stale">0</div>
+        <div class="stat-label">Stale</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-value sessions" id="s-sessions">0</div>
+        <div class="stat-label">Sessions</div>
+      </div>
+    </div>
   </div>
-  <div class="stat stale">
-    <div class="value" id="stale-count">0</div>
-    <div class="name">Stale</div>
-  </div>
-  <div class="stat links">
-    <div class="value" id="links-count">0</div>
-    <div class="name">Links</div>
-  </div>
-  <div class="stat sessions">
-    <div class="value" id="sessions-count">0</div>
-    <div class="name">Sessions</div>
+
+  <!-- Side panel -->
+  <div class="side-panel">
+    <div class="search-bar">
+      <input type="text" class="search-input" id="search" placeholder="Search memories... (Enter to search)" autocomplete="off"/>
+    </div>
+
+    <div class="memory-list" id="memory-list">
+      <div class="section-title">Recent Memories</div>
+      <div id="memories"></div>
+    </div>
+
+    <div class="footer">neurox v0.1.0 — auto-refresh 3s</div>
   </div>
 </div>
-
-<div class="observations">
-  <h2>Recent Memories</h2>
-  <div id="obs-list"></div>
-</div>
-
-<div class="footer">neurox v0.1.0 — refreshes every 3s</div>
 
 <script>
 const API = window.location.origin;
 const layers = ['Buffer', 'Working', 'Core'];
+let searchMode = false;
 
 async function fetchJSON(url) {
   const r = await fetch(url);
+  if (!r.ok) throw new Error(r.statusText);
   return r.json();
 }
 
-function animateCount(el, target) {
-  const current = parseInt(el.textContent) || 0;
-  if (current === target) return;
-  el.textContent = target;
-  el.style.transform = 'scale(1.2)';
-  setTimeout(() => el.style.transform = 'scale(1)', 200);
-}
+function $(id) { return document.getElementById(id); }
 
-function renderObs(items) {
-  const list = document.getElementById('obs-list');
-  if (!items || items.length === 0) {
-    list.innerHTML = '<div style="text-align:center;opacity:0.3;padding:2rem">No memories yet</div>';
-    return;
+function animateValue(el, target) {
+  const val = typeof target === 'number' ? target.toLocaleString() : target;
+  if (el.textContent !== val) {
+    el.textContent = val;
+    el.style.transition = 'transform 0.2s';
+    el.style.transform = 'scale(1.15)';
+    setTimeout(() => el.style.transform = 'scale(1)', 200);
   }
-  list.innerHTML = items.map(o => {
-    const tags = (o.tags || []).map(t => `<span class="tag">${esc(t)}</span>`).join('');
-    const impPct = Math.round((o.importance || 0.5) * 100);
-    return `
-      <div class="obs layer-${o.layer}">
-        <div class="obs-header">
-          <span class="obs-title">${esc(o.title)}</span>
-          <div class="obs-meta">
-            <span class="obs-type ${o.observation_type}">${o.observation_type}</span>
-            <div class="imp-bar"><div class="imp-fill" style="width:${impPct}%"></div></div>
-            <span class="obs-layer">${layers[o.layer] || 'L'+o.layer}</span>
-          </div>
-        </div>
-        <div class="obs-content">${esc(o.content)}</div>
-        ${tags ? `<div class="obs-tags">${tags}</div>` : ''}
-      </div>`;
-  }).join('');
 }
 
 function esc(s) {
   if (!s) return '';
-  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  const d = document.createElement('div');
+  d.textContent = s;
+  return d.innerHTML;
+}
+
+function timeAgo(dateStr) {
+  if (!dateStr) return '';
+  try {
+    const d = new Date(dateStr);
+    const diff = (Date.now() - d.getTime()) / 1000;
+    if (diff < 60) return 'just now';
+    if (diff < 3600) return Math.floor(diff/60) + 'm ago';
+    if (diff < 86400) return Math.floor(diff/3600) + 'h ago';
+    if (diff < 604800) return Math.floor(diff/86400) + 'd ago';
+    return d.toLocaleDateString();
+  } catch(e) { return ''; }
+}
+
+function renderMemories(items, container, showScore) {
+  if (!items || items.length === 0) {
+    container.innerHTML = '<div class="empty">No memories found</div>';
+    return;
+  }
+  container.innerHTML = items.map(o => {
+    const tags = (o.tags || []).map(t => `<span class="mem-tag">${esc(t)}</span>`).join('');
+    const imp = Math.round((o.importance || o.confidence || 0.5) * 100);
+    const score = showScore && o.score ? `<span class="search-score">${o.score.toFixed(3)}</span>` : '';
+    return `
+      <div class="mem l${o.layer}">
+        <div class="mem-title">
+          <span>${esc(o.title)}</span>
+          <span class="mem-type ${o.observation_type}">${o.observation_type || 'note'}</span>
+        </div>
+        <div class="mem-content">${esc(o.content)}</div>
+        ${tags ? `<div class="mem-tags">${tags}</div>` : ''}
+        <div class="mem-footer">
+          <span class="mem-time">${layers[o.layer] || ''} ${score} ${timeAgo(o.created_at)}</span>
+          <div class="imp-bar"><div class="imp-fill" style="width:${imp}%"></div></div>
+        </div>
+      </div>`;
+  }).join('');
 }
 
 async function refresh() {
   try {
     const status = await fetchJSON(API + '/api/v1/status');
-    animateCount(document.getElementById('buffer-count'), status.buffer);
-    animateCount(document.getElementById('working-count'), status.working);
-    animateCount(document.getElementById('core-count'), status.core);
-    animateCount(document.getElementById('total-count'), status.total);
-    animateCount(document.getElementById('stale-count'), status.stale);
-    animateCount(document.getElementById('links-count'), status.links);
-    animateCount(document.getElementById('sessions-count'), status.active_sessions);
 
-    // Scale circles based on count
-    const maxSize = Math.max(status.buffer, status.working, status.core, 1);
-    scaleLayer('.layer-buffer', status.buffer, maxSize, 260);
-    scaleLayer('.layer-working', status.working, maxSize, 220);
-    scaleLayer('.layer-core', status.core, maxSize, 180);
+    $('status-dot').className = 'status-dot';
+    animateValue($('svg-core'), status.core);
+    animateValue($('svg-working'), status.working);
+    animateValue($('svg-buffer'), status.buffer);
+    animateValue($('s-total'), status.total);
+    animateValue($('s-facts'), status.facts);
+    animateValue($('s-links'), status.links);
+    animateValue($('s-temporal'), status.temporal_mentions || 0);
+    animateValue($('s-stale'), status.stale + status.expired);
+    animateValue($('s-sessions'), status.active_sessions);
 
-    const ctx = await fetchJSON(API + '/api/v1/observations/context?namespace=default&limit=30');
-    renderObs(ctx.items);
+    $('llm-tag').textContent = status.llm_provider || 'disabled';
+    $('gate-tag').textContent = status.gate_mode || 'off';
+
+    // Detect embed from provider info or show based on status
+    if (!$('embed-tag').dataset.set) {
+      $('embed-tag').textContent = 'auto';
+    }
+
+    // Load memories if not in search mode
+    if (!searchMode) {
+      const ctx = await fetchJSON(API + '/api/v1/observations/context?limit=25');
+      renderMemories(ctx.items, $('memories'), false);
+    }
   } catch(e) {
-    console.error('refresh error:', e);
+    $('status-dot').className = 'status-dot error';
+    console.error('refresh:', e);
   }
 }
 
-function scaleLayer(sel, count, max, baseSize) {
-  const el = document.querySelector(sel);
-  const scale = count === 0 ? 1 : 0.7 + 0.3 * (count / Math.max(max, 1));
-  const size = Math.round(baseSize * scale);
-  el.style.width = size + 'px';
-  el.style.height = size + 'px';
+// Search
+let searchTimeout;
+$('search').addEventListener('keydown', function(e) {
+  if (e.key === 'Enter' && this.value.trim()) {
+    doSearch(this.value.trim());
+  }
+  if (e.key === 'Escape') {
+    this.value = '';
+    searchMode = false;
+    document.querySelector('.section-title').textContent = 'Recent Memories';
+    refresh();
+  }
+});
+
+$('search').addEventListener('input', function() {
+  if (!this.value.trim()) {
+    searchMode = false;
+    document.querySelector('.section-title').textContent = 'Recent Memories';
+    refresh();
+  }
+});
+
+async function doSearch(query) {
+  searchMode = true;
+  try {
+    const data = await fetchJSON(API + '/api/v1/observations/search?q=' + encodeURIComponent(query) + '&limit=20');
+    let title = `Search: "${esc(query)}" (${data.count} results)`;
+    if (data.temporal_intent) {
+      title += ` <span class="temporal-badge">${data.temporal_intent}</span>`;
+    }
+    document.querySelector('.section-title').innerHTML = title;
+    renderMemories(data.results, $('memories'), true);
+  } catch(e) {
+    $('memories').innerHTML = '<div class="empty">Search failed</div>';
+  }
 }
 
 refresh();

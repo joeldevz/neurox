@@ -4,9 +4,18 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"neurox/internal/llm"
 )
+
+// temporalPredicates are predicates where the object is expected to be a date.
+var temporalPredicates = map[string]bool{
+	"happened_on": true,
+	"started_on":  true,
+	"ended_on":    true,
+	"changed_on":  true,
+}
 
 // Extractor extracts knowledge triples from observation text using an LLM.
 type Extractor struct {
@@ -33,14 +42,25 @@ func (e *Extractor) ExtractAndSave(ctx context.Context, observationID, title, co
 
 	saved := 0
 	for _, t := range triples {
-		_, err := e.store.Save(ctx, Fact{
+		f := Fact{
 			Subject:       t.subject,
 			Predicate:     t.predicate,
 			Object:        t.object,
 			ObservationID: observationID,
 			Namespace:     namespace,
-		})
-		if err != nil {
+		}
+
+		var saveErr error
+		if temporalPredicates[t.predicate] {
+			if parsed, ok := parseTemporalObject(t.object); ok {
+				_, saveErr = e.store.SaveWithValidFrom(ctx, f, parsed)
+			} else {
+				_, saveErr = e.store.Save(ctx, f)
+			}
+		} else {
+			_, saveErr = e.store.Save(ctx, f)
+		}
+		if saveErr != nil {
 			continue
 		}
 		saved++
@@ -67,11 +87,19 @@ Rules:
 - Each line: subject | predicate | object
 - Max 5 triples
 - If no clear facts, output NONE
+- For temporal facts use these predicates:
+  - happened_on: for events with a date (e.g. migration | happened_on | 2026-03-06)
+  - started_on: when something began (e.g. project | started_on | 2026-01)
+  - current: for present-state facts (e.g. database | current | sqlite)
+  - changed_to: when something was replaced (e.g. auth | changed_to | jwt)
+- Dates in object should use ISO format (YYYY-MM-DD or YYYY-MM) when possible
 
 Examples:
 - project | uses_framework | react
 - auth_module | depends_on | jwt_library
-- database | version | postgres_16
+- database | current | sqlite
+- migration | happened_on | 2026-03-06
+- auth_system | changed_to | oauth2
 
 Output triples (one per line, pipe-separated):`, title, content)
 
@@ -81,6 +109,17 @@ Output triples (one per line, pipe-separated):`, title, content)
 	}
 
 	return parseTriples(resp), nil
+}
+
+// parseTemporalObject tries to parse an ISO date from a triple's object value.
+func parseTemporalObject(object string) (time.Time, bool) {
+	layouts := []string{"2006-01-02", "2006-01"}
+	for _, layout := range layouts {
+		if t, err := time.Parse(layout, strings.TrimSpace(object)); err == nil {
+			return t, true
+		}
+	}
+	return time.Time{}, false
 }
 
 func parseTriples(response string) []triple {

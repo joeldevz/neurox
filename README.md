@@ -1,115 +1,267 @@
-# Neurox
+<p align="center">
+  <!-- <img src="assets/neurox-banner.png" alt="Neurox" width="800"> -->
+  <h1 align="center">Neurox</h1>
+  <p align="center">
+    <strong>A brain-inspired memory engine for AI coding agents</strong>
+  </p>
+  <p align="center">
+    Three-layer memory &bull; Hybrid search &bull; Temporal reasoning &bull; Ebbinghaus decay &bull; Consolidation pipelines
+  </p>
+  <p align="center">
+    <a href="#benchmark-results">98% Recall on LongMemEval</a> &bull;
+    <a href="#quick-start">Quick Start</a> &bull;
+    <a href="README.es.md">Leer en Espanol</a>
+  </p>
+</p>
 
-Brain-inspired memory engine for AI coding agents. Three-layer memory model (Buffer → Working → Core) with hybrid search, Ebbinghaus decay, consolidation pipelines, reflection, and proactive recall.
+---
 
-## Features
+Neurox gives AI coding agents persistent, structured memory that works like a brain. It stores observations across three memory layers, automatically promotes important memories, detects and resolves contradictions, and understands *when* things happened — not just *what*.
 
-- **Three-layer memory**: Buffer (short-term) → Working (medium-term) → Core (long-term) with automatic promotion
-- **Hybrid search**: FTS5 keyword search + semantic embeddings with tri-factor scoring (recency × importance × relevance)
-- **Ebbinghaus decay**: Memories naturally fade unless reinforced by access
-- **Consolidation pipeline**: Background process handles promotion, dedup, contradiction detection, reflection, and eviction
-- **LLM quality gate**: Intelligent promotion decisions with 3-strike retry system
-- **Contradiction detection**: Automatically finds and resolves conflicting memories
-- **Reflection**: Synthesizes multiple observations into high-level insights (Stanford Generative Agents)
-- **Proactive recall**: Session-aware context that returns relevant memories without being asked
-- **Session lifecycle**: Auto-extracts atomic observations from session summaries
-- **Fact graph**: Knowledge triples (subject-predicate-object) with temporal validity and multi-hop traversal
-- **Git-linked staleness**: Observations linked to files are marked stale when those files change
-- **Topic key upsert**: Same topic_key = update in place, no duplicates
-- **Write gate**: Cosine similarity dedup with LLM-assisted decisions for gray zone
-- **Graceful degradation**: Works without Ollama/LLM (FTS-only, heuristic-only mode)
+**98% retrieval accuracy** on LongMemEval benchmark (S setting, 48 distractor sessions per query). Pure FTS5, no LLM required.
+
+## How it works
+
+```
+        You code with an AI agent
+                  |
+                  v
+    +--------------------------+
+    |     Agent saves memory   |   "We migrated to SQLite last week"
+    +--------------------------+
+                  |
+                  v
+    +--------------------------+
+    |        Neurox            |
+    |                          |
+    |  1. Parse temporal info  |   -> "last week" = 2026-03-13
+    |  2. Extract facts        |   -> migration | happened_on | 2026-03-13
+    |  3. Store in Buffer      |   -> FTS5 indexed, embeddings queued
+    |  4. Link to files        |   -> internal/db/schema.sql
+    +--------------------------+
+                  |
+          (30 min cycle)
+                  v
+    +--------------------------+
+    |    Consolidation         |
+    |                          |
+    |  Decay -> Promote ->     |
+    |  Dedup -> Contradictions |
+    |  -> Reflect -> Evict     |
+    +--------------------------+
+                  |
+                  v
+    +--------------------------+
+    |     Agent asks memory    |   "What DB do we use currently?"
+    +--------------------------+
+                  |
+                  v
+    +--------------------------+
+    |     Temporal-aware       |
+    |       Recall             |
+    |                          |
+    |  1. Detect intent        |   -> current_state
+    |  2. FTS5 + BM25          |   -> keyword matching
+    |  3. Semantic search      |   -> cosine similarity
+    |  4. Temporal scoring     |   -> boost fresh, penalize stale
+    |  5. Return ranked        |   -> "SQLite" ranks first
+    +--------------------------+
+```
+
+## The Three-Layer Memory Model
+
+Inspired by human memory systems, Neurox organizes knowledge into three layers with automatic promotion based on importance and access patterns.
+
+```
+ Layer 0: Buffer                Layer 1: Working              Layer 2: Core
+ ┌─────────────────┐           ┌─────────────────┐           ┌─────────────────┐
+ │                  │           │                  │           │                  │
+ │  Short-term      │   ───>   │  Medium-term     │   ───>   │  Long-term       │
+ │  New observations│  promote │  Validated info   │  promote │  Proven knowledge│
+ │  Unfiltered      │          │  Accessed often   │          │  High confidence │
+ │                  │           │                  │           │                  │
+ │  Capacity: 200   │           │  Dedup + Reflect │           │  Permanent       │
+ │  Decay: fast     │           │  Decay: moderate │           │  Decay: slow     │
+ └─────────────────┘           └─────────────────┘           └─────────────────┘
+         │                              │                              │
+         └──────────────────────────────┴──────────────────────────────┘
+                                        │
+                              Ebbinghaus Decay
+                         (episodic: fast, semantic: medium, procedural: slow)
+```
+
+**Promotion rules:**
+- Buffer → Working: importance threshold (0.3) or procedural type, with optional LLM quality gate
+- Working → Core: accessed 5+ times AND older than 7 days
+- Each layer has its own decay rate based on memory kind
+
+## Temporal Reasoning
+
+Neurox understands *time*. When you save "We migrated to SQLite last week" or ask "What database did we use before?", it knows what you mean.
+
+### How it works
+
+**On save** — temporal expressions are extracted and normalized:
+```
+"We migrated to SQLite last week"
+  └─> kind: relative, normalized: 2026-03-13, confidence: 0.85
+
+"Currently using PostgreSQL 16"
+  └─> kind: current_state, confidence: 0.95
+
+"Deployed on March 5, 2026"
+  └─> kind: absolute, normalized: 2026-03-05, confidence: 0.95
+```
+
+Supports English and Spanish. Handles absolute dates, relative expressions (yesterday, 3 weeks ago, hace 2 meses), current-state markers, durations, and date ranges.
+
+**On recall** — temporal intent is detected in the query and scoring is adjusted:
+
+| Query pattern | Detected intent | Effect |
+|---|---|---|
+| "currently", "latest", "now" | `current_state` | Boosts fresh, penalizes stale |
+| "before", "previously", "used to" | `history` | Includes expired, boosts old |
+| "when did", "what date" | `when` | Boosts observations with dates |
+| "how long", "since when" | `duration` | Boosts duration mentions |
+| "March 2026", "last week" | `point_in_time` | Boosts temporal proximity |
+| No temporal words | none | Standard tri-factor scoring |
+
+**On contradiction** — temporal sequences are preserved, not destroyed:
+```
+Old: "We use PostgreSQL"     →  staleness: stale (still queryable as history)
+New: "We migrated to SQLite" →  staleness: fresh (ranks first for current queries)
+Link: new supersedes old
+```
+
+The old observation becomes *stale* (not *expired*), so "What did we use before?" still finds it.
+
+## Hybrid Search
+
+Recall combines multiple signals into a single score:
+
+```
+Score = (Recency × 0.3) + (Importance × 0.3) + (Relevance × 0.4)
+        × Cross-signal boost (1.2x if FTS ∩ semantic)
+        × Temporal multiplier (0.7x – 1.5x based on intent match)
+```
+
+| Signal | Source | What it captures |
+|---|---|---|
+| **Relevance** | FTS5 BM25 + semantic cosine | How well content matches the query |
+| **Recency** | Ebbinghaus decay curve (30-day half-life) | How recently created or accessed |
+| **Importance** | Initial weight + access boosts | How valuable the observation is |
+| **Temporal** | Intent detection + mention matching | Whether this memory fits the time context |
+| **Cross-signal** | FTS ∩ Semantic overlap | Confidence boost when both methods agree |
+
+## Consolidation Pipeline
+
+Runs automatically every 30 minutes (or on demand via `consolidate` tool):
+
+```
+ 1. Decay         Apply Ebbinghaus curves to all observations
+       ↓
+ 2. Retry         Re-evaluate previously rejected observations (3-strike system)
+       ↓
+ 3. Promote       Buffer → Working (importance + quality gate)
+       ↓
+ 4. Promote       Working → Core (access count + age)
+       ↓
+ 5. Dedup         Merge near-duplicates (cosine ≥ 0.85)
+       ↓           └─ Skip if different temporal windows (preserves timelines)
+ 6. Contradict    Find conflicting observations
+       ↓           ├─ Temporal sequence? → soft supersession (stale)
+       ↓           ├─ LLM confirms? → supersede (with temporal context: stale; without: expired)
+       ↓           └─ No LLM? → create question for human review
+ 7. Reflect       Synthesize insights from Working-layer clusters
+       ↓
+ 8. Evict         Remove lowest-importance Buffer overflow
+       ↓
+ 9. GC            Hard-delete expired observations
+```
+
+## Knowledge Graph
+
+Observations are enriched into structured facts (subject-predicate-object triples):
+
+```
+migration  | happened_on | 2026-03-06
+database   | current     | sqlite
+auth       | changed_to  | jwt
+project    | uses        | go
+```
+
+Facts have temporal validity — when a fact is superseded, the old one keeps its history (`valid_until` set, `superseded_by` linked). You can query both current state and historical changes.
+
+## Benchmark Results
+
+Evaluated on [LongMemEval](https://github.com/xiaowu0162/LongMemEval) (ICLR 2025) — a benchmark for long-term conversational memory with 500 questions across 6 categories.
+
+### LongMemEval-S (48 distractor sessions per query)
+
+| Category | N | Recall@10 | NDCG@10 |
+|---|---|---|---|
+| knowledge-update | 72 | **100.0%** | 96.9% |
+| single-session-user | 64 | 98.4% | 97.0% |
+| single-session-assistant | 56 | 98.2% | 95.1% |
+| temporal-reasoning | 127 | 97.6% | 87.2% |
+| multi-session | 121 | 98.4% | 87.0% |
+| single-session-preference | 30 | 93.3% | 73.8% |
+| **Overall** | **470** | **98.1%** | **90.0%** |
+
+> FTS5 + BM25 + temporal scoring, no LLM required. 500 questions in ~2 minutes.
 
 ## Quick Start
 
+### Build
+
 ```bash
-# Build
-go build -o neurox .
+# Requires CGO for SQLite
+CGO_ENABLED=1 go build -tags fts5 -o neurox .
+```
 
-# Start MCP server (for AI agents)
+### Use with AI agents (MCP)
+
+```bash
 ./neurox mcp
-
-# Start HTTP API server
-./neurox serve
-
-# CLI usage
-./neurox save "JWT auth pattern" --content "Using JWT with RS256 for API auth" --type decision --tags "auth,jwt"
-./neurox recall "authentication" --namespace myproject --limit 5
-./neurox context --namespace myproject --files "src/auth.go"
-./neurox status
 ```
 
-## Architecture
+### Use as HTTP API
 
-```
-┌─────────────┐     ┌─────────────┐     ┌─────────────┐
-│   Buffer     │ ──► │   Working   │ ──► │    Core     │
-│  (Layer 0)   │     │  (Layer 1)  │     │  (Layer 2)  │
-│  Short-term  │     │ Medium-term │     │  Long-term  │
-└─────────────┘     └─────────────┘     └─────────────┘
-      │                    │                    │
-      └────────────────────┴────────────────────┘
-                           │
-                  ┌────────┴────────┐
-                  │  Consolidation  │
-                  │    Pipeline     │
-                  │  (30 min loop)  │
-                  └────────┬────────┘
-                           │
-           ┌───────────────┼───────────────┐
-           │               │               │
-      ┌────┴────┐   ┌─────┴─────┐   ┌────┴────┐
-      │  Decay  │   │  Quality  │   │ Reflect │
-      │         │   │   Gate    │   │         │
-      └─────────┘   └───────────┘   └─────────┘
+```bash
+./neurox serve  # localhost:7438
 ```
 
-**Consolidation pipeline** (runs every 30 minutes):
-1. Ebbinghaus decay on all observations
-2. Retry previously rejected observations (3-strike system)
-3. Promote Buffer → Working (importance threshold + quality gate)
-4. Promote Working → Core (access count + age)
-5. Semantic dedup (cosine similarity ≥ 0.85)
-6. Contradiction detection + resolution
-7. Reflection (synthesize insights from Working observations)
-8. Buffer overflow eviction
-9. Garbage collection
+### CLI
 
-## MCP Tools
+```bash
+# Save a memory
+neurox save "JWT auth pattern" \
+  --content "Using JWT with RS256 for API auth" \
+  --type decision \
+  --tags "auth,jwt" \
+  --files "internal/auth/middleware.go"
 
-| Tool | Description |
-|------|-------------|
-| `save` | Save an observation to memory (Buffer layer) |
-| `recall` | Search memories with FTS5 + tri-factor scoring |
-| `context` | Get relevant context (file-linked + high-activation + reflections) |
-| `update` | Update an existing observation |
-| `forget` | Soft-delete an observation |
-| `invalidate` | Mark observation as incorrect, optionally provide replacement |
-| `status` | Brain statistics (layer counts, providers, health) |
-| `session_start` | Start work session, returns proactive context |
-| `session_end` | End session, LLM extracts atomic observations from summary |
-| `git_hook` | Report changed files, marks linked observations stale |
-| `reflect` | Trigger reflection synthesis |
+# Search memories
+neurox recall "authentication" --namespace myproject --limit 5
 
-## CLI Commands
+# Get context for current work
+neurox context --namespace myproject --files "src/auth.go"
 
-```
-neurox mcp              Start MCP server over stdio
-neurox serve            Start HTTP API server
-neurox save             Save an observation
-neurox recall           Search memories
-neurox context          Get relevant context
-neurox invalidate       Mark observation as incorrect
-neurox status           Show brain statistics
-neurox config           Show current configuration
-neurox install-hook     Install git post-commit hook
-neurox version          Show version
+# Check brain health
+neurox status
+
+# Force consolidation
+neurox consolidate
+
+# Install git hook (auto-marks memories stale when files change)
+neurox install-hook
 ```
 
 ## Agent Setup
 
 ### Claude Code
 
-Add to your MCP settings (`~/.claude/settings.json` or project `.mcp.json`):
+Add to `~/.claude/settings.json` or project `.mcp.json`:
 
 ```json
 {
@@ -124,7 +276,7 @@ Add to your MCP settings (`~/.claude/settings.json` or project `.mcp.json`):
 
 ### Cursor
 
-Settings → MCP Servers → Add:
+Settings > MCP Servers > Add:
 - Name: `neurox`
 - Command: `/path/to/neurox mcp`
 - Transport: `stdio`
@@ -132,6 +284,7 @@ Settings → MCP Servers → Add:
 ### OpenCode
 
 Add to `opencode.json`:
+
 ```json
 {
   "mcp": {
@@ -143,14 +296,46 @@ Add to `opencode.json`:
 }
 ```
 
-### Windsurf / Copilot
+### Windsurf / Copilot / HTTP clients
 
-Use the HTTP API mode:
 ```bash
-neurox serve  # Starts on port 7438
+neurox serve  # REST API on port 7438
 ```
 
-API endpoint: `http://localhost:7438/api/v1/`
+## MCP Tools
+
+| Tool | Description |
+|---|---|
+| **`save`** | Save an observation to Buffer with FTS5 indexing and temporal extraction |
+| **`recall`** | Temporal-aware search with hybrid scoring (FTS5 + semantic + temporal) |
+| **`context`** | Proactive context: recent + important + file-linked observations |
+| **`update`** | Update an existing observation by ID |
+| **`forget`** | Soft-delete an observation |
+| **`invalidate`** | Mark as incorrect, optionally create replacement with supersedes link |
+| **`status`** | Brain stats: layers, staleness, facts, temporal mentions, providers |
+| **`session_start`** | Start work session, auto-close previous, return relevant context |
+| **`session_end`** | End session with summary, LLM extracts atomic observations |
+| **`git_hook`** | Report changed files from commit, mark linked observations stale |
+| **`reflect`** | Synthesize Working-layer observations into high-level insights |
+| **`consolidate`** | Force immediate full consolidation cycle |
+
+## REST API
+
+```
+GET    /health                              Health check
+GET    /api/v1/status                       Brain statistics
+POST   /api/v1/observations                 Save observation
+GET    /api/v1/observations/search?q=...    Search memories
+GET    /api/v1/observations/context         Get proactive context
+GET    /api/v1/observations/{id}            Get observation
+PUT    /api/v1/observations/{id}            Update observation
+DELETE /api/v1/observations/{id}            Soft-delete
+POST   /api/v1/observations/{id}/invalidate Invalidate + replace
+POST   /api/v1/sessions                     Start session
+PUT    /api/v1/sessions/{id}/end            End session
+POST   /api/v1/hooks/git                    Git hook
+POST   /api/v1/reflect                      Trigger reflection
+```
 
 ## Configuration
 
@@ -161,55 +346,107 @@ database:
   path: ~/.config/neurox/neurox.db
 
 llm:
-  provider: ""          # "ollama", "remote", or "" (auto-detect)
+  provider: ""          # "ollama", "remote", "" (auto-detect)
   gate_mode: "auto"     # "auto", "full", "off"
   ollama_url: ""        # default: http://localhost:11434
   ollama_model: ""      # default: qwen2.5:3b
-  remote_url: ""        # OpenAI-compatible API URL
+  remote_url: ""        # OpenAI-compatible endpoint
   remote_api_key: ""
   remote_model: ""
+
+embeddings:
+  provider: ""          # "ollama", "remote", "" (auto-detect)
+  remote_url: ""        # OpenAI-compatible embeddings endpoint
+  remote_key: ""
+  remote_model: ""
+  dimensions: 0         # auto-detect from provider
 ```
 
-Environment overrides:
-- `NEUROX_DATABASE_PATH`
-- `NEUROX_CONFIG_DIR`
-- `NEUROX_LLM_PROVIDER`
-- `NEUROX_LLM_GATE_MODE`
-- `NEUROX_LLM_OLLAMA_URL`
-- `NEUROX_LLM_OLLAMA_MODEL`
-- `NEUROX_LLM_REMOTE_URL`
-- `NEUROX_LLM_REMOTE_API_KEY`
-- `NEUROX_LLM_REMOTE_MODEL`
+Environment overrides use `NEUROX_` prefix:
+
+```bash
+NEUROX_DATABASE_PATH=/custom/path.db
+NEUROX_LLM_PROVIDER=ollama
+NEUROX_LLM_GATE_MODE=auto
+NEUROX_EMBED_PROVIDER=ollama
+```
+
+### Graceful Degradation
+
+Neurox works without any external services. Features activate based on what's available:
+
+| Available | Features enabled |
+|---|---|
+| Nothing | FTS5 search, temporal parsing, heuristic promotion, decay |
+| + Ollama embeddings | Hybrid search, semantic dedup, contradiction detection |
+| + Ollama LLM | Quality gate, fact extraction, reflection, session extraction |
+| + Remote API | Same as above with cloud provider |
 
 ## Observation Types
 
-| Type | When to use |
-|------|-------------|
-| `decision` | Architectural or design decisions |
-| `bugfix` | What broke and why |
-| `discovery` | Learned something about the codebase |
-| `pattern` | Recurring patterns or conventions |
-| `gotcha` | Traps, pitfalls, edge cases |
-| `config` | Environment details, tool configurations |
-| `preference` | User preferences or corrections |
-| `question` | Open questions for review |
+| Type | When to use | Example |
+|---|---|---|
+| `decision` | Architectural or design choices | "Chose SQLite for single-file deployment" |
+| `bugfix` | What broke and why | "N+1 query in user list, fixed with preload" |
+| `discovery` | Learned something about the codebase | "Auth middleware runs before CORS" |
+| `pattern` | Recurring conventions | "All stores use constructor injection" |
+| `gotcha` | Traps and pitfalls | "Must use -tags fts5 for build" |
+| `config` | Environment and tool setup | "CI uses Go 1.23 with CGO" |
+| `preference` | User corrections and preferences | "Prefer table-driven tests" |
+| `question` | Open questions for review | "Should we split this package?" |
+
+## Architecture
+
+```
+neurox/
+├── main.go                    CLI entry point
+├── internal/
+│   ├── observation/           Core types, CRUD, temporal extraction
+│   ├── recall/                FTS5 + semantic + temporal-aware search
+│   ├── temporal/              Date parser, mention storage, helpers
+│   ├── facts/                 Knowledge triples, LLM extraction
+│   ├── consolidate/           Background pipeline (promote, dedup, evict)
+│   ├── contradiction/         Conflict detection + temporal supersession
+│   ├── decay/                 Ebbinghaus curves, garbage collection
+│   ├── reflect/               Insight synthesis (Generative Agents pattern)
+│   ├── session/               Session lifecycle, LLM observation extraction
+│   ├── proactive/             Context retrieval without explicit queries
+│   ├── embed/                 Ollama + OpenAI-compatible embeddings
+│   ├── llm/                   LLM providers, quality gate, 3-strike system
+│   ├── links/                 Observation relationships (supersedes, contradicts)
+│   ├── db/                    SQLite schema, migrations, WAL mode
+│   ├── mcp/                   MCP protocol server
+│   ├── api/                   HTTP REST server + dashboard
+│   ├── config/                YAML + env config loading
+│   └── filelink/              File-observation linking
+├── benchmarks/
+│   └── longmemeval/           LongMemEval benchmark harness
+├── tests/
+│   └── integration/           E2E tests + performance benchmarks
+└── scripts/
+    └── post-commit            Git hook for staleness tracking
+```
 
 ## Performance
 
-- `save`: <1ms (SQLite insert + FTS5)
-- `recall` FTS: <5ms
-- `context`: <10ms
-- Binary size: ~15MB
-- RAM: <150MB with 10k observations
+| Operation | Latency | Notes |
+|---|---|---|
+| `save` | <1ms | SQLite insert + FTS5 index + temporal extraction |
+| `recall` (FTS) | <5ms | BM25 ranking with temporal scoring |
+| `recall` (hybrid) | <50ms | FTS + semantic + cross-signal boost |
+| `context` | <10ms | Proactive multi-signal retrieval |
+| `consolidate` | <1s | Full cycle for 1000 observations |
+| Binary size | ~15MB | Single static binary (CGO for SQLite) |
+| Memory | <150MB | With 10k observations + embeddings |
 
-## Stack
+## Technology
 
-- **Go** — single binary, goroutines for background work
-- **SQLite** (WAL mode, FTS5) — via `mattn/go-sqlite3` (CGO)
-- **Embeddings** — Ollama (nomic-embed-text) or OpenAI-compatible API
-- **LLM** — Ollama or OpenAI-compatible API (optional, for quality gate + reflection)
-- **MCP** — `mark3labs/mcp-go`
-- **IDs** — ULID (`oklog/ulid`)
+- **Go 1.23** — single binary, goroutines for background consolidation
+- **SQLite 3** — WAL mode, FTS5 full-text search, via mattn/go-sqlite3 (CGO)
+- **Embeddings** — Ollama (nomic-embed-text, 768d) or any OpenAI-compatible API
+- **LLM** — Ollama or OpenAI-compatible (optional, for quality gate + reflection + facts)
+- **MCP** — Model Context Protocol via mark3labs/mcp-go
+- **IDs** — ULID (monotonic, sortable) via oklog/ulid
 
 ## License
 

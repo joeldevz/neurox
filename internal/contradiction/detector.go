@@ -5,10 +5,12 @@ import (
 	"database/sql"
 	"fmt"
 	"log"
+	"strings"
 
 	"neurox/internal/embed"
 	"neurox/internal/links"
 	"neurox/internal/llm"
+	"neurox/internal/temporal"
 )
 
 const (
@@ -41,9 +43,10 @@ func NewDetector(db *sql.DB, embedder embed.Provider, llmProvider llm.Provider, 
 
 // DetectResult holds stats from a contradiction detection run.
 type DetectResult struct {
-	Candidates int
-	Resolved   int
-	Questions  int
+	Candidates            int
+	Resolved              int
+	Questions             int
+	TemporalSupersessions int
 }
 
 // candidate holds a pair of potentially contradicting observations.
@@ -59,6 +62,8 @@ type candidate struct {
 
 // Run scans recent observations for contradictions and resolves them.
 // It focuses on Working-layer observations that haven't been checked yet.
+// When temporal data is available, it distinguishes true contradictions from
+// harmless temporal sequences (old truth → new truth).
 func (d *Detector) Run(ctx context.Context) (DetectResult, error) {
 	if !embed.IsAvailable(d.embedder) {
 		return DetectResult{}, nil
@@ -69,12 +74,34 @@ func (d *Detector) Run(ctx context.Context) (DetectResult, error) {
 		return DetectResult{}, fmt.Errorf("find contradiction candidates: %w", err)
 	}
 
+	// Load temporal mentions for all candidate observations
+	allIDs := make([]string, 0, len(candidates)*2)
+	for _, c := range candidates {
+		allIDs = append(allIDs, c.newID, c.oldID)
+	}
+	temporalMap, _ := temporal.LoadByObservations(ctx, d.db, allIDs)
+
 	var result DetectResult
 	result.Candidates = len(candidates)
 
 	for _, c := range candidates {
+		newMentions := temporalMap[c.newID]
+		oldMentions := temporalMap[c.oldID]
+
+		// Temporal sequence heuristic: if temporal data shows a clear sequence,
+		// handle as supersession without LLM — preserves history as stale.
+		if isTemporalSequence(newMentions, oldMentions) {
+			if err := d.markTemporalSupersession(ctx, c.newID, c.oldID); err != nil {
+				log.Printf("temporal supersession failed for %s vs %s: %v", c.newID, c.oldID, err)
+				continue
+			}
+			result.Resolved++
+			result.TemporalSupersessions++
+			continue
+		}
+
 		if llm.IsAvailable(d.llm) {
-			resolved, err := d.resolveWithLLM(ctx, c)
+			resolved, err := d.resolveWithLLM(ctx, c, newMentions, oldMentions)
 			if err != nil {
 				log.Printf("contradiction resolution failed for %s vs %s: %v", c.newID, c.oldID, err)
 				continue
@@ -96,7 +123,7 @@ func (d *Detector) Run(ctx context.Context) (DetectResult, error) {
 }
 
 // findCandidates finds pairs of observations that might contradict each other.
-// It looks at Working-layer observations and compares them against others in
+// It looks at Working/Core-layer observations and compares them against others in
 // the same namespace using cosine similarity.
 func (d *Detector) findCandidates(ctx context.Context) ([]candidate, error) {
 	// Get Working/Core observations with embeddings, ordered by recency
@@ -193,28 +220,10 @@ func (d *Detector) findCandidates(ctx context.Context) ([]candidate, error) {
 }
 
 // resolveWithLLM asks the LLM to determine if two observations contradict
-// each other. If they do, the older one is marked with valid_until and a
-// supersedes link is created.
-func (d *Detector) resolveWithLLM(ctx context.Context, c candidate) (bool, error) {
-	prompt := fmt.Sprintf(`You are a memory consistency checker. Two observations from the same project might contradict each other. Determine if they do.
-
-OBSERVATION A (newer):
-Title: %s
-Content: %s
-
-OBSERVATION B (older):
-Title: %s
-Content: %s
-
-Do these observations contradict each other? Consider:
-- Does A make B outdated or incorrect?
-- Do they state conflicting facts about the same thing?
-- Is A an update/correction of B?
-
-Reply with exactly one word: YES or NO.`,
-		c.newTitle, c.newContent,
-		c.oldTitle, c.oldContent,
-	)
+// each other. When temporal context is available, uses softer supersession
+// that preserves the old observation for history queries.
+func (d *Detector) resolveWithLLM(ctx context.Context, c candidate, newMentions, oldMentions []temporal.Mention) (bool, error) {
+	prompt := d.buildContradictionPrompt(c, newMentions, oldMentions)
 
 	resp, err := d.llm.Complete(ctx, prompt)
 	if err != nil {
@@ -225,14 +234,69 @@ Reply with exactly one word: YES or NO.`,
 		return false, nil
 	}
 
-	// Mark the old observation as superseded
+	// If temporal context exists, use softer supersession (preserves history)
+	if len(newMentions) > 0 || len(oldMentions) > 0 {
+		return true, d.markTemporalSupersession(ctx, c.newID, c.oldID)
+	}
+
+	// No temporal context: hard supersession
 	return true, d.markSuperseded(ctx, c.newID, c.oldID)
 }
 
-// markSuperseded marks the old observation with valid_until, sets invalidated_by
-// to the new observation, and creates a supersedes link.
+// buildContradictionPrompt creates the LLM prompt, enriched with temporal
+// context when available.
+func (d *Detector) buildContradictionPrompt(c candidate, newMentions, oldMentions []temporal.Mention) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, `You are a memory consistency checker. Two observations from the same project might contradict each other.
+
+OBSERVATION A (newer):
+Title: %s
+Content: %s
+
+OBSERVATION B (older):
+Title: %s
+Content: %s
+`, c.newTitle, c.newContent, c.oldTitle, c.oldContent)
+
+	if len(newMentions) > 0 || len(oldMentions) > 0 {
+		b.WriteString("\nTemporal context:\n")
+		if len(newMentions) > 0 {
+			fmt.Fprintf(&b, "- Observation A time references: %s\n", formatMentionSummary(newMentions))
+		}
+		if len(oldMentions) > 0 {
+			fmt.Fprintf(&b, "- Observation B time references: %s\n", formatMentionSummary(oldMentions))
+		}
+		b.WriteString(`
+If Observation A represents a newer state that supersedes Observation B (e.g., an update, migration, or replacement), answer YES.
+If they describe genuinely different, compatible topics, answer NO.`)
+	} else {
+		b.WriteString(`
+Do these observations contradict each other? Consider:
+- Does A make B outdated or incorrect?
+- Do they state conflicting facts about the same thing?
+- Is A an update/correction of B?`)
+	}
+
+	b.WriteString("\n\nReply with exactly one word: YES or NO.")
+	return b.String()
+}
+
+// formatMentionSummary creates a human-readable summary of temporal mentions.
+func formatMentionSummary(mentions []temporal.Mention) string {
+	parts := make([]string, 0, len(mentions))
+	for _, m := range mentions {
+		desc := string(m.Kind)
+		if m.NormalizedStart != nil {
+			desc += " (" + m.NormalizedStart.Format("2006-01-02") + ")"
+		}
+		parts = append(parts, desc)
+	}
+	return strings.Join(parts, ", ")
+}
+
+// markSuperseded marks the old observation as expired (hard supersession).
+// Used when no temporal context is available.
 func (d *Detector) markSuperseded(ctx context.Context, newID, oldID string) error {
-	// Mark old observation as superseded
 	_, err := d.db.ExecContext(ctx, `
 		UPDATE observations
 		SET valid_until = datetime('now'),
@@ -259,6 +323,38 @@ func (d *Detector) markSuperseded(ctx context.Context, newID, oldID string) erro
 	}
 
 	log.Printf("contradiction resolved: %s supersedes %s", newID, oldID)
+	return nil
+}
+
+// markTemporalSupersession marks the old observation as stale (soft supersession).
+// Used when temporal context exists — preserves the old observation for history
+// queries while marking it as no longer current.
+func (d *Detector) markTemporalSupersession(ctx context.Context, newID, oldID string) error {
+	_, err := d.db.ExecContext(ctx, `
+		UPDATE observations
+		SET valid_until = datetime('now'),
+		    invalidated_by = ?,
+		    staleness = 'stale',
+		    updated_at = datetime('now'),
+		    modified_epoch = modified_epoch + 1
+		WHERE id = ? AND deleted_at IS NULL
+	`, newID, oldID)
+	if err != nil {
+		return fmt.Errorf("mark temporal supersession: %w", err)
+	}
+
+	_, err = d.linkStore.Create(ctx, links.CreateLinkInput{
+		SourceID:     newID,
+		TargetID:     oldID,
+		RelationType: links.RelationSupersedes,
+		Confidence:   0.9,
+		CreatedBy:    links.CreatedByConsolidator,
+	})
+	if err != nil {
+		return fmt.Errorf("create supersedes link: %w", err)
+	}
+
+	log.Printf("temporal supersession: %s supersedes %s (preserved as stale)", newID, oldID)
 	return nil
 }
 
@@ -316,6 +412,33 @@ Please review and resolve: use the invalidate tool to mark the outdated observat
 	}
 
 	return nil
+}
+
+// isTemporalSequence returns true if two observations form a clear temporal
+// sequence (the newer one chronologically follows the older one), suggesting
+// supersession rather than contradiction.
+func isTemporalSequence(newMentions, oldMentions []temporal.Mention) bool {
+	if len(newMentions) == 0 || len(oldMentions) == 0 {
+		return false
+	}
+
+	// If the new observation explicitly marks current state and the old has dated references
+	if temporal.HasKind(newMentions, temporal.KindCurrentState) {
+		oldLatest := temporal.LatestTime(oldMentions)
+		if oldLatest != nil {
+			return true
+		}
+	}
+
+	newLatest := temporal.LatestTime(newMentions)
+	oldLatest := temporal.LatestTime(oldMentions)
+
+	if newLatest == nil || oldLatest == nil {
+		return false
+	}
+
+	// New is chronologically after old → temporal sequence
+	return newLatest.After(*oldLatest)
 }
 
 // isYes parses LLM response for a yes/no answer.

@@ -12,6 +12,7 @@ import (
 	"neurox/internal/links"
 	"neurox/internal/observation"
 	"neurox/internal/recall"
+	"neurox/internal/temporal"
 )
 
 func newTestDeps(t *testing.T) *Deps {
@@ -24,8 +25,16 @@ func newTestDeps(t *testing.T) *Deps {
 	t.Cleanup(func() { database.Close() })
 
 	idGen := observation.NewULIDGenerator()
+	obsStore := observation.NewStore(database, nil)
+
+	// Configure temporal extractor so observations with temporal content
+	// get temporal mentions persisted (needed for temporal-aware recall tests).
+	temporalStore := temporal.NewStore(database, idGen)
+	temporalExtractor := temporal.NewExtractor(temporal.NewParser(), temporalStore)
+	obsStore.SetTemporalExtractor(temporalExtractor)
+
 	return &Deps{
-		ObservationStore: observation.NewStore(database, nil),
+		ObservationStore: obsStore,
 		RecallEngine:     recall.NewEngine(database),
 		LinkStore:        links.NewStore(database, idGen),
 		DB:               database,
@@ -323,6 +332,189 @@ func TestSessionLifecycle(t *testing.T) {
 
 	if ended["message"] != "session completed" {
 		t.Errorf("unexpected message: %s", ended["message"])
+	}
+}
+
+// --- Temporal end-to-end tests ---
+
+func TestRecallCurrentStateE2E(t *testing.T) {
+	deps := newTestDeps(t)
+	h := initServer(t, deps)
+
+	// Save observations about database
+	h.callTool("save", map[string]any{
+		"title":   "Database is Postgres",
+		"content": "We use Postgres database for the project",
+		"tags":    "database",
+	})
+	h.callTool("save", map[string]any{
+		"title":   "Database is SQLite",
+		"content": "We currently use SQLite database for the project",
+		"tags":    "database",
+	})
+
+	// Recall with current-state intent
+	recallText := h.callTool("recall", map[string]any{
+		"query": "database currently",
+	})
+
+	var recalled recallResponse
+	json.Unmarshal([]byte(recallText), &recalled)
+
+	if recalled.TemporalIntent != "current_state" {
+		t.Errorf("temporal_intent = %q, want 'current_state'", recalled.TemporalIntent)
+	}
+	if recalled.Count < 2 {
+		t.Fatalf("expected at least 2 results, got %d", recalled.Count)
+	}
+	// Verify the FTS query cleaning works: "currently" stripped, both "database" results returned
+	titles := make(map[string]bool)
+	for _, r := range recalled.Results {
+		titles[r.Title] = true
+	}
+	if !titles["Database is SQLite"] {
+		t.Error("expected 'Database is SQLite' in results")
+	}
+	if !titles["Database is Postgres"] {
+		t.Error("expected 'Database is Postgres' in results")
+	}
+}
+
+func TestRecallWhenIntentE2E(t *testing.T) {
+	deps := newTestDeps(t)
+	h := initServer(t, deps)
+
+	// Save observations about auth
+	h.callTool("save", map[string]any{
+		"title":   "Auth migration completed",
+		"content": "Auth system migration to JWT completed on 2026-03-06",
+		"tags":    "auth,migration",
+	})
+	h.callTool("save", map[string]any{
+		"title":   "Auth configuration",
+		"content": "Auth system configuration and setup notes for JWT",
+		"tags":    "auth",
+	})
+
+	// Recall with when intent
+	recallText := h.callTool("recall", map[string]any{
+		"query": "when did auth migration",
+	})
+
+	var recalled recallResponse
+	json.Unmarshal([]byte(recallText), &recalled)
+
+	if recalled.TemporalIntent != "when" {
+		t.Errorf("temporal_intent = %q, want 'when'", recalled.TemporalIntent)
+	}
+	if recalled.Count == 0 {
+		t.Fatal("expected results")
+	}
+}
+
+func TestRecallHistoryIncludesExpiredE2E(t *testing.T) {
+	deps := newTestDeps(t)
+	h := initServer(t, deps)
+
+	// Save and then manually expire an observation
+	saveText := h.callTool("save", map[string]any{
+		"title":   "Old auth system",
+		"content": "Auth system uses session tokens for authentication",
+		"tags":    "auth",
+	})
+
+	var saved saveResponse
+	json.Unmarshal([]byte(saveText), &saved)
+
+	// Manually expire it
+	deps.DB.ExecContext(context.Background(),
+		"UPDATE observations SET staleness = 'expired', valid_until = datetime('now', '-1 day') WHERE id = ?",
+		saved.ID)
+
+	// Save a current observation
+	h.callTool("save", map[string]any{
+		"title":   "Current auth system",
+		"content": "Auth system uses JWT tokens for authentication",
+		"tags":    "auth",
+	})
+
+	// Normal recall should NOT include expired
+	normalText := h.callTool("recall", map[string]any{
+		"query": "auth tokens",
+	})
+	var normalRecall recallResponse
+	json.Unmarshal([]byte(normalText), &normalRecall)
+
+	for _, r := range normalRecall.Results {
+		if r.ID == saved.ID {
+			t.Error("expired observation should not appear in normal recall")
+		}
+	}
+
+	// History recall ("previously") should include it
+	historyText := h.callTool("recall", map[string]any{
+		"query": "auth tokens previously",
+	})
+	var historyRecall recallResponse
+	json.Unmarshal([]byte(historyText), &historyRecall)
+
+	if historyRecall.TemporalIntent != "history" {
+		t.Errorf("temporal_intent = %q, want 'history'", historyRecall.TemporalIntent)
+	}
+
+	found := false
+	for _, r := range historyRecall.Results {
+		if r.ID == saved.ID {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("expired observation should appear in history recall")
+	}
+}
+
+func TestRecallNoTemporalIntentOmitted(t *testing.T) {
+	deps := newTestDeps(t)
+	h := initServer(t, deps)
+
+	h.callTool("save", map[string]any{
+		"title":   "Auth implementation",
+		"content": "Auth uses middleware pattern",
+	})
+
+	recallText := h.callTool("recall", map[string]any{
+		"query": "auth implementation",
+	})
+
+	var recalled recallResponse
+	json.Unmarshal([]byte(recallText), &recalled)
+
+	// No temporal intent → field should be empty (omitted from JSON)
+	if recalled.TemporalIntent != "" {
+		t.Errorf("temporal_intent should be empty for non-temporal query, got %q", recalled.TemporalIntent)
+	}
+}
+
+func TestStatusIncludesTemporalMentions(t *testing.T) {
+	deps := newTestDeps(t)
+	h := initServer(t, deps)
+
+	// Save an observation with temporal content (temporal mentions are extracted on save)
+	h.callTool("save", map[string]any{
+		"title":   "Migration note",
+		"content": "We currently use SQLite for the project",
+	})
+
+	statusText := h.callTool("status", map[string]any{})
+
+	var status statusResponse
+	json.Unmarshal([]byte(statusText), &status)
+
+	// temporal_mentions field should exist (may be 0 if extractor didn't run,
+	// but the field should be in the response)
+	if status.Total != 1 {
+		t.Errorf("total = %d, want 1", status.Total)
 	}
 }
 

@@ -13,5 +13,7 @@ func buildFTSMatchQuery(query string) string {
 		escaped := strings.ReplaceAll(trimmed, `"`, `""`)
 		parts = append(parts, `"`+escaped+`"`)
 	}
-	return strings.Join(parts, " AND ")
+	// Use OR so any matching term contributes to results.
+	// BM25 naturally ranks documents matching more terms higher.
+	return strings.Join(parts, " OR ")
 }

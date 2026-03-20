@@ -13,6 +13,7 @@ import (
 )
 
 //go:embed schema.sql
+//go:embed 002_temporal_mentions.sql
 var schemaFS embed.FS
 
 type migration struct {
@@ -21,11 +22,18 @@ type migration struct {
 	path    string
 }
 
-var migrations = []migration{{
-	version: 1,
-	name:    "initial_schema",
-	path:    "schema.sql",
-}}
+var migrations = []migration{
+	{
+		version: 1,
+		name:    "initial_schema",
+		path:    "schema.sql",
+	},
+	{
+		version: 2,
+		name:    "temporal_mentions",
+		path:    "002_temporal_mentions.sql",
+	},
+}
 
 func Open(ctx context.Context, databasePath string) (*sql.DB, error) {
 	if strings.TrimSpace(databasePath) == "" {

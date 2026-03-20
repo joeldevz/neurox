@@ -31,6 +31,7 @@ import (
 	"neurox/internal/recall"
 	reflectpkg "neurox/internal/reflect"
 	"neurox/internal/session"
+	"neurox/internal/temporal"
 )
 
 const (
@@ -165,6 +166,11 @@ func runSave(ctx context.Context, database *sql.DB, cfg config.Config) {
 	}
 
 	store := observation.NewStore(database, nil)
+	cliIDGen := observation.NewULIDGenerator()
+	cliTemporalStore := temporal.NewStore(database, cliIDGen)
+	cliTemporalExtractor := temporal.NewExtractor(temporal.NewParser(), cliTemporalStore)
+	store.SetTemporalExtractor(cliTemporalExtractor)
+
 	saved, err := store.Save(ctx, obs)
 	if err != nil {
 		log.Fatalf("save: %v", err)
@@ -482,6 +488,12 @@ func initDeps(ctx context.Context, database *sql.DB, cfg config.Config) *deps {
 	reflectEngine := reflectpkg.NewEngine(database, llmProvider, linkStore, idGen)
 	sessionMgr := session.NewManager(database, llmProvider, idGen)
 	proactiveEng := proactive.NewEngine(database, embedder)
+
+	// Wire temporal extraction into observation save and session extraction.
+	temporalStore := temporal.NewStore(database, idGen)
+	temporalExtractor := temporal.NewExtractor(temporal.NewParser(), temporalStore)
+	obsStore.SetTemporalExtractor(temporalExtractor)
+	sessionMgr.SetTemporalExtractor(temporalExtractor)
 
 	var embedQueue *embed.Queue
 	if embed.IsAvailable(embedder) {

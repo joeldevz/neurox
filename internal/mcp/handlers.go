@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"strings"
 
+	"time"
+
 	"github.com/mark3labs/mcp-go/mcp"
 
 	"neurox/internal/consolidate"
@@ -147,11 +149,19 @@ func (d *Deps) handleRecall(ctx context.Context, req mcp.CallToolRequest) (*mcp.
 		})
 	}
 
-	return toolResultJSON(recallResponse{
+	resp := recallResponse{
 		Query:   query,
 		Count:   len(items),
 		Results: items,
-	})
+	}
+
+	// Include detected temporal intent for debugging/advanced clients
+	intent := recall.DetectTemporalIntent(query, time.Now().UTC())
+	if intent.Kind != recall.IntentNone {
+		resp.TemporalIntent = string(intent.Kind)
+	}
+
+	return toolResultJSON(resp)
 }
 
 func (d *Deps) handleContext(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -318,6 +328,9 @@ func (d *Deps) handleStatus(ctx context.Context, _ mcp.CallToolRequest) (*mcp.Ca
 		d.DB.QueryRowContext(ctx, "SELECT COUNT(*) FROM facts WHERE valid_until IS NULL").Scan(&factCount)
 	}
 
+	var temporalMentionCount int
+	d.DB.QueryRowContext(ctx, "SELECT COUNT(*) FROM temporal_mentions").Scan(&temporalMentionCount)
+
 	llmName := "disabled"
 	gateMode := "off"
 	if d.LLMProvider != nil {
@@ -328,17 +341,18 @@ func (d *Deps) handleStatus(ctx context.Context, _ mcp.CallToolRequest) (*mcp.Ca
 	}
 
 	return toolResultJSON(statusResponse{
-		Total:          total,
-		Buffer:         buffer,
-		Working:        working,
-		Core:           core,
-		Stale:          staleCount,
-		Expired:        expiredCount,
-		Links:          linkCount,
-		Facts:          factCount,
-		ActiveSessions: sessionCount,
-		LLMProvider:    llmName,
-		GateMode:       gateMode,
+		Total:            total,
+		Buffer:           buffer,
+		Working:          working,
+		Core:             core,
+		Stale:            staleCount,
+		Expired:          expiredCount,
+		Links:            linkCount,
+		Facts:            factCount,
+		TemporalMentions: temporalMentionCount,
+		ActiveSessions:   sessionCount,
+		LLMProvider:      llmName,
+		GateMode:         gateMode,
 	})
 }
 
@@ -591,9 +605,10 @@ type saveResponse struct {
 }
 
 type recallResponse struct {
-	Query   string               `json:"query"`
-	Count   int                  `json:"count"`
-	Results []recallResponseItem `json:"results"`
+	Query          string               `json:"query"`
+	Count          int                  `json:"count"`
+	TemporalIntent string               `json:"temporal_intent,omitempty"`
+	Results        []recallResponseItem `json:"results"`
 }
 
 type recallResponseItem struct {
@@ -631,15 +646,16 @@ type contextResponseItem struct {
 }
 
 type statusResponse struct {
-	Total          int    `json:"total"`
-	Buffer         int    `json:"buffer"`
-	Working        int    `json:"working"`
-	Core           int    `json:"core"`
-	Stale          int    `json:"stale"`
-	Expired        int    `json:"expired"`
-	Links          int    `json:"links"`
-	Facts          int    `json:"facts"`
-	ActiveSessions int    `json:"active_sessions"`
-	LLMProvider    string `json:"llm_provider"`
-	GateMode       string `json:"gate_mode"`
+	Total            int    `json:"total"`
+	Buffer           int    `json:"buffer"`
+	Working          int    `json:"working"`
+	Core             int    `json:"core"`
+	Stale            int    `json:"stale"`
+	Expired          int    `json:"expired"`
+	Links            int    `json:"links"`
+	Facts            int    `json:"facts"`
+	TemporalMentions int    `json:"temporal_mentions"`
+	ActiveSessions   int    `json:"active_sessions"`
+	LLMProvider      string `json:"llm_provider"`
+	GateMode         string `json:"gate_mode"`
 }

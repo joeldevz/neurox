@@ -15,6 +15,7 @@ import (
 	"neurox/internal/links"
 	"neurox/internal/llm"
 	reflectpkg "neurox/internal/reflect"
+	"neurox/internal/temporal"
 )
 
 const (
@@ -554,6 +555,8 @@ func (p *Pipeline) evictBuffer(ctx context.Context) (int64, error) {
 }
 
 // dedup merges near-duplicate observations using cosine similarity.
+// Observations with distinct temporal windows are preserved even if semantically
+// similar, since they represent temporal snapshots rather than true duplicates.
 func (p *Pipeline) dedup(ctx context.Context) (int64, error) {
 	// Get Working layer observations with embeddings
 	rows, err := p.db.QueryContext(ctx, `
@@ -587,6 +590,13 @@ func (p *Pipeline) dedup(ctx context.Context) (int64, error) {
 		return 0, nil
 	}
 
+	// Load temporal mentions for all candidates to check for temporal snapshots
+	ids := make([]string, len(items))
+	for i, it := range items {
+		ids[i] = it.id
+	}
+	temporalMap, _ := temporal.LoadByObservations(ctx, p.db, ids)
+
 	// Find duplicates (O(n^2) but Working layer should be small)
 	deleted := make(map[string]bool)
 	var deduped int64
@@ -601,6 +611,10 @@ func (p *Pipeline) dedup(ctx context.Context) (int64, error) {
 			}
 			sim := embed.CosineSimilarity(items[i].embedding, items[j].embedding)
 			if sim >= dedupCosineThreshold {
+				// Skip dedup if observations have distinct temporal windows
+				if hasDistinctTemporalWindows(temporalMap[items[i].id], temporalMap[items[j].id]) {
+					continue
+				}
 				// Keep items[i] (higher importance/newer), soft-delete items[j]
 				p.db.ExecContext(ctx, `
 					UPDATE observations SET deleted_at = datetime('now'), updated_at = datetime('now')
@@ -613,6 +627,28 @@ func (p *Pipeline) dedup(ctx context.Context) (int64, error) {
 	}
 
 	return deduped, nil
+}
+
+// hasDistinctTemporalWindows returns true if two sets of temporal mentions
+// point to different time periods (more than 7 days apart), suggesting the
+// observations are temporal snapshots that should not be deduplicated.
+func hasDistinctTemporalWindows(a, b []temporal.Mention) bool {
+	if len(a) == 0 || len(b) == 0 {
+		return false
+	}
+
+	aLatest := temporal.LatestTime(a)
+	bLatest := temporal.LatestTime(b)
+
+	if aLatest == nil || bLatest == nil {
+		return false
+	}
+
+	diff := aLatest.Sub(*bLatest)
+	if diff < 0 {
+		diff = -diff
+	}
+	return diff > 7*24*time.Hour
 }
 
 // activeNamespaces returns namespaces that have active observations.

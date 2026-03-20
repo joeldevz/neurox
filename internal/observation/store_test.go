@@ -3,6 +3,7 @@ package observation
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"path/filepath"
 	"testing"
 
@@ -146,6 +147,78 @@ func TestSaveWithTagsPersistsNormalizedTags(t *testing.T) {
 	if tags != "auth,bugfix" {
 		t.Fatalf("stored tags = %q, want auth,bugfix", tags)
 	}
+}
+
+func TestSaveExtractsTemporalMentions(t *testing.T) {
+	store, database := newTestStore(t)
+	defer database.Close()
+
+	var extractCalls []string
+	store.SetTemporalExtractor(&mockTemporalExtractor{calls: &extractCalls})
+
+	ctx := context.Background()
+	saved, err := store.Save(ctx, Observation{
+		Title:   "Migration note",
+		Content: "We migrated to SQLite yesterday",
+	})
+	if err != nil {
+		t.Fatalf("Save returned error: %v", err)
+	}
+
+	if len(extractCalls) != 1 {
+		t.Fatalf("extract calls = %d, want 1", len(extractCalls))
+	}
+	if extractCalls[0] != saved.ID {
+		t.Fatalf("extracted observation ID = %q, want %q", extractCalls[0], saved.ID)
+	}
+}
+
+func TestSaveWithoutExtractorStillWorks(t *testing.T) {
+	store, database := newTestStore(t)
+	defer database.Close()
+
+	ctx := context.Background()
+	_, err := store.Save(ctx, Observation{
+		Title:   "No extractor",
+		Content: "This should still work yesterday",
+	})
+	if err != nil {
+		t.Fatalf("Save returned error: %v", err)
+	}
+}
+
+func TestSaveExtractorFailureDoesNotBlockSave(t *testing.T) {
+	store, database := newTestStore(t)
+	defer database.Close()
+
+	store.SetTemporalExtractor(&failingExtractor{})
+
+	ctx := context.Background()
+	saved, err := store.Save(ctx, Observation{
+		Title:   "Failing extractor",
+		Content: "yesterday we did something",
+	})
+	if err != nil {
+		t.Fatalf("Save returned error despite extractor failure: %v", err)
+	}
+	if saved.ID == "" {
+		t.Fatal("expected observation to be saved")
+	}
+}
+
+type mockTemporalExtractor struct {
+	calls *[]string
+}
+
+func (m *mockTemporalExtractor) Extract(_ context.Context, obsID, _ string) (int, error) {
+	*m.calls = append(*m.calls, obsID)
+	return 1, nil
+}
+
+type failingExtractor struct{}
+
+func (f *failingExtractor) Extract(_ context.Context, _, _ string) (int, error) {
+	return 0, fmt.Errorf("simulated extraction failure")
 }
 
 func newTestStore(t *testing.T) (*Store, *sql.DB) {

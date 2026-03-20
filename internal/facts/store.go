@@ -64,6 +64,67 @@ func (s *Store) Save(ctx context.Context, f Fact) (Fact, error) {
 	return s.Get(ctx, f.ID)
 }
 
+// SaveWithValidFrom inserts a fact with an explicit valid_from timestamp.
+// This is used when temporal data is available (e.g. "migration happened_on 2026-03-06").
+func (s *Store) SaveWithValidFrom(ctx context.Context, f Fact, validFrom time.Time) (Fact, error) {
+	if strings.TrimSpace(f.Subject) == "" || strings.TrimSpace(f.Predicate) == "" || strings.TrimSpace(f.Object) == "" {
+		return Fact{}, fmt.Errorf("subject, predicate, and object are required")
+	}
+	if f.Namespace == "" {
+		f.Namespace = "default"
+	}
+
+	f.ID = s.idg.New()
+
+	var existingID string
+	err := s.db.QueryRowContext(ctx, `
+		SELECT id FROM facts
+		WHERE subject = ? AND predicate = ? AND namespace = ? AND valid_until IS NULL
+		LIMIT 1
+	`, f.Subject, f.Predicate, f.Namespace).Scan(&existingID)
+
+	_, insertErr := s.db.ExecContext(ctx, `
+		INSERT INTO facts(id, subject, predicate, object, observation_id, namespace, valid_from)
+		VALUES(?, ?, ?, ?, ?, ?, ?)
+	`, f.ID, f.Subject, f.Predicate, f.Object, nullableString(f.ObservationID), f.Namespace, validFrom.UTC().Format(time.RFC3339))
+	if insertErr != nil {
+		return Fact{}, fmt.Errorf("insert fact: %w", insertErr)
+	}
+
+	if err == nil && existingID != "" {
+		_, superErr := s.db.ExecContext(ctx, `
+			UPDATE facts SET valid_until = datetime('now'), superseded_by = ?
+			WHERE id = ?
+		`, f.ID, existingID)
+		if superErr != nil {
+			return Fact{}, fmt.Errorf("supersede existing fact: %w", superErr)
+		}
+	}
+
+	return s.Get(ctx, f.ID)
+}
+
+// SearchHistory returns superseded (historical) facts for a subject+predicate in a namespace.
+func (s *Store) SearchHistory(ctx context.Context, subject, predicate, namespace string, limit int) ([]Fact, error) {
+	if limit <= 0 {
+		limit = 20
+	}
+
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id, subject, predicate, object, observation_id, namespace, valid_from, valid_until, superseded_by, created_at
+		FROM facts
+		WHERE namespace = ? AND subject = ? AND predicate = ?
+		ORDER BY valid_from DESC
+		LIMIT ?
+	`, namespace, subject, predicate, limit)
+	if err != nil {
+		return nil, fmt.Errorf("search fact history: %w", err)
+	}
+	defer rows.Close()
+
+	return scanFacts(rows)
+}
+
 // Get returns a fact by ID.
 func (s *Store) Get(ctx context.Context, id string) (Fact, error) {
 	return scanFact(s.db.QueryRowContext(ctx, `

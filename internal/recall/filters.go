@@ -5,13 +5,20 @@ import (
 	"strings"
 )
 
-func buildSearchQuery(options SearchOptions) (string, []any) {
+func buildSearchQuery(options SearchOptions, intent TemporalIntent) (string, []any) {
+	ftsQuery := cleanQueryForFTS(options.Query, intent)
+
 	clauses := []string{
 		"observations_fts MATCH ?",
 		"o.deleted_at IS NULL",
-		"(o.valid_until IS NULL OR o.valid_until > datetime('now'))",
 	}
-	args := []any{buildFTSMatchQuery(options.Query)}
+	args := []any{buildFTSMatchQuery(ftsQuery)}
+
+	// Only filter by valid_until for non-history queries.
+	// History queries need access to expired/superseded observations.
+	if intent.Kind != IntentHistory {
+		clauses = append(clauses, "(o.valid_until IS NULL OR o.valid_until > datetime('now'))")
+	}
 
 	if options.Namespace != "" {
 		clauses = append(clauses, "o.namespace = ?")

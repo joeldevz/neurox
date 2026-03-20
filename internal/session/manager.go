@@ -8,18 +8,25 @@ import (
 
 	"neurox/internal/filelink"
 	"neurox/internal/llm"
+	"neurox/internal/temporal"
 )
 
 // Manager handles session lifecycle with LLM-based extraction.
 type Manager struct {
-	db    *sql.DB
-	llm   llm.Provider
-	idGen filelink.IDGenerator
+	db        *sql.DB
+	llm       llm.Provider
+	idGen     filelink.IDGenerator
+	temporal  *temporal.Extractor
 }
 
 // NewManager creates a session manager.
 func NewManager(db *sql.DB, llmProvider llm.Provider, idGen filelink.IDGenerator) *Manager {
 	return &Manager{db: db, llm: llmProvider, idGen: idGen}
+}
+
+// SetTemporalExtractor configures temporal extraction for session-derived observations.
+func (m *Manager) SetTemporalExtractor(te *temporal.Extractor) {
+	m.temporal = te
 }
 
 // StartResult holds the result of starting a session.
@@ -141,6 +148,10 @@ Output observations (one per line, pipe-separated):`, summary)
 		`, id, obs.title, obs.content, obs.obsType, namespace)
 		if err == nil {
 			saved++
+			// Best-effort temporal extraction — do not block on failure.
+			if m.temporal != nil {
+				_, _ = m.temporal.Extract(ctx, id, obs.content)
+			}
 		}
 	}
 

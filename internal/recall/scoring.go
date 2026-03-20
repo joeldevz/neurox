@@ -29,7 +29,7 @@ func (w ScoreWeights) withDefaults() ScoreWeights {
 	return w
 }
 
-func applyScores(items []candidate, weights ScoreWeights, now time.Time) {
+func applyScores(items []candidate, weights ScoreWeights, now time.Time, intent TemporalIntent, mentionMap map[string][]mentionInfo) {
 	if len(items) == 0 {
 		return
 	}
@@ -62,6 +62,13 @@ func applyScores(items []candidate, weights ScoreWeights, now time.Time) {
 		if items[index].SemanticScore > 0 && ftsRelevance > 0 {
 			items[index].Score *= crossSignalBoost
 		}
+
+		// Temporal multiplier: boost/penalize based on temporal intent match
+		var mentions []mentionInfo
+		if mentionMap != nil {
+			mentions = mentionMap[items[index].ID]
+		}
+		items[index].Score *= temporalMultiplier(items[index], intent, mentions)
 	}
 }
 

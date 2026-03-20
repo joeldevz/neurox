@@ -17,6 +17,7 @@ type Store struct {
 	idGenerator filelink.IDGenerator
 	fileLinks   *filelink.Store
 	writeGate   WriteGate
+	temporal    TemporalExtractor
 }
 
 func NewStore(database *sql.DB, gate WriteGate) *Store {
@@ -30,6 +31,11 @@ func NewStore(database *sql.DB, gate WriteGate) *Store {
 		fileLinks:   filelink.NewStore(idGenerator),
 		writeGate:   gate,
 	}
+}
+
+// SetTemporalExtractor configures temporal extraction for saved observations.
+func (s *Store) SetTemporalExtractor(te TemporalExtractor) {
+	s.temporal = te
 }
 
 func (s *Store) Save(ctx context.Context, input Observation) (Observation, error) {
@@ -57,8 +63,19 @@ func (s *Store) Save(ctx context.Context, input Observation) (Observation, error
 		return Observation{}, fmt.Errorf("commit save transaction: %w", err)
 	}
 
+	s.extractTemporal(ctx, saved)
 	s.writeGate.CheckAsync(saved)
 	return saved, nil
+}
+
+// extractTemporal runs the temporal extractor if configured. Failures are silently ignored
+// to avoid blocking observation persistence.
+func (s *Store) extractTemporal(ctx context.Context, obs Observation) {
+	if s.temporal == nil {
+		return
+	}
+	// Best-effort: do not propagate errors.
+	_, _ = s.temporal.Extract(ctx, obs.ID, obs.Content)
 }
 
 func (s *Store) Update(ctx context.Context, input Observation) (Observation, error) {

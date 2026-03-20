@@ -4,6 +4,7 @@ import (
 	"context"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"neurox/internal/db"
 	"neurox/internal/decay"
@@ -11,6 +12,7 @@ import (
 	"neurox/internal/links"
 	"neurox/internal/llm"
 	"neurox/internal/observation"
+	"neurox/internal/temporal"
 )
 
 func newTestPipeline(t *testing.T) (*Pipeline, *db.TestDB) {
@@ -141,6 +143,56 @@ func TestFullConsolidationRun(t *testing.T) {
 	tdb.DB.QueryRowContext(ctx, "SELECT COUNT(*) FROM consolidation_runs WHERE status = 'completed'").Scan(&runCount)
 	if runCount != 1 {
 		t.Errorf("expected 1 completed run, got %d", runCount)
+	}
+}
+
+func TestHasDistinctTemporalWindows(t *testing.T) {
+	march := time.Date(2026, 3, 6, 0, 0, 0, 0, time.UTC)
+	jan := time.Date(2026, 1, 15, 0, 0, 0, 0, time.UTC)
+	marchLater := time.Date(2026, 3, 8, 0, 0, 0, 0, time.UTC)
+
+	tests := []struct {
+		name string
+		a    []temporal.Mention
+		b    []temporal.Mention
+		want bool
+	}{
+		{
+			name: "no mentions → false",
+			want: false,
+		},
+		{
+			name: "one side empty → false",
+			a:    []temporal.Mention{{Kind: temporal.KindAbsolute, NormalizedStart: &march}},
+			want: false,
+		},
+		{
+			name: "months apart → true",
+			a:    []temporal.Mention{{Kind: temporal.KindAbsolute, NormalizedStart: &march}},
+			b:    []temporal.Mention{{Kind: temporal.KindAbsolute, NormalizedStart: &jan}},
+			want: true,
+		},
+		{
+			name: "days apart → false (within 7-day window)",
+			a:    []temporal.Mention{{Kind: temporal.KindAbsolute, NormalizedStart: &march}},
+			b:    []temporal.Mention{{Kind: temporal.KindAbsolute, NormalizedStart: &marchLater}},
+			want: false,
+		},
+		{
+			name: "no dates in mentions → false",
+			a:    []temporal.Mention{{Kind: temporal.KindCurrentState}},
+			b:    []temporal.Mention{{Kind: temporal.KindCurrentState}},
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := hasDistinctTemporalWindows(tt.a, tt.b)
+			if got != tt.want {
+				t.Errorf("hasDistinctTemporalWindows() = %v, want %v", got, tt.want)
+			}
+		})
 	}
 }
 

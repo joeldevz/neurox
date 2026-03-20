@@ -6,3 +6,6 @@ neurox
 
 # Erroneous tilde directory
 ~/
+benchmarks
+.claude
+.ruff_cache
