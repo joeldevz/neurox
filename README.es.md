@@ -220,6 +220,8 @@ Evaluado en [LongMemEval](https://github.com/xiaowu0162/LongMemEval) (ICLR 2025)
 CGO_ENABLED=1 go build -tags fts5 -o neurox .
 ```
 
+Nota: el ejecutable resultante es portable, pero no totalmente estatico; con SQLite via CGO enlaza contra `libc`/`libm` del sistema.
+
 ### Usar con agentes de IA (MCP)
 
 ```bash
@@ -231,6 +233,8 @@ CGO_ENABLED=1 go build -tags fts5 -o neurox .
 ```bash
 ./neurox serve  # localhost:7438
 ```
+
+El hook `post-commit` envia eventos al servidor HTTP en `POST /api/v1/hooks/git`. El puerto por defecto del hook es `7438`; si tu servidor escucha en otro puerto, define `NEUROX_PORT` antes de instalar o ejecutar el hook.
 
 ### CLI
 
@@ -253,6 +257,9 @@ neurox status
 
 # Forzar consolidacion
 neurox consolidate
+
+# Abrir la vista interactiva del grafo
+neurox graph --output neurox-graph.html
 
 # Instalar git hook (marca recuerdos como stale cuando cambian archivos)
 neurox install-hook
@@ -290,8 +297,9 @@ Agregar a `opencode.json`:
 {
   "mcp": {
     "neurox": {
-      "command": "/ruta/a/neurox",
-      "args": ["mcp"]
+      "type": "local",
+      "command": ["/ruta/a/neurox", "mcp"],
+      "enabled": true
     }
   }
 }
@@ -325,6 +333,7 @@ neurox serve  # API REST en puerto 7438
 ```
 GET    /health                              Health check
 GET    /api/v1/status                       Estadisticas del cerebro
+GET    /api/v1/observations/browse          Navegar observaciones recientes
 POST   /api/v1/observations                 Guardar observacion
 GET    /api/v1/observations/search?q=...    Buscar recuerdos
 GET    /api/v1/observations/context         Obtener contexto proactivo
@@ -332,9 +341,11 @@ GET    /api/v1/observations/{id}            Obtener observacion
 PUT    /api/v1/observations/{id}            Actualizar observacion
 DELETE /api/v1/observations/{id}            Soft-delete
 POST   /api/v1/observations/{id}/invalidate Invalidar + reemplazar
+GET    /api/v1/stats/breakdown              Desglose por tipo/capa/namespace/kind
 POST   /api/v1/sessions                     Iniciar sesion
 PUT    /api/v1/sessions/{id}/end            Terminar sesion
 POST   /api/v1/hooks/git                    Git hook
+GET    /api/v1/graph                        Vista interactiva del grafo (o JSON con ?format=json)
 POST   /api/v1/reflect                      Disparar reflexion
 ```
 
@@ -358,10 +369,12 @@ llm:
 embeddings:
   provider: ""          # "ollama", "remote", "" (auto-detectar)
   remote_url: ""        # Endpoint de embeddings compatible con OpenAI
-  remote_key: ""
+  remote_api_key: ""
   remote_model: ""
   dimensions: 0         # auto-detectar del provider
 ```
+
+Los ejemplos de configuracion de agentes siguen lo que genera `install.sh`: Claude y Cursor usan `command` + `args`, mientras que OpenCode usa una entrada MCP local con `command` como array.
 
 Variables de entorno con prefijo `NEUROX_`:
 
@@ -418,6 +431,7 @@ neurox/
 |   +-- db/                    Schema SQLite, migraciones, modo WAL
 |   +-- mcp/                   Servidor protocolo MCP
 |   +-- api/                   Servidor HTTP REST + dashboard
+|   +-- graph/                 Render HTML interactivo + queries del grafo
 |   +-- config/                Carga de config YAML + env
 |   +-- filelink/              Vinculacion archivo-observacion
 +-- benchmarks/
@@ -428,6 +442,13 @@ neurox/
     +-- post-commit            Git hook para tracking de staleness
 ```
 
+`internal/graph/` soporta la feature publica de grafo usada por `neurox graph` y `GET /api/v1/graph`, con visualizacion HTML interactiva de observaciones y links.
+
+## Solucion de problemas
+
+- Los eventos del git hook se envian al servidor HTTP, asi que `neurox serve` debe estar corriendo cuando haces commits.
+- El hook usa el puerto `7438` por defecto. Si tu servidor corre en otro puerto, exporta `NEUROX_PORT=<puerto>` antes de instalar o ejecutar el hook.
+
 ## Rendimiento
 
 | Operacion | Latencia | Notas |
@@ -437,7 +458,7 @@ neurox/
 | `recall` (hibrido) | <50ms | FTS + semantico + boost cross-signal |
 | `context` | <10ms | Retrieval proactivo multi-senal |
 | `consolidate` | <1s | Ciclo completo para 1000 observaciones |
-| Tamano binario | ~15MB | Binario unico estatico (CGO para SQLite) |
+| Tamano binario | ~15MB | Ejecutable unico, pero enlaza dinamicamente con libc/libm por SQLite/CGO |
 | Memoria | <150MB | Con 10k observaciones + embeddings |
 
 ## Tecnologia

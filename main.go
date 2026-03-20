@@ -631,7 +631,7 @@ func installHook() {
 	if err != nil {
 		scriptContent = []byte(`#!/bin/sh
 # neurox post-commit hook (auto-generated)
-NEUROX_PORT="${NEUROX_PORT:-7437}"
+NEUROX_PORT="${NEUROX_PORT:-7438}"
 CHANGED_FILES=$(git diff --name-only HEAD~1 HEAD 2>/dev/null)
 [ -z "$CHANGED_FILES" ] && exit 0
 COMMIT_SHA=$(git rev-parse HEAD)

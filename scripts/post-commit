@@ -5,7 +5,7 @@
 # Install: neurox install-hook
 # Or manually: cp scripts/post-commit .git/hooks/post-commit && chmod +x .git/hooks/post-commit
 
-NEUROX_PORT="${NEUROX_PORT:-7437}"
+NEUROX_PORT="${NEUROX_PORT:-7438}"
 NEUROX_URL="http://localhost:${NEUROX_PORT}/api/v1/hooks/git"
 
 # Get changed files from the last commit

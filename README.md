@@ -219,6 +219,8 @@ Evaluated on [LongMemEval](https://github.com/xiaowu0162/LongMemEval) (ICLR 2025
 CGO_ENABLED=1 go build -tags fts5 -o neurox .
 ```
 
+Note: the resulting executable is portable, but not fully static; with CGO-enabled SQLite it links against system `libc`/`libm`.
+
 ### Use with AI agents (MCP)
 
 ```bash
@@ -230,6 +232,8 @@ CGO_ENABLED=1 go build -tags fts5 -o neurox .
 ```bash
 ./neurox serve  # localhost:7438
 ```
+
+The git post-commit hook sends events to the HTTP server at `POST /api/v1/hooks/git`. The default hook port is `7438`; if your server listens elsewhere, set `NEUROX_PORT` before installing or running the hook.
 
 ### CLI
 
@@ -252,6 +256,9 @@ neurox status
 
 # Force consolidation
 neurox consolidate
+
+# Open the interactive graph view
+neurox graph --output neurox-graph.html
 
 # Install git hook (auto-marks memories stale when files change)
 neurox install-hook
@@ -289,8 +296,9 @@ Add to `opencode.json`:
 {
   "mcp": {
     "neurox": {
-      "command": "/path/to/neurox",
-      "args": ["mcp"]
+      "type": "local",
+      "command": ["/path/to/neurox", "mcp"],
+      "enabled": true
     }
   }
 }
@@ -324,6 +332,7 @@ neurox serve  # REST API on port 7438
 ```
 GET    /health                              Health check
 GET    /api/v1/status                       Brain statistics
+GET    /api/v1/observations/browse          Browse recent observations
 POST   /api/v1/observations                 Save observation
 GET    /api/v1/observations/search?q=...    Search memories
 GET    /api/v1/observations/context         Get proactive context
@@ -331,9 +340,11 @@ GET    /api/v1/observations/{id}            Get observation
 PUT    /api/v1/observations/{id}            Update observation
 DELETE /api/v1/observations/{id}            Soft-delete
 POST   /api/v1/observations/{id}/invalidate Invalidate + replace
+GET    /api/v1/stats/breakdown              Breakdown by type/layer/namespace/kind
 POST   /api/v1/sessions                     Start session
 PUT    /api/v1/sessions/{id}/end            End session
 POST   /api/v1/hooks/git                    Git hook
+GET    /api/v1/graph                        Interactive graph view (or JSON with ?format=json)
 POST   /api/v1/reflect                      Trigger reflection
 ```
 
@@ -357,10 +368,12 @@ llm:
 embeddings:
   provider: ""          # "ollama", "remote", "" (auto-detect)
   remote_url: ""        # OpenAI-compatible embeddings endpoint
-  remote_key: ""
+  remote_api_key: ""
   remote_model: ""
   dimensions: 0         # auto-detect from provider
 ```
+
+Agent setup examples match `install.sh`: Claude and Cursor use `command` + `args`, while OpenCode uses a local MCP entry with an array command.
 
 Environment overrides use `NEUROX_` prefix:
 
@@ -417,6 +430,7 @@ neurox/
 │   ├── db/                    SQLite schema, migrations, WAL mode
 │   ├── mcp/                   MCP protocol server
 │   ├── api/                   HTTP REST server + dashboard
+│   ├── graph/                 Interactive HTML graph rendering + graph queries
 │   ├── config/                YAML + env config loading
 │   └── filelink/              File-observation linking
 ├── benchmarks/
@@ -427,6 +441,13 @@ neurox/
     └── post-commit            Git hook for staleness tracking
 ```
 
+`internal/graph/` powers the public graph feature used by `neurox graph` and `GET /api/v1/graph`, rendering an interactive HTML visualization of observations and links.
+
+## Troubleshooting
+
+- Git hook events are sent to the HTTP server, so `neurox serve` must be running when commits happen.
+- The hook uses port `7438` by default. If your server runs on another port, export `NEUROX_PORT=<port>` before installing or invoking the hook.
+
 ## Performance
 
 | Operation | Latency | Notes |
@@ -436,7 +457,7 @@ neurox/
 | `recall` (hybrid) | <50ms | FTS + semantic + cross-signal boost |
 | `context` | <10ms | Proactive multi-signal retrieval |
 | `consolidate` | <1s | Full cycle for 1000 observations |
-| Binary size | ~15MB | Single static binary (CGO for SQLite) |
+| Binary size | ~15MB | Single executable, but dynamically links libc/libm for SQLite/CGO |
 | Memory | <150MB | With 10k observations + embeddings |
 
 ## Technology
