@@ -23,6 +23,7 @@ import (
 	"neurox/internal/decay"
 	"neurox/internal/embed"
 	"neurox/internal/facts"
+	"neurox/internal/graph"
 	"neurox/internal/links"
 	"neurox/internal/llm"
 	neuroxmcp "neurox/internal/mcp"
@@ -95,6 +96,8 @@ func main() {
 		runStatus(ctx, database, cfg)
 	case "consolidate":
 		runConsolidate(ctx, database, cfg)
+	case "graph":
+		runGraph(ctx, database)
 	case "config":
 		runConfig(cfg)
 	default:
@@ -119,6 +122,9 @@ func printUsage() {
 	fmt.Println("  invalidate       Mark an observation as incorrect")
 	fmt.Println("  status           Show brain statistics")
 	fmt.Println("  consolidate      Force immediate consolidation (promote, dedup, reflect)")
+	fmt.Println()
+	fmt.Println("Visualization:")
+	fmt.Println("  graph            Generate interactive graph visualization")
 	fmt.Println()
 	fmt.Println("Setup commands:")
 	fmt.Println("  install-hook     Install git post-commit hook")
@@ -372,6 +378,43 @@ func runConsolidate(ctx context.Context, database *sql.DB, cfg config.Config) {
 	})
 }
 
+func runGraph(ctx context.Context, database *sql.DB) {
+	fs := flag.NewFlagSet("graph", flag.ExitOnError)
+	namespace := fs.String("namespace", "", "Filter by namespace")
+	obsType := fs.String("type", "", "Filter by observation type")
+	tags := fs.String("tags", "", "Filter by tags (comma-separated)")
+	minImportance := fs.Float64("min-importance", 0, "Minimum importance (0.0-1.0)")
+	limit := fs.Int("limit", 200, "Max nodes to display")
+	linkedOnly := fs.Bool("linked-only", false, "Show only observations that have links")
+	output := fs.String("output", "", "Output file path (default: neurox-graph.html)")
+	noBrowser := fs.Bool("no-browser", false, "Don't open browser automatically")
+	fs.Parse(os.Args[2:])
+
+	if *output == "" {
+		*output = "neurox-graph.html"
+	}
+
+	opts := graph.Options{
+		Namespace:       *namespace,
+		ObservationType: *obsType,
+		Tags:            *tags,
+		MinImportance:   *minImportance,
+		Limit:           *limit,
+		LinkedOnly:      *linkedOnly,
+	}
+
+	data, err := graph.Query(ctx, database, opts)
+	if err != nil {
+		log.Fatalf("query graph: %v", err)
+	}
+
+	if err := graph.RenderToFile(*output, data, !*noBrowser); err != nil {
+		log.Fatalf("render graph: %v", err)
+	}
+
+	fmt.Printf("Graph generated: %s (%d nodes, %d edges)\n", *output, data.Stats.ShownNodes, data.Stats.ShownEdges)
+}
+
 func runConfig(cfg config.Config) {
 	printJSON(map[string]any{
 		"database_path": cfg.Database.Path,
@@ -436,6 +479,9 @@ func runHTTP(ctx context.Context, database *sql.DB, cfg config.Config) {
 		RecallEngine:     d.recallEngine,
 		LinkStore:        d.linkStore,
 		DB:               database,
+		LLMProvider:      d.llmProvider.Name(),
+		EmbedProvider:    d.embedder.Name(),
+		GateMode:         string(d.llmGate.Mode()),
 	}
 
 	srv := api.NewServer(api.Config{Port: defaultHTTPPort}, apiDeps)

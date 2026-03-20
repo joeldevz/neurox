@@ -4,11 +4,13 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>neurox — brain</title>
+<script src="https://unpkg.com/vis-network@9.1.9/standalone/umd/vis-network.min.js"></script>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
   :root {
     --bg: #07080d;
     --surface: rgba(255,255,255,0.03);
+    --surface2: rgba(255,255,255,0.06);
     --border: rgba(255,255,255,0.06);
     --text: #c8cad0;
     --text-dim: rgba(255,255,255,0.35);
@@ -19,13 +21,16 @@
     --red: #ef4444;
     --cyan: #06b6d4;
     --pink: #ec4899;
+    --indigo: #6366f1;
   }
   body {
     font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
     background: var(--bg);
     color: var(--text);
-    min-height: 100vh;
-    overflow-x: hidden;
+    height: 100vh;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
   }
 
   /* ── Header ── */
@@ -33,16 +38,23 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 1.2rem 2rem;
+    padding: 0.7rem 1.5rem;
     border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+    background: var(--surface);
+  }
+  .header-left {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
   }
   .logo {
     display: flex;
     align-items: center;
-    gap: 0.6rem;
+    gap: 0.5rem;
   }
   .logo h1 {
-    font-size: 1.1rem;
+    font-size: 1rem;
     font-weight: 600;
     letter-spacing: 0.08em;
     background: linear-gradient(135deg, var(--purple), var(--blue));
@@ -50,163 +62,87 @@
     -webkit-text-fill-color: transparent;
   }
   .status-dot {
-    width: 8px; height: 8px;
+    width: 7px; height: 7px;
     border-radius: 50%;
     background: var(--green);
     box-shadow: 0 0 8px rgba(16,185,129,0.5);
     animation: blink 3s ease-in-out infinite;
   }
   .status-dot.error { background: var(--red); box-shadow: 0 0 8px rgba(239,68,68,0.5); }
-  @keyframes blink {
-    0%,100% { opacity: 1; }
-    50% { opacity: 0.4; }
+  @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0.4} }
+
+  /* Tabs */
+  .tabs {
+    display: flex;
+    gap: 0;
   }
+  .tab {
+    padding: 0.5rem 1rem;
+    font-size: 0.72rem;
+    font-weight: 500;
+    color: var(--text-dim);
+    cursor: pointer;
+    border-bottom: 2px solid transparent;
+    transition: all 0.2s;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+  }
+  .tab:hover { color: var(--text); }
+  .tab.active {
+    color: var(--purple);
+    border-bottom-color: var(--purple);
+  }
+
   .provider-info {
-    font-size: 0.7rem;
+    font-size: 0.65rem;
     color: var(--text-dim);
     display: flex;
-    gap: 1rem;
+    gap: 0.8rem;
   }
-  .provider-info span { display: flex; align-items: center; gap: 0.3rem; }
   .provider-tag {
-    padding: 0.1rem 0.4rem;
+    padding: 0.1rem 0.35rem;
     background: rgba(139,92,246,0.15);
     border-radius: 3px;
     color: var(--purple);
-    font-size: 0.6rem;
+    font-size: 0.58rem;
   }
 
-  /* ── Main layout ── */
-  .main {
-    display: grid;
-    grid-template-columns: 1fr 400px;
-    gap: 0;
-    min-height: calc(100vh - 56px);
-  }
-  @media (max-width: 900px) {
-    .main { grid-template-columns: 1fr; }
-  }
+  /* ── Tab Content ── */
+  .tab-content { display: none; flex: 1; overflow: hidden; }
+  .tab-content.active { display: flex; }
 
-  /* ── Brain panel ── */
-  .brain-panel {
-    display: flex;
+  /* ── BRAIN TAB ── */
+  .brain-tab {
     flex-direction: column;
     align-items: center;
     justify-content: center;
+    gap: 1.5rem;
     padding: 2rem;
-    position: relative;
   }
-
-  /* ── SVG Brain ── */
-  .brain-svg {
-    width: 420px;
-    height: 420px;
-    position: relative;
-  }
+  .brain-svg { width: 360px; height: 360px; }
   .brain-svg svg { width: 100%; height: 100%; }
-
-  /* Layer rings */
   .ring { fill: none; transition: all 0.8s ease; }
-  .ring-buffer {
-    stroke: var(--green);
-    stroke-width: 2;
-    stroke-dasharray: 8 4;
-    opacity: 0.5;
-    animation: rotate 60s linear infinite;
-  }
-  .ring-working {
-    stroke: var(--blue);
-    stroke-width: 2.5;
-    opacity: 0.6;
-  }
-  .ring-core {
-    stroke: var(--purple);
-    stroke-width: 3;
-    opacity: 0.8;
-  }
+  .ring-buffer { stroke: var(--green); stroke-width: 2; stroke-dasharray: 8 4; opacity: 0.5; animation: rotate 60s linear infinite; }
+  .ring-working { stroke: var(--blue); stroke-width: 2.5; opacity: 0.6; }
+  .ring-core { stroke: var(--purple); stroke-width: 3; opacity: 0.8; }
   @keyframes rotate { to { transform: rotate(360deg); transform-origin: center; } }
-
-  /* Glow fills */
-  .glow-core {
-    fill: url(#glow-purple);
-    opacity: 0.4;
-    animation: breathe 4s ease-in-out infinite;
-  }
-  .glow-working {
-    fill: url(#glow-blue);
-    opacity: 0.2;
-    animation: breathe 4s ease-in-out infinite 1s;
-  }
-  .glow-buffer {
-    fill: url(#glow-green);
-    opacity: 0.1;
-    animation: breathe 4s ease-in-out infinite 2s;
-  }
-  @keyframes breathe {
-    0%,100% { opacity: 0.15; }
-    50% { opacity: 0.35; }
-  }
-
-  /* Neural particles */
-  .particle {
-    fill: var(--purple);
-    opacity: 0;
-    animation: particle-move 3s ease-in-out infinite;
-  }
+  .glow-core { fill: url(#glow-purple); opacity: 0.4; animation: breathe 4s ease-in-out infinite; }
+  .glow-working { fill: url(#glow-blue); opacity: 0.2; animation: breathe 4s ease-in-out infinite 1s; }
+  .glow-buffer { fill: url(#glow-green); opacity: 0.1; animation: breathe 4s ease-in-out infinite 2s; }
+  @keyframes breathe { 0%,100%{opacity:0.15} 50%{opacity:0.35} }
+  .particle { fill: var(--purple); opacity: 0; animation: particle-move 3s ease-in-out infinite; }
   .particle:nth-child(2) { animation-delay: 0.8s; fill: var(--blue); }
   .particle:nth-child(3) { animation-delay: 1.6s; fill: var(--green); }
   .particle:nth-child(4) { animation-delay: 2.4s; fill: var(--cyan); }
-  @keyframes particle-move {
-    0% { opacity: 0; r: 2; }
-    20% { opacity: 0.8; }
-    80% { opacity: 0.8; }
-    100% { opacity: 0; r: 1; }
-  }
-
-  /* Synapse lines */
-  .synapse {
-    stroke: var(--purple);
-    stroke-width: 0.5;
-    opacity: 0;
-    animation: synapse-fire 4s ease-in-out infinite;
-  }
+  @keyframes particle-move { 0%{opacity:0;r:2} 20%{opacity:0.8} 80%{opacity:0.8} 100%{opacity:0;r:1} }
+  .synapse { stroke: var(--purple); stroke-width: 0.5; opacity: 0; animation: synapse-fire 4s ease-in-out infinite; }
   .synapse:nth-child(2) { animation-delay: 1.3s; stroke: var(--blue); }
   .synapse:nth-child(3) { animation-delay: 2.6s; stroke: var(--green); }
-  @keyframes synapse-fire {
-    0%,100% { opacity: 0; }
-    50% { opacity: 0.4; }
-  }
+  @keyframes synapse-fire { 0%,100%{opacity:0} 50%{opacity:0.4} }
 
-  /* Layer labels on brain */
-  .brain-label {
-    position: absolute;
-    font-size: 0.6rem;
-    text-transform: uppercase;
-    letter-spacing: 0.15em;
-    color: var(--text-dim);
-  }
-  .brain-count {
-    font-size: 1.8rem;
-    font-weight: 700;
-    transition: all 0.3s;
-    text-align: center;
-  }
-  .brain-count.core { color: var(--purple); }
-  .brain-count.working { color: var(--blue); }
-  .brain-count.buffer { color: var(--green); }
-  .brain-count-label {
-    font-size: 0.55rem;
-    text-transform: uppercase;
-    letter-spacing: 0.12em;
-    opacity: 0.5;
-    text-align: center;
-  }
-
-  /* Stats row under brain */
   .stats-row {
     display: flex;
-    gap: 0.8rem;
-    margin-top: 1.5rem;
+    gap: 0.6rem;
     flex-wrap: wrap;
     justify-content: center;
   }
@@ -214,103 +150,129 @@
     background: var(--surface);
     border: 1px solid var(--border);
     border-radius: 8px;
-    padding: 0.6rem 1rem;
+    padding: 0.5rem 0.9rem;
     text-align: center;
-    min-width: 72px;
+    min-width: 68px;
     transition: border-color 0.3s;
   }
   .stat-card:hover { border-color: rgba(255,255,255,0.12); }
-  .stat-value {
-    font-size: 1.2rem;
-    font-weight: 600;
-    font-variant-numeric: tabular-nums;
-  }
-  .stat-label {
-    font-size: 0.55rem;
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
-    color: var(--text-dim);
-    margin-top: 0.15rem;
-  }
-  .stat-value.total { color: var(--text); }
-  .stat-value.facts { color: var(--amber); }
-  .stat-value.links { color: var(--cyan); }
-  .stat-value.stale { color: var(--red); }
-  .stat-value.temporal { color: var(--pink); }
-  .stat-value.sessions { color: var(--purple); }
+  .stat-value { font-size: 1.1rem; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .stat-label { font-size: 0.52rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--text-dim); margin-top: 0.1rem; }
 
-  /* ── Side panel ── */
-  .side-panel {
-    border-left: 1px solid var(--border);
+  /* ── EXPLORER TAB ── */
+  .explorer-tab { flex-direction: row; overflow: hidden; }
+  .explorer-sidebar {
+    width: 260px;
+    border-right: 1px solid var(--border);
+    overflow-y: auto;
+    flex-shrink: 0;
+    padding: 0.8rem;
+  }
+  .explorer-main {
+    flex: 1;
     display: flex;
     flex-direction: column;
     overflow: hidden;
   }
-
-  /* Search */
-  .search-bar {
-    padding: 1rem;
+  .explorer-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.6rem 1rem;
     border-bottom: 1px solid var(--border);
+    flex-wrap: wrap;
   }
-  .search-input {
-    width: 100%;
-    padding: 0.6rem 0.8rem;
-    background: var(--surface);
+  .explorer-toolbar select, .explorer-toolbar input {
+    padding: 0.35rem 0.5rem;
+    background: var(--surface2);
     border: 1px solid var(--border);
-    border-radius: 6px;
+    border-radius: 5px;
     color: var(--text);
-    font-size: 0.8rem;
-    font-family: inherit;
+    font-size: 0.72rem;
     outline: none;
-    transition: border-color 0.2s;
   }
-  .search-input:focus { border-color: var(--purple); }
-  .search-input::placeholder { color: var(--text-dim); }
+  .explorer-toolbar select:focus, .explorer-toolbar input:focus { border-color: var(--purple); }
+  .explorer-toolbar .result-count {
+    margin-left: auto;
+    font-size: 0.68rem;
+    color: var(--text-dim);
+  }
 
-  /* Memory list */
-  .memory-list {
+  .obs-list {
     flex: 1;
     overflow-y: auto;
     padding: 0.5rem;
   }
-  .memory-list::-webkit-scrollbar { width: 4px; }
-  .memory-list::-webkit-scrollbar-track { background: transparent; }
-  .memory-list::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 2px; }
+  .obs-list::-webkit-scrollbar { width: 4px; }
+  .obs-list::-webkit-scrollbar-track { background: transparent; }
+  .obs-list::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 2px; }
 
-  .section-title {
+  /* Category cards in sidebar */
+  .cat-section { margin-bottom: 1rem; }
+  .cat-section h3 {
     font-size: 0.6rem;
     text-transform: uppercase;
-    letter-spacing: 0.12em;
+    letter-spacing: 0.1em;
     color: var(--text-dim);
-    padding: 0.8rem 0.5rem 0.4rem;
+    margin-bottom: 0.4rem;
+    padding: 0 0.2rem;
+  }
+  .cat-card {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0.45rem 0.6rem;
+    margin-bottom: 0.2rem;
+    background: var(--surface);
+    border-radius: 6px;
+    cursor: pointer;
+    transition: all 0.15s;
+    border: 1px solid transparent;
+  }
+  .cat-card:hover { background: var(--surface2); }
+  .cat-card.active { border-color: var(--purple); background: rgba(139,92,246,0.08); }
+  .cat-card .name {
+    font-size: 0.72rem;
+    font-weight: 500;
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+  }
+  .cat-card .dot {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+  .cat-card .count {
+    font-size: 0.65rem;
+    color: var(--text-dim);
+    font-variant-numeric: tabular-nums;
   }
 
-  .mem {
-    padding: 0.6rem 0.7rem;
+  /* Observation card */
+  .obs {
+    padding: 0.7rem 0.8rem;
     margin-bottom: 0.3rem;
     background: var(--surface);
     border-left: 3px solid transparent;
     border-radius: 0 6px 6px 0;
-    transition: all 0.2s;
-    cursor: default;
+    transition: all 0.15s;
+    cursor: pointer;
   }
-  .mem:hover {
-    background: rgba(255,255,255,0.05);
-    transform: translateX(2px);
-  }
-  .mem.l0 { border-left-color: var(--green); }
-  .mem.l1 { border-left-color: var(--blue); }
-  .mem.l2 { border-left-color: var(--purple); }
+  .obs:hover { background: var(--surface2); transform: translateX(2px); }
+  .obs.selected { background: rgba(139,92,246,0.08); border-left-color: var(--purple); }
+  .obs.l0 { border-left-color: var(--green); }
+  .obs.l1 { border-left-color: var(--blue); }
+  .obs.l2 { border-left-color: var(--purple); }
 
-  .mem-title {
-    font-size: 0.78rem;
-    font-weight: 500;
+  .obs-header {
     display: flex;
     justify-content: space-between;
-    align-items: center;
+    align-items: flex-start;
     gap: 0.5rem;
   }
-  .mem-type {
+  .obs-title { font-size: 0.78rem; font-weight: 500; flex: 1; }
+  .obs-badge {
     font-size: 0.5rem;
     padding: 0.1rem 0.35rem;
     border-radius: 3px;
@@ -319,16 +281,16 @@
     white-space: nowrap;
     flex-shrink: 0;
   }
-  .mem-type.decision    { background: rgba(139,92,246,0.2); color: var(--purple); }
-  .mem-type.bugfix      { background: rgba(239,68,68,0.2);  color: var(--red); }
-  .mem-type.discovery   { background: rgba(59,130,246,0.2);  color: var(--blue); }
-  .mem-type.pattern     { background: rgba(16,185,129,0.2);  color: var(--green); }
-  .mem-type.gotcha      { background: rgba(245,158,11,0.2);  color: var(--amber); }
-  .mem-type.config      { background: rgba(107,114,128,0.2); color: #9ca3af; }
-  .mem-type.preference  { background: rgba(236,72,153,0.2);  color: var(--pink); }
-  .mem-type.question    { background: rgba(6,182,212,0.2);   color: var(--cyan); }
+  .obs-badge.decision   { background: rgba(139,92,246,0.2); color: var(--purple); }
+  .obs-badge.bugfix     { background: rgba(239,68,68,0.2);  color: var(--red); }
+  .obs-badge.discovery  { background: rgba(59,130,246,0.2);  color: var(--blue); }
+  .obs-badge.pattern    { background: rgba(16,185,129,0.2);  color: var(--green); }
+  .obs-badge.gotcha     { background: rgba(245,158,11,0.2);  color: var(--amber); }
+  .obs-badge.config     { background: rgba(107,114,128,0.2); color: #9ca3af; }
+  .obs-badge.preference { background: rgba(236,72,153,0.2);  color: var(--pink); }
+  .obs-badge.question   { background: rgba(6,182,212,0.2);   color: var(--cyan); }
 
-  .mem-content {
+  .obs-preview {
     font-size: 0.68rem;
     color: var(--text-dim);
     margin-top: 0.25rem;
@@ -338,50 +300,85 @@
     -webkit-box-orient: vertical;
     overflow: hidden;
   }
-  .mem-tags {
+  .obs-meta {
     display: flex;
-    gap: 0.25rem;
-    margin-top: 0.3rem;
-    flex-wrap: wrap;
-  }
-  .mem-tag {
-    font-size: 0.5rem;
-    padding: 0.05rem 0.3rem;
-    background: rgba(255,255,255,0.05);
-    border-radius: 3px;
-    color: var(--text-dim);
-  }
-  .mem-footer {
-    display: flex;
-    justify-content: space-between;
     align-items: center;
+    gap: 0.5rem;
     margin-top: 0.3rem;
-  }
-  .mem-time {
-    font-size: 0.5rem;
+    font-size: 0.55rem;
     color: var(--text-dim);
   }
-  .imp-bar {
-    width: 36px; height: 3px;
+  .obs-meta .imp-bar {
+    width: 30px; height: 3px;
     background: rgba(255,255,255,0.08);
     border-radius: 2px;
     overflow: hidden;
   }
-  .imp-fill {
-    height: 100%;
-    border-radius: 2px;
-    background: linear-gradient(90deg, var(--green), var(--amber));
+  .obs-meta .imp-fill { height: 100%; border-radius: 2px; background: linear-gradient(90deg, var(--green), var(--amber)); }
+  .obs-tags { display: flex; gap: 0.2rem; flex-wrap: wrap; margin-top: 0.2rem; }
+  .obs-tag {
+    font-size: 0.48rem;
+    padding: 0.05rem 0.25rem;
+    background: rgba(255,255,255,0.05);
+    border-radius: 3px;
+    color: var(--text-dim);
   }
 
-  /* Search results */
-  .search-results .mem { border-left-color: var(--amber); }
-  .search-score {
-    font-size: 0.5rem;
-    color: var(--amber);
+  /* Detail panel */
+  .detail-panel {
+    width: 400px;
+    border-left: 1px solid var(--border);
+    overflow-y: auto;
+    padding: 1.2rem;
+    flex-shrink: 0;
+    display: none;
+  }
+  .detail-panel.visible { display: block; }
+  .detail-panel h2 { font-size: 0.95rem; margin-bottom: 0.6rem; line-height: 1.4; }
+  .detail-badges { display: flex; gap: 0.3rem; flex-wrap: wrap; margin-bottom: 0.8rem; }
+  .detail-badge {
+    font-size: 0.58rem;
+    padding: 0.15rem 0.5rem;
+    border-radius: 4px;
     font-weight: 600;
+    text-transform: uppercase;
   }
+  .detail-content {
+    font-size: 0.78rem;
+    color: var(--text);
+    line-height: 1.65;
+    white-space: pre-wrap;
+    background: var(--surface);
+    border-radius: 8px;
+    padding: 1rem;
+    border: 1px solid var(--border);
+  }
+  .detail-info {
+    margin-top: 0.8rem;
+    font-size: 0.65rem;
+    color: var(--text-dim);
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 0.3rem 0.8rem;
+  }
+  .detail-info dt { font-weight: 600; color: var(--text-dim); }
+  .detail-info dd { color: var(--text); }
 
-  /* Empty state */
+  .load-more {
+    display: block;
+    width: 100%;
+    padding: 0.6rem;
+    margin-top: 0.3rem;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text-dim);
+    font-size: 0.72rem;
+    cursor: pointer;
+    text-align: center;
+  }
+  .load-more:hover { background: var(--surface2); color: var(--text); }
+
   .empty {
     text-align: center;
     padding: 3rem 1rem;
@@ -389,32 +386,91 @@
     font-size: 0.75rem;
   }
 
-  /* Temporal intent badge */
-  .temporal-badge {
-    display: inline-block;
-    font-size: 0.5rem;
-    padding: 0.1rem 0.4rem;
-    border-radius: 3px;
-    background: rgba(236,72,153,0.15);
-    color: var(--pink);
-    margin-left: 0.3rem;
+  /* ── GRAPH TAB ── */
+  .graph-tab { position: relative; }
+  .graph-sidebar {
+    position: absolute;
+    top: 0.8rem;
+    left: 0.8rem;
+    width: 220px;
+    background: rgba(7,8,13,0.92);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 0.8rem;
+    z-index: 10;
+    backdrop-filter: blur(12px);
   }
-
-  .footer {
-    padding: 0.5rem 1rem;
-    border-top: 1px solid var(--border);
-    font-size: 0.55rem;
+  .graph-sidebar h3 {
+    font-size: 0.6rem;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
     color: var(--text-dim);
-    text-align: center;
+    margin-bottom: 0.4rem;
   }
+  .graph-sidebar select, .graph-sidebar input {
+    width: 100%;
+    padding: 0.3rem 0.5rem;
+    background: rgba(255,255,255,0.05);
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    color: var(--text);
+    font-size: 0.72rem;
+    outline: none;
+    margin-bottom: 0.5rem;
+  }
+  .graph-sidebar .g-filter { margin-bottom: 0.6rem; }
+  .graph-sidebar .g-label { font-size: 0.6rem; color: var(--text-dim); margin-bottom: 0.15rem; }
+  .graph-info {
+    position: absolute;
+    bottom: 0.8rem;
+    right: 0.8rem;
+    max-width: 360px;
+    max-height: 280px;
+    background: rgba(7,8,13,0.92);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 1rem;
+    z-index: 10;
+    overflow-y: auto;
+    backdrop-filter: blur(12px);
+    display: none;
+  }
+  .graph-info.visible { display: block; }
+  .graph-info h4 { font-size: 0.82rem; margin-bottom: 0.3rem; }
+  .graph-info .gi-content { font-size: 0.7rem; color: var(--text-dim); line-height: 1.5; white-space: pre-wrap; max-height: 140px; overflow-y: auto; }
+  .graph-stats {
+    position: absolute;
+    top: 0.8rem;
+    right: 0.8rem;
+    font-size: 0.65rem;
+    color: var(--text-dim);
+    background: rgba(7,8,13,0.85);
+    padding: 0.4rem 0.7rem;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    z-index: 10;
+  }
+  #graph-container { width: 100%; height: 100%; }
+
+  /* Legend in graph sidebar */
+  .legend-item { display: flex; align-items: center; gap: 0.4rem; font-size: 0.62rem; color: var(--text-dim); margin-bottom: 0.15rem; }
+  .legend-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+  .legend-line { width: 16px; height: 2px; flex-shrink: 0; }
 </style>
 </head>
 <body>
 
 <div class="header">
-  <div class="logo">
-    <h1>NEUROX</h1>
-    <div class="status-dot" id="status-dot"></div>
+  <div class="header-left">
+    <div class="logo">
+      <h1>NEUROX</h1>
+      <div class="status-dot" id="status-dot"></div>
+    </div>
+    <div class="tabs">
+      <div class="tab active" data-tab="brain">Brain</div>
+      <div class="tab" data-tab="explorer">Explorer</div>
+      <div class="tab" data-tab="graph">Graph</div>
+    </div>
   </div>
   <div class="provider-info">
     <span>LLM <span class="provider-tag" id="llm-tag">-</span></span>
@@ -423,262 +479,450 @@
   </div>
 </div>
 
-<div class="main">
-  <!-- Brain visualization -->
-  <div class="brain-panel">
-    <div class="brain-svg">
-      <svg viewBox="0 0 420 420" xmlns="http://www.w3.org/2000/svg">
-        <defs>
-          <radialGradient id="glow-purple" cx="50%" cy="50%" r="50%">
-            <stop offset="0%" stop-color="#8b5cf6" stop-opacity="0.4"/>
-            <stop offset="100%" stop-color="#8b5cf6" stop-opacity="0"/>
-          </radialGradient>
-          <radialGradient id="glow-blue" cx="50%" cy="50%" r="50%">
-            <stop offset="0%" stop-color="#3b82f6" stop-opacity="0.3"/>
-            <stop offset="100%" stop-color="#3b82f6" stop-opacity="0"/>
-          </radialGradient>
-          <radialGradient id="glow-green" cx="50%" cy="50%" r="50%">
-            <stop offset="0%" stop-color="#10b981" stop-opacity="0.2"/>
-            <stop offset="100%" stop-color="#10b981" stop-opacity="0"/>
-          </radialGradient>
-
-          <!-- Particle paths -->
-          <path id="path-in" d="M210 30 Q210 120 210 160" fill="none"/>
-          <path id="path-mid" d="M210 145 Q240 180 210 200" fill="none"/>
-          <path id="path-out" d="M100 210 Q140 200 160 210" fill="none"/>
-        </defs>
-
-        <!-- Glow fills -->
-        <circle class="glow-buffer" cx="210" cy="210" r="190"/>
-        <circle class="glow-working" cx="210" cy="210" r="140"/>
-        <circle class="glow-core" cx="210" cy="210" r="80"/>
-
-        <!-- Synapse lines -->
-        <g class="synapses">
-          <line class="synapse" x1="100" y1="80" x2="180" y2="150"/>
-          <line class="synapse" x1="320" y1="100" x2="250" y2="170"/>
-          <line class="synapse" x1="80" y1="300" x2="170" y2="250"/>
-          <line class="synapse" x1="340" y1="310" x2="260" y2="250"/>
-          <line class="synapse" x1="210" y1="30" x2="210" y2="120"/>
-          <line class="synapse" x1="210" y1="300" x2="210" y2="390"/>
-        </g>
-
-        <!-- Layer rings -->
-        <circle class="ring ring-buffer" cx="210" cy="210" r="190" style="transform-origin:210px 210px"/>
-        <circle class="ring ring-working" cx="210" cy="210" r="140"/>
-        <circle class="ring ring-core" cx="210" cy="210" r="80"/>
-
-        <!-- Particles flowing inward -->
-        <circle class="particle" r="3">
-          <animateMotion dur="3s" repeatCount="indefinite" path="M210,20 C180,80 240,120 210,160"/>
-        </circle>
-        <circle class="particle" r="2.5">
-          <animateMotion dur="3.5s" repeatCount="indefinite" begin="1s" path="M380,210 C320,180 280,220 260,210"/>
-        </circle>
-        <circle class="particle" r="2">
-          <animateMotion dur="4s" repeatCount="indefinite" begin="2s" path="M60,300 C120,280 160,250 180,230"/>
-        </circle>
-        <circle class="particle" r="3">
-          <animateMotion dur="3.2s" repeatCount="indefinite" begin="0.5s" path="M350,120 C300,150 270,180 240,200"/>
-        </circle>
-
-        <!-- Layer counts (positioned in SVG) -->
-        <text x="210" y="200" text-anchor="middle" class="brain-count core" font-size="36" font-weight="700" fill="#8b5cf6" id="svg-core">0</text>
-        <text x="210" y="220" text-anchor="middle" font-size="9" fill="#8b5cf6" opacity="0.6" letter-spacing="2">CORE</text>
-
-        <text x="320" y="145" text-anchor="middle" class="brain-count working" font-size="28" font-weight="600" fill="#3b82f6" id="svg-working">0</text>
-        <text x="320" y="162" text-anchor="middle" font-size="8" fill="#3b82f6" opacity="0.5" letter-spacing="2">WORKING</text>
-
-        <text x="105" y="100" text-anchor="middle" class="brain-count buffer" font-size="24" font-weight="600" fill="#10b981" id="svg-buffer">0</text>
-        <text x="105" y="115" text-anchor="middle" font-size="8" fill="#10b981" opacity="0.5" letter-spacing="2">BUFFER</text>
-      </svg>
-    </div>
-
-    <!-- Stats row -->
-    <div class="stats-row">
-      <div class="stat-card">
-        <div class="stat-value total" id="s-total">0</div>
-        <div class="stat-label">Total</div>
-      </div>
-      <div class="stat-card">
-        <div class="stat-value facts" id="s-facts">0</div>
-        <div class="stat-label">Facts</div>
-      </div>
-      <div class="stat-card">
-        <div class="stat-value links" id="s-links">0</div>
-        <div class="stat-label">Links</div>
-      </div>
-      <div class="stat-card">
-        <div class="stat-value temporal" id="s-temporal">0</div>
-        <div class="stat-label">Temporal</div>
-      </div>
-      <div class="stat-card">
-        <div class="stat-value stale" id="s-stale">0</div>
-        <div class="stat-label">Stale</div>
-      </div>
-      <div class="stat-card">
-        <div class="stat-value sessions" id="s-sessions">0</div>
-        <div class="stat-label">Sessions</div>
-      </div>
-    </div>
+<!-- ═══ BRAIN TAB ═══ -->
+<div class="tab-content brain-tab active" id="tab-brain">
+  <div class="brain-svg">
+    <svg viewBox="0 0 420 420" xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <radialGradient id="glow-purple" cx="50%" cy="50%" r="50%">
+          <stop offset="0%" stop-color="#8b5cf6" stop-opacity="0.4"/>
+          <stop offset="100%" stop-color="#8b5cf6" stop-opacity="0"/>
+        </radialGradient>
+        <radialGradient id="glow-blue" cx="50%" cy="50%" r="50%">
+          <stop offset="0%" stop-color="#3b82f6" stop-opacity="0.3"/>
+          <stop offset="100%" stop-color="#3b82f6" stop-opacity="0"/>
+        </radialGradient>
+        <radialGradient id="glow-green" cx="50%" cy="50%" r="50%">
+          <stop offset="0%" stop-color="#10b981" stop-opacity="0.2"/>
+          <stop offset="100%" stop-color="#10b981" stop-opacity="0"/>
+        </radialGradient>
+      </defs>
+      <circle class="glow-buffer" cx="210" cy="210" r="190"/>
+      <circle class="glow-working" cx="210" cy="210" r="140"/>
+      <circle class="glow-core" cx="210" cy="210" r="80"/>
+      <g class="synapses">
+        <line class="synapse" x1="100" y1="80" x2="180" y2="150"/>
+        <line class="synapse" x1="320" y1="100" x2="250" y2="170"/>
+        <line class="synapse" x1="80" y1="300" x2="170" y2="250"/>
+        <line class="synapse" x1="340" y1="310" x2="260" y2="250"/>
+        <line class="synapse" x1="210" y1="30" x2="210" y2="120"/>
+        <line class="synapse" x1="210" y1="300" x2="210" y2="390"/>
+      </g>
+      <circle class="ring ring-buffer" cx="210" cy="210" r="190" style="transform-origin:210px 210px"/>
+      <circle class="ring ring-working" cx="210" cy="210" r="140"/>
+      <circle class="ring ring-core" cx="210" cy="210" r="80"/>
+      <circle class="particle" r="3">
+        <animateMotion dur="3s" repeatCount="indefinite" path="M210,20 C180,80 240,120 210,160"/>
+      </circle>
+      <circle class="particle" r="2.5">
+        <animateMotion dur="3.5s" repeatCount="indefinite" begin="1s" path="M380,210 C320,180 280,220 260,210"/>
+      </circle>
+      <circle class="particle" r="2">
+        <animateMotion dur="4s" repeatCount="indefinite" begin="2s" path="M60,300 C120,280 160,250 180,230"/>
+      </circle>
+      <circle class="particle" r="3">
+        <animateMotion dur="3.2s" repeatCount="indefinite" begin="0.5s" path="M350,120 C300,150 270,180 240,200"/>
+      </circle>
+      <text x="210" y="200" text-anchor="middle" font-size="36" font-weight="700" fill="#8b5cf6" id="svg-core">0</text>
+      <text x="210" y="220" text-anchor="middle" font-size="9" fill="#8b5cf6" opacity="0.6" letter-spacing="2">CORE</text>
+      <text x="320" y="145" text-anchor="middle" font-size="28" font-weight="600" fill="#3b82f6" id="svg-working">0</text>
+      <text x="320" y="162" text-anchor="middle" font-size="8" fill="#3b82f6" opacity="0.5" letter-spacing="2">WORKING</text>
+      <text x="105" y="100" text-anchor="middle" font-size="24" font-weight="600" fill="#10b981" id="svg-buffer">0</text>
+      <text x="105" y="115" text-anchor="middle" font-size="8" fill="#10b981" opacity="0.5" letter-spacing="2">BUFFER</text>
+    </svg>
   </div>
+  <div class="stats-row">
+    <div class="stat-card"><div class="stat-value" style="color:var(--text)" id="s-total">0</div><div class="stat-label">Total</div></div>
+    <div class="stat-card"><div class="stat-value" style="color:var(--amber)" id="s-facts">0</div><div class="stat-label">Facts</div></div>
+    <div class="stat-card"><div class="stat-value" style="color:var(--cyan)" id="s-links">0</div><div class="stat-label">Links</div></div>
+    <div class="stat-card"><div class="stat-value" style="color:var(--pink)" id="s-temporal">0</div><div class="stat-label">Temporal</div></div>
+    <div class="stat-card"><div class="stat-value" style="color:var(--red)" id="s-stale">0</div><div class="stat-label">Stale</div></div>
+    <div class="stat-card"><div class="stat-value" style="color:var(--purple)" id="s-sessions">0</div><div class="stat-label">Sessions</div></div>
+  </div>
+</div>
 
-  <!-- Side panel -->
-  <div class="side-panel">
-    <div class="search-bar">
-      <input type="text" class="search-input" id="search" placeholder="Search memories... (Enter to search)" autocomplete="off"/>
+<!-- ═══ EXPLORER TAB ═══ -->
+<div class="tab-content explorer-tab" id="tab-explorer">
+  <div class="explorer-sidebar" id="explorer-sidebar"></div>
+  <div class="explorer-main">
+    <div class="explorer-toolbar">
+      <select id="ex-namespace"><option value="">All namespaces</option></select>
+      <select id="ex-layer">
+        <option value="">All layers</option>
+        <option value="0">Buffer</option>
+        <option value="1">Working</option>
+        <option value="2">Core</option>
+      </select>
+      <select id="ex-kind">
+        <option value="">All kinds</option>
+        <option value="episodic">episodic</option>
+        <option value="semantic">semantic</option>
+        <option value="procedural">procedural</option>
+      </select>
+      <input type="text" id="ex-search" placeholder="Search..." style="width:160px">
+      <div class="result-count" id="ex-count"></div>
     </div>
+    <div class="obs-list" id="obs-list"></div>
+  </div>
+  <div class="detail-panel" id="detail-panel">
+    <h2 id="detail-title"></h2>
+    <div class="detail-badges" id="detail-badges"></div>
+    <div class="detail-content" id="detail-content"></div>
+    <dl class="detail-info" id="detail-info"></dl>
+  </div>
+</div>
 
-    <div class="memory-list" id="memory-list">
-      <div class="section-title">Recent Memories</div>
-      <div id="memories"></div>
+<!-- ═══ GRAPH TAB ═══ -->
+<div class="tab-content graph-tab" id="tab-graph">
+  <div class="graph-sidebar">
+    <div class="g-filter">
+      <div class="g-label">Namespace</div>
+      <select id="g-namespace"><option value="">All</option></select>
     </div>
-
-    <div class="footer">neurox v0.1.0 — auto-refresh 3s</div>
+    <div class="g-filter">
+      <div class="g-label">Type</div>
+      <select id="g-type">
+        <option value="">All</option>
+        <option value="decision">decision</option>
+        <option value="bugfix">bugfix</option>
+        <option value="discovery">discovery</option>
+        <option value="pattern">pattern</option>
+        <option value="gotcha">gotcha</option>
+        <option value="config">config</option>
+        <option value="preference">preference</option>
+        <option value="question">question</option>
+      </select>
+    </div>
+    <div class="g-filter">
+      <div class="g-label">Limit</div>
+      <select id="g-limit">
+        <option value="50">50</option>
+        <option value="100">100</option>
+        <option value="200" selected>200</option>
+        <option value="500">500</option>
+      </select>
+    </div>
+    <div class="g-filter">
+      <input type="checkbox" id="g-linked" style="width:auto;margin-right:0.3rem">
+      <label for="g-linked" style="font-size:0.68rem;color:var(--text-dim)">Linked only</label>
+    </div>
+    <button onclick="loadGraph()" style="width:100%;padding:0.4rem;background:var(--purple);border:none;border-radius:5px;color:white;font-size:0.72rem;cursor:pointer;font-weight:600;margin-bottom:0.8rem">Load Graph</button>
+    <h3>Node colors</h3>
+    <div class="legend-item"><div class="legend-dot" style="background:#8b5cf6"></div> decision</div>
+    <div class="legend-item"><div class="legend-dot" style="background:#ef4444"></div> bugfix</div>
+    <div class="legend-item"><div class="legend-dot" style="background:#3b82f6"></div> discovery</div>
+    <div class="legend-item"><div class="legend-dot" style="background:#10b981"></div> pattern</div>
+    <div class="legend-item"><div class="legend-dot" style="background:#f59e0b"></div> gotcha</div>
+    <div class="legend-item"><div class="legend-dot" style="background:#06b6d4"></div> config</div>
+    <div class="legend-item"><div class="legend-dot" style="background:#ec4899"></div> preference</div>
+    <div class="legend-item"><div class="legend-dot" style="background:#6366f1"></div> question</div>
+    <h3 style="margin-top:0.5rem">Edge styles</h3>
+    <div class="legend-item"><div class="legend-line" style="background:#ef4444"></div> supersedes</div>
+    <div class="legend-item"><div class="legend-line" style="background:#f59e0b"></div> contradicts</div>
+    <div class="legend-item"><div class="legend-line" style="background:rgba(255,255,255,0.2)"></div> relates_to</div>
+    <div class="legend-item"><div class="legend-line" style="background:#3b82f6"></div> derived_from</div>
+    <div class="legend-item"><div class="legend-line" style="background:#10b981"></div> validates</div>
+    <div class="legend-item"><div class="legend-line" style="background:#8b5cf6"></div> refines</div>
+  </div>
+  <div class="graph-stats" id="graph-stats">Click "Load Graph" to start</div>
+  <div id="graph-container"></div>
+  <div class="graph-info" id="graph-info">
+    <h4 id="gi-title"></h4>
+    <div id="gi-badges" style="margin-bottom:0.3rem"></div>
+    <div class="gi-content" id="gi-content"></div>
   </div>
 </div>
 
 <script>
 const API = window.location.origin;
-const layers = ['Buffer', 'Working', 'Core'];
-let searchMode = false;
+const TYPE_COLORS = {
+  decision:'#8b5cf6', bugfix:'#ef4444', discovery:'#3b82f6', pattern:'#10b981',
+  gotcha:'#f59e0b', config:'#06b6d4', preference:'#ec4899', question:'#6366f1'
+};
+const EDGE_COLORS = {
+  supersedes:'#ef4444', contradicts:'#f59e0b', relates_to:'rgba(255,255,255,0.15)',
+  derived_from:'#3b82f6', validates:'#10b981', refines:'#8b5cf6'
+};
+const EDGE_DASHES = {
+  supersedes:false, contradicts:[5,5], relates_to:[2,4],
+  derived_from:false, validates:[8,4], refines:false
+};
+const LAYERS = ['Buffer','Working','Core'];
 
-async function fetchJSON(url) {
-  const r = await fetch(url);
-  if (!r.ok) throw new Error(r.statusText);
-  return r.json();
-}
+let breakdown = null;
+let currentType = '';
+let browseOffset = 0;
+let browseTotal = 0;
+let browseItems = [];
+let selectedObs = null;
 
 function $(id) { return document.getElementById(id); }
-
-function animateValue(el, target) {
-  const val = typeof target === 'number' ? target.toLocaleString() : target;
-  if (el.textContent !== val) {
-    el.textContent = val;
-    el.style.transition = 'transform 0.2s';
-    el.style.transform = 'scale(1.15)';
-    setTimeout(() => el.style.transform = 'scale(1)', 200);
-  }
+function esc(s) { if(!s)return''; const d=document.createElement('div'); d.textContent=s; return d.innerHTML; }
+async function fetchJSON(url) { const r=await fetch(url); if(!r.ok)throw new Error(r.statusText); return r.json(); }
+function animateValue(el,target) {
+  const val=typeof target==='number'?target.toLocaleString():target;
+  if(el.textContent!==val){el.textContent=val;el.style.transition='transform 0.2s';el.style.transform='scale(1.15)';setTimeout(()=>el.style.transform='scale(1)',200);}
 }
 
-function esc(s) {
-  if (!s) return '';
-  const d = document.createElement('div');
-  d.textContent = s;
-  return d.innerHTML;
-}
+// ── Tabs ──
+document.querySelectorAll('.tab').forEach(t => {
+  t.addEventListener('click', () => {
+    document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));
+    document.querySelectorAll('.tab-content').forEach(x=>x.classList.remove('active'));
+    t.classList.add('active');
+    $('tab-'+t.dataset.tab).classList.add('active');
+    if(t.dataset.tab==='explorer' && !breakdown) loadBreakdown();
+  });
+});
 
-function timeAgo(dateStr) {
-  if (!dateStr) return '';
+// ── Brain Tab ──
+async function refreshBrain() {
   try {
-    const d = new Date(dateStr);
-    const diff = (Date.now() - d.getTime()) / 1000;
-    if (diff < 60) return 'just now';
-    if (diff < 3600) return Math.floor(diff/60) + 'm ago';
-    if (diff < 86400) return Math.floor(diff/3600) + 'h ago';
-    if (diff < 604800) return Math.floor(diff/86400) + 'd ago';
-    return d.toLocaleDateString();
-  } catch(e) { return ''; }
+    const s = await fetchJSON(API+'/api/v1/status');
+    $('status-dot').className='status-dot';
+    animateValue($('svg-core'),s.core);
+    animateValue($('svg-working'),s.working);
+    animateValue($('svg-buffer'),s.buffer);
+    animateValue($('s-total'),s.total);
+    animateValue($('s-facts'),s.facts||0);
+    animateValue($('s-links'),s.links);
+    animateValue($('s-temporal'),s.temporal_mentions||0);
+    animateValue($('s-stale'),(s.stale||0)+(s.expired||0));
+    animateValue($('s-sessions'),s.active_sessions);
+    $('llm-tag').textContent=s.llm_provider||'disabled';
+    $('embed-tag').textContent=s.embedding_provider||'disabled';
+    $('gate-tag').textContent=s.gate_mode||'off';
+  } catch(e) { $('status-dot').className='status-dot error'; }
+}
+refreshBrain();
+setInterval(refreshBrain, 5000);
+
+// ── Explorer Tab ──
+async function loadBreakdown() {
+  breakdown = await fetchJSON(API+'/api/v1/stats/breakdown');
+  renderSidebar();
+  populateNamespaceSelects();
+  browse();
 }
 
-function renderMemories(items, container, showScore) {
-  if (!items || items.length === 0) {
-    container.innerHTML = '<div class="empty">No memories found</div>';
-    return;
+function populateNamespaceSelects() {
+  if(!breakdown) return;
+  const nss = Object.keys(breakdown.by_namespace).sort((a,b)=>breakdown.by_namespace[b]-breakdown.by_namespace[a]);
+  [['ex-namespace'],['g-namespace']].forEach(ids=>{
+    ids.forEach(id=>{
+      const sel=$(id); if(!sel)return;
+      const curr=sel.value;
+      while(sel.options.length>1) sel.remove(1);
+      nss.forEach(ns=>{const o=document.createElement('option');o.value=ns;o.textContent=ns+' ('+breakdown.by_namespace[ns]+')';sel.appendChild(o);});
+      sel.value=curr;
+    });
+  });
+}
+
+function renderSidebar() {
+  if(!breakdown) return;
+  let html = '<div class="cat-section"><h3>By Type</h3>';
+  const types = ['decision','bugfix','discovery','pattern','gotcha','config','preference','question'];
+  html += `<div class="cat-card ${currentType===''?'active':''}" onclick="filterType('')">
+    <span class="name"><span class="dot" style="background:var(--text-dim)"></span>All</span>
+    <span class="count">${Object.values(breakdown.by_type).reduce((a,b)=>a+b,0).toLocaleString()}</span></div>`;
+  types.forEach(t=>{
+    const cnt = breakdown.by_type[t]||0;
+    if(cnt===0) return;
+    html += `<div class="cat-card ${currentType===t?'active':''}" onclick="filterType('${t}')">
+      <span class="name"><span class="dot" style="background:${TYPE_COLORS[t]}"></span>${t}</span>
+      <span class="count">${cnt.toLocaleString()}</span></div>`;
+  });
+  html += '</div>';
+
+  html += '<div class="cat-section"><h3>By Layer</h3>';
+  ['core','working','buffer'].forEach(l=>{
+    const cnt=breakdown.by_layer[l]||0;
+    const colors={core:'var(--purple)',working:'var(--blue)',buffer:'var(--green)'};
+    html += `<div class="cat-card" onclick="filterLayer('${l==='buffer'?0:l==='working'?1:2}')">
+      <span class="name"><span class="dot" style="background:${colors[l]}"></span>${l}</span>
+      <span class="count">${cnt.toLocaleString()}</span></div>`;
+  });
+  html += '</div>';
+
+  html += '<div class="cat-section"><h3>By Kind</h3>';
+  Object.entries(breakdown.by_kind).forEach(([k,cnt])=>{
+    html += `<div class="cat-card" onclick="filterKind('${k}')">
+      <span class="name">${k}</span>
+      <span class="count">${cnt.toLocaleString()}</span></div>`;
+  });
+  html += '</div>';
+
+  if(breakdown.by_relation && Object.keys(breakdown.by_relation).length>0) {
+    html += '<div class="cat-section"><h3>Links</h3>';
+    Object.entries(breakdown.by_relation).forEach(([r,cnt])=>{
+      html += `<div class="cat-card">
+        <span class="name" style="font-size:0.65rem">${r}</span>
+        <span class="count">${cnt.toLocaleString()}</span></div>`;
+    });
+    html += '</div>';
   }
-  container.innerHTML = items.map(o => {
-    const tags = (o.tags || []).map(t => `<span class="mem-tag">${esc(t)}</span>`).join('');
-    const imp = Math.round((o.importance || o.confidence || 0.5) * 100);
-    const score = showScore && o.score ? `<span class="search-score">${o.score.toFixed(3)}</span>` : '';
-    return `
-      <div class="mem l${o.layer}">
-        <div class="mem-title">
-          <span>${esc(o.title)}</span>
-          <span class="mem-type ${o.observation_type}">${o.observation_type || 'note'}</span>
-        </div>
-        <div class="mem-content">${esc(o.content)}</div>
-        ${tags ? `<div class="mem-tags">${tags}</div>` : ''}
-        <div class="mem-footer">
-          <span class="mem-time">${layers[o.layer] || ''} ${score} ${timeAgo(o.created_at)}</span>
-          <div class="imp-bar"><div class="imp-fill" style="width:${imp}%"></div></div>
-        </div>
-      </div>`;
+
+  $('explorer-sidebar').innerHTML = html;
+}
+
+function filterType(t) { currentType=t; browseOffset=0; browseItems=[]; renderSidebar(); browse(); }
+function filterLayer(l) { $('ex-layer').value=l; browseOffset=0; browseItems=[]; browse(); }
+function filterKind(k) { $('ex-kind').value=k; browseOffset=0; browseItems=[]; browse(); }
+
+async function browse(append) {
+  if(!append) { browseOffset=0; browseItems=[]; }
+  let url = API+'/api/v1/observations/browse?limit=50&offset='+browseOffset;
+  if(currentType) url+='&type='+currentType;
+  if($('ex-namespace').value) url+='&namespace='+encodeURIComponent($('ex-namespace').value);
+  if($('ex-layer').value!=='') url+='&layer='+$('ex-layer').value;
+  if($('ex-kind').value) url+='&kind='+$('ex-kind').value;
+
+  const data = await fetchJSON(url);
+  browseTotal = data.total;
+  if(data.items) browseItems = browseItems.concat(data.items);
+  renderObsList();
+}
+
+function renderObsList() {
+  const searchTerm = $('ex-search').value.toLowerCase();
+  let items = browseItems;
+  if(searchTerm) items = items.filter(o => o.title.toLowerCase().includes(searchTerm) || (o.content||'').toLowerCase().includes(searchTerm));
+
+  $('ex-count').textContent = browseTotal.toLocaleString()+' total'+(items.length<browseItems.length?' ('+items.length+' shown)':'');
+
+  if(!items.length) { $('obs-list').innerHTML='<div class="empty">No observations found</div>'; return; }
+
+  let html = items.map(o => {
+    const imp = Math.round((o.importance||0)*100);
+    const tags = (o.tags||[]).map(t=>`<span class="obs-tag">${esc(t)}</span>`).join('');
+    return `<div class="obs l${o.layer} ${selectedObs===o.id?'selected':''}" onclick="showDetail('${o.id}')">
+      <div class="obs-header">
+        <span class="obs-title">${esc(o.title)}</span>
+        <span class="obs-badge ${o.observation_type}">${o.observation_type}</span>
+      </div>
+      <div class="obs-preview">${esc(o.content)}</div>
+      ${tags?'<div class="obs-tags">'+tags+'</div>':''}
+      <div class="obs-meta">
+        <span>${LAYERS[o.layer]||''}</span>
+        <span>${o.kind}</span>
+        <span>imp: ${(o.importance||0).toFixed(3)}</span>
+        <div class="imp-bar"><div class="imp-fill" style="width:${imp}%"></div></div>
+      </div>
+    </div>`;
   }).join('');
+
+  if(browseItems.length < browseTotal) {
+    html += `<div class="load-more" onclick="loadMore()">Load more (${browseItems.length} of ${browseTotal.toLocaleString()})</div>`;
+  }
+
+  $('obs-list').innerHTML = html;
 }
 
-async function refresh() {
-  try {
-    const status = await fetchJSON(API + '/api/v1/status');
-
-    $('status-dot').className = 'status-dot';
-    animateValue($('svg-core'), status.core);
-    animateValue($('svg-working'), status.working);
-    animateValue($('svg-buffer'), status.buffer);
-    animateValue($('s-total'), status.total);
-    animateValue($('s-facts'), status.facts);
-    animateValue($('s-links'), status.links);
-    animateValue($('s-temporal'), status.temporal_mentions || 0);
-    animateValue($('s-stale'), status.stale + status.expired);
-    animateValue($('s-sessions'), status.active_sessions);
-
-    $('llm-tag').textContent = status.llm_provider || 'disabled';
-    $('gate-tag').textContent = status.gate_mode || 'off';
-
-    // Detect embed from provider info or show based on status
-    if (!$('embed-tag').dataset.set) {
-      $('embed-tag').textContent = 'auto';
-    }
-
-    // Load memories if not in search mode
-    if (!searchMode) {
-      const ctx = await fetchJSON(API + '/api/v1/observations/context?limit=25');
-      renderMemories(ctx.items, $('memories'), false);
-    }
-  } catch(e) {
-    $('status-dot').className = 'status-dot error';
-    console.error('refresh:', e);
-  }
+function loadMore() {
+  browseOffset = browseItems.length;
+  browse(true);
 }
 
-// Search
-let searchTimeout;
-$('search').addEventListener('keydown', function(e) {
-  if (e.key === 'Enter' && this.value.trim()) {
-    doSearch(this.value.trim());
-  }
-  if (e.key === 'Escape') {
-    this.value = '';
-    searchMode = false;
-    document.querySelector('.section-title').textContent = 'Recent Memories';
-    refresh();
-  }
-});
+function showDetail(id) {
+  selectedObs = id;
+  const o = browseItems.find(x=>x.id===id);
+  if(!o) return;
 
-$('search').addEventListener('input', function() {
-  if (!this.value.trim()) {
-    searchMode = false;
-    document.querySelector('.section-title').textContent = 'Recent Memories';
-    refresh();
-  }
-});
-
-async function doSearch(query) {
-  searchMode = true;
-  try {
-    const data = await fetchJSON(API + '/api/v1/observations/search?q=' + encodeURIComponent(query) + '&limit=20');
-    let title = `Search: "${esc(query)}" (${data.count} results)`;
-    if (data.temporal_intent) {
-      title += ` <span class="temporal-badge">${data.temporal_intent}</span>`;
-    }
-    document.querySelector('.section-title').innerHTML = title;
-    renderMemories(data.results, $('memories'), true);
-  } catch(e) {
-    $('memories').innerHTML = '<div class="empty">Search failed</div>';
-  }
+  $('detail-title').textContent = o.title;
+  const color = TYPE_COLORS[o.observation_type]||'#666';
+  $('detail-badges').innerHTML = [
+    `<span class="detail-badge" style="background:${color}22;color:${color}">${o.observation_type}</span>`,
+    `<span class="detail-badge" style="background:rgba(255,255,255,0.06);color:var(--text-dim)">${o.kind}</span>`,
+    `<span class="detail-badge" style="background:rgba(255,255,255,0.06);color:var(--text-dim)">Layer ${o.layer} (${LAYERS[o.layer]})</span>`,
+    ...(o.tags||[]).map(t=>`<span class="detail-badge" style="background:rgba(255,255,255,0.06);color:var(--text-dim)">${esc(t)}</span>`)
+  ].join('');
+  $('detail-content').textContent = o.content||'(empty)';
+  $('detail-info').innerHTML = `
+    <dt>ID</dt><dd style="font-size:0.58rem;font-family:monospace">${o.id}</dd>
+    <dt>Namespace</dt><dd>${o.namespace}</dd>
+    <dt>Importance</dt><dd>${(o.importance||0).toFixed(4)}</dd>
+    <dt>Confidence</dt><dd>${(o.confidence||0).toFixed(2)}</dd>
+    <dt>Staleness</dt><dd>${o.staleness||'fresh'}</dd>
+    <dt>Created</dt><dd>${o.created_at||'-'}</dd>`;
+  $('detail-panel').classList.add('visible');
+  renderObsList(); // re-render to highlight
 }
 
-refresh();
-setInterval(refresh, 3000);
+$('ex-namespace').addEventListener('change', ()=>{browseOffset=0;browseItems=[];browse();});
+$('ex-layer').addEventListener('change', ()=>{browseOffset=0;browseItems=[];browse();});
+$('ex-kind').addEventListener('change', ()=>{browseOffset=0;browseItems=[];browse();});
+$('ex-search').addEventListener('input', renderObsList);
+
+// ── Graph Tab ──
+let graphNetwork = null;
+
+async function loadGraph() {
+  const ns = $('g-namespace').value;
+  const type = $('g-type').value;
+  const limit = $('g-limit').value;
+  const linked = $('g-linked').checked;
+
+  let url = API+'/api/v1/graph?format=json&limit='+limit;
+  if(ns) url+='&namespace='+encodeURIComponent(ns);
+  if(type) url+='&type='+type;
+  if(linked) url+='&linked_only=true';
+
+  $('graph-stats').textContent = 'Loading...';
+  const data = await fetchJSON(url);
+
+  $('graph-stats').textContent = data.stats.shown_nodes+' nodes, '+data.stats.shown_edges+' edges (of '+data.stats.total_observations.toLocaleString()+' total)';
+
+  const nodeLookup = {};
+  data.nodes.forEach(n=>{nodeLookup[n.id]=n;});
+
+  const visNodes = new vis.DataSet(data.nodes.map(n=>{
+    const color = TYPE_COLORS[n.observation_type]||'#666';
+    return {
+      id:n.id,
+      label: n.title.length>35 ? n.title.substring(0,32)+'...' : n.title,
+      size: 8+(n.importance||0)*25,
+      color:{background:color,border:color,highlight:{background:color,border:'#fff'},hover:{background:color,border:'#fff'}},
+      borderWidth: n.layer===2?3:n.layer===1?2:1,
+      font:{color:'#c8cad0',size:10,face:'Inter,sans-serif'}
+    };
+  }));
+
+  const visEdges = new vis.DataSet(data.edges.map(e=>{
+    const color = EDGE_COLORS[e.relation_type]||'rgba(255,255,255,0.1)';
+    return {
+      id:e.id, from:e.source, to:e.target,
+      color:{color:color,highlight:'#fff',hover:color,opacity:0.6},
+      dashes: EDGE_DASHES[e.relation_type]||false,
+      width:1+(e.confidence||0),
+      arrows:{to:{enabled:true,scaleFactor:0.5}},
+      title:e.relation_type
+    };
+  }));
+
+  if(graphNetwork) graphNetwork.destroy();
+  graphNetwork = new vis.Network($('graph-container'), {nodes:visNodes,edges:visEdges}, {
+    physics:{stabilization:{iterations:150,updateInterval:25},barnesHut:{gravitationalConstant:-3000,centralGravity:0.3,springLength:120,springConstant:0.02,damping:0.4}},
+    interaction:{hover:true,tooltipDelay:200,zoomView:true,dragView:true},
+    nodes:{shape:'dot',scaling:{min:8,max:35}},
+    edges:{smooth:{type:'continuous'}}
+  });
+
+  graphNetwork.on('click', function(params){
+    if(params.nodes.length>0){
+      const n=nodeLookup[params.nodes[0]];
+      if(!n)return;
+      $('gi-title').textContent=n.title;
+      const color=TYPE_COLORS[n.observation_type]||'#666';
+      $('gi-badges').innerHTML=`<span class="detail-badge" style="background:${color}22;color:${color};font-size:0.55rem">${n.observation_type}</span>
+        <span class="detail-badge" style="background:rgba(255,255,255,0.06);color:var(--text-dim);font-size:0.55rem">${n.kind} L${n.layer}</span>`;
+      $('gi-content').textContent=n.content||'';
+      $('graph-info').classList.add('visible');
+    } else {
+      $('graph-info').classList.remove('visible');
+    }
+  });
+}
 </script>
 </body>
 </html>

@@ -28,6 +28,9 @@ type Deps struct {
 	RecallEngine     *recall.Engine
 	LinkStore        *links.Store
 	DB               *sql.DB
+	LLMProvider      string
+	EmbedProvider    string
+	GateMode         string
 }
 
 func NewServer(cfg Config, deps *Deps) *Server {
@@ -64,6 +67,8 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /", s.handleDashboard)
 	mux.HandleFunc("GET /health", s.handleHealth)
 	mux.HandleFunc("GET /api/v1/status", s.handleStatus)
+	mux.HandleFunc("GET /api/v1/observations/browse", s.handleBrowse)
+	mux.HandleFunc("GET /api/v1/stats/breakdown", s.handleBreakdown)
 
 	mux.HandleFunc("POST /api/v1/observations", s.handleSave)
 	mux.HandleFunc("GET /api/v1/observations/search", s.handleRecall)
@@ -78,6 +83,7 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 
 	mux.HandleFunc("POST /api/v1/hooks/git", s.handleGitHook)
 	mux.HandleFunc("POST /api/v1/reflect", s.handleReflect)
+	mux.HandleFunc("GET /api/v1/graph", s.handleGraph)
 }
 
 func corsMiddleware(next http.Handler) http.Handler {
