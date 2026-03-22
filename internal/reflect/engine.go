@@ -47,7 +47,7 @@ func (e *Engine) LLM() llm.Provider { return e.llm }
 
 // ReflectResult holds stats from a reflection run.
 type ReflectResult struct {
-	SourceCount      int
+	SourceCount        int
 	ReflectionsCreated int
 }
 
@@ -89,6 +89,12 @@ func (e *Engine) Run(ctx context.Context, namespace string) (ReflectResult, erro
 		return result, fmt.Errorf("synthesize reflection: %w", err)
 	}
 
+	// Quality guard: reject empty or trivially short reflections.
+	if strings.TrimSpace(reflection) == "" || len(strings.TrimSpace(reflection)) < 50 {
+		log.Printf("reflection rejected: content too short (%d chars) in namespace %s", len(strings.TrimSpace(reflection)), namespace)
+		return result, nil
+	}
+
 	// Save the reflection
 	if err := e.saveReflection(ctx, reflection, sources, namespace); err != nil {
 		return result, fmt.Errorf("save reflection: %w", err)
@@ -122,6 +128,12 @@ func (e *Engine) ForceReflect(ctx context.Context, namespace string) (ReflectRes
 	reflection, err := e.synthesize(ctx, sources, namespace)
 	if err != nil {
 		return result, fmt.Errorf("synthesize: %w", err)
+	}
+
+	// Quality guard: reject empty or trivially short reflections.
+	if strings.TrimSpace(reflection) == "" || len(strings.TrimSpace(reflection)) < 50 {
+		log.Printf("reflection rejected: content too short (%d chars) in namespace %s", len(strings.TrimSpace(reflection)), namespace)
+		return result, nil
 	}
 
 	if err := e.saveReflection(ctx, reflection, sources, namespace); err != nil {
@@ -235,8 +247,8 @@ func (e *Engine) saveReflection(ctx context.Context, content string, sources []s
 	// Also save as a Core-layer observation for recall
 	obsID := e.idGen.New()
 	_, err = e.db.ExecContext(ctx, `
-		INSERT INTO observations(id, title, content, observation_type, layer, confidence, importance, kind, namespace, source)
-		VALUES(?, ?, ?, 'pattern', 2, 0.9, 0.9, 'semantic', ?, 'reflection')
+		INSERT INTO observations(id, title, content, observation_type, layer, confidence, importance, kind, namespace, source, retention)
+		VALUES(?, ?, ?, 'pattern', 2, 0.9, 0.9, 'semantic', ?, 'reflection', 'durable')
 	`, obsID, "Reflection: "+namespace, content, namespace)
 	if err != nil {
 		return fmt.Errorf("insert reflection observation: %w", err)

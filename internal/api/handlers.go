@@ -10,6 +10,7 @@ import (
 
 	"time"
 
+	"neurox/internal/classify"
 	"neurox/internal/graph"
 	"neurox/internal/health"
 	"neurox/internal/observation"
@@ -62,6 +63,7 @@ func (s *Server) handleSave(w http.ResponseWriter, r *http.Request) {
 		Tags            []string `json:"tags"`
 		Files           []string `json:"files"`
 		Namespace       string   `json:"namespace"`
+		Retention       string   `json:"retention"`
 	}
 	if !decodeJSON(w, r, &req) {
 		return
@@ -77,6 +79,13 @@ func (s *Server) handleSave(w http.ResponseWriter, r *http.Request) {
 		Tags:            req.Tags,
 		Files:           req.Files,
 		Namespace:       req.Namespace,
+	}
+
+	// Retention: use explicit value if provided, otherwise auto-classify.
+	if req.Retention != "" {
+		obs.Retention = observation.Retention(req.Retention)
+	} else {
+		obs.Retention = classify.InferRetention(obs.Title, obs.ObservationType, obs.Source)
 	}
 
 	saved, err := s.deps.ObservationStore.Save(r.Context(), obs)
@@ -132,6 +141,7 @@ func (s *Server) handleRecall(w http.ResponseWriter, r *http.Request) {
 			"observation_type": res.ObservationType, "kind": res.Kind,
 			"confidence": res.Confidence, "tags": res.Tags,
 			"staleness": res.Staleness, "linked_files": res.LinkedFiles,
+			"retention": res.Retention,
 		})
 	}
 
@@ -229,6 +239,7 @@ func (s *Server) handleUpdate(w http.ResponseWriter, r *http.Request) {
 		Confidence      float64  `json:"confidence"`
 		Tags            []string `json:"tags"`
 		Files           []string `json:"files"`
+		Retention       string   `json:"retention"`
 	}
 	if !decodeJSON(w, r, &req) {
 		return
@@ -243,6 +254,16 @@ func (s *Server) handleUpdate(w http.ResponseWriter, r *http.Request) {
 		Confidence:      req.Confidence,
 		Tags:            req.Tags,
 		Files:           req.Files,
+	}
+
+	// Preserve retention: use explicit value, or fetch existing from DB.
+	if req.Retention != "" {
+		obs.Retention = observation.Retention(req.Retention)
+	} else {
+		existing, getErr := s.deps.ObservationStore.Get(r.Context(), id)
+		if getErr == nil {
+			obs.Retention = existing.Retention
+		}
 	}
 
 	updated, err := s.deps.ObservationStore.Update(r.Context(), obs)
@@ -721,6 +742,7 @@ func observationToJSON(obs observation.Observation) map[string]any {
 		"observation_type": obs.ObservationType, "layer": obs.Layer,
 		"confidence": obs.Confidence, "importance": obs.Importance,
 		"kind": obs.Kind, "namespace": obs.Namespace,
+		"retention":  obs.Retention,
 		"created_at": obs.CreatedAt, "updated_at": obs.UpdatedAt,
 	}
 	if len(obs.Tags) > 0 {

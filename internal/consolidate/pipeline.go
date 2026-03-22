@@ -153,11 +153,11 @@ func (p *Pipeline) ForceRun(ctx context.Context) error {
 	}
 	result.PromotedToWorking, _ = res.RowsAffected()
 
-	// 3. Force promote ALL Working → Core
+	// 3. Force promote durable Working → Core (operational stays in Working)
 	res, err = p.db.ExecContext(ctx, `
 		UPDATE observations
 		SET layer = 2, consolidation_status = 'promoted', updated_at = datetime('now')
-		WHERE deleted_at IS NULL AND layer = 1
+		WHERE deleted_at IS NULL AND layer = 1 AND retention = 'durable'
 	`)
 	if err != nil {
 		p.failRun(ctx, runID, err)
@@ -470,6 +470,7 @@ func (p *Pipeline) promoteBufferToWorking(ctx context.Context, epoch int) (int64
 }
 
 // promoteWorkingToCore promotes Working observations with sustained access and sufficient age.
+// Only durable observations are eligible — operational observations stay in Working.
 func (p *Pipeline) promoteWorkingToCore(ctx context.Context) (int64, error) {
 	result, err := p.db.ExecContext(ctx, `
 		UPDATE observations
@@ -478,6 +479,7 @@ func (p *Pipeline) promoteWorkingToCore(ctx context.Context) (int64, error) {
 		    updated_at = datetime('now')
 		WHERE deleted_at IS NULL
 		  AND layer = 1
+		  AND retention = 'durable'
 		  AND access_count >= ?
 		  AND julianday('now') - julianday(created_at) >= ?
 	`, workingToCoreAccessMin, workingToCoreAgeMinDays)
@@ -550,13 +552,15 @@ func (p *Pipeline) evictBuffer(ctx context.Context) (int64, error) {
 	}
 
 	excess := count - bufferCap
+	// Prefer evicting operational observations first at the same importance level.
 	result, err := p.db.ExecContext(ctx, `
 		UPDATE observations
 		SET deleted_at = datetime('now'), updated_at = datetime('now')
 		WHERE id IN (
 			SELECT id FROM observations
 			WHERE layer = 0 AND deleted_at IS NULL
-			ORDER BY importance ASC, created_at ASC
+			ORDER BY CASE WHEN retention = 'operational' THEN 0 ELSE 1 END ASC,
+			         importance ASC, created_at ASC
 			LIMIT ?
 		)
 	`, excess)

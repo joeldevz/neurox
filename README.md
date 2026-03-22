@@ -92,7 +92,7 @@ Inspired by human memory systems, Neurox organizes knowledge into three layers w
 
 **Promotion rules:**
 - Buffer → Working: importance threshold (0.3) or procedural type, with optional LLM quality gate
-- Working → Core: accessed 5+ times AND older than 7 days
+- Working → Core: accessed 5+ times AND older than 7 days AND `retention = 'durable'` (operational observations stay in Working)
 - Each layer has its own decay rate based on memory kind
 
 ## Temporal Reasoning
@@ -211,6 +211,16 @@ Evaluated on [LongMemEval](https://github.com/xiaowu0162/LongMemEval) (ICLR 2025
 > FTS5 + BM25 + temporal scoring, no LLM required. 500 questions in ~2 minutes.
 
 ## Quick Start
+
+### Interactive installer
+
+```bash
+./install.sh
+```
+
+The installer launches a Bubble Tea TUI where you can choose the binary install directory, the Neurox config directory, local or remote providers, editor integrations, and whether to install the git hook in the current repo.
+
+Before it writes anything, it shows exactly where configuration will be stored and which provider settings are required.
 
 ### Build
 
@@ -355,10 +365,10 @@ neurox serve  # REST API on port 7438
 
 | Tool | Key inputs |
 |---|---|
-| `save` | `title`, `content`, `observation_type`, `kind`, `confidence`, `topic_key`, `tags`, `files`, `namespace` |
+| `save` | `title`, `content`, `observation_type`, `kind`, `confidence`, `topic_key`, `tags`, `files`, `namespace`, `retention` |
 | `recall` | `query`, `observation_type`, `kind`, `namespace`, `files`, `include_stale`, `limit` |
 | `context` | `namespace`, `files`, `limit` |
-| `update` | `id`, `title`, `content`, `observation_type`, `kind`, `confidence`, `tags`, `files` |
+| `update` | `id`, `title`, `content`, `observation_type`, `kind`, `confidence`, `tags`, `files`, `retention` |
 | `forget` | `id` |
 | `invalidate` | `observation_id`, `reason`, `replacement_title`, `replacement_content` |
 | `status` | no inputs |

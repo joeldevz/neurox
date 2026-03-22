@@ -38,6 +38,10 @@ func buildSearchQuery(options SearchOptions, intent TemporalIntent) (string, []a
 	} else if !options.IncludeStale {
 		clauses = append(clauses, "o.staleness <> 'expired'")
 	}
+	if options.Retention != "" {
+		clauses = append(clauses, "o.retention = ?")
+		args = append(args, options.Retention)
+	}
 	if len(options.Files) > 0 {
 		placeholders := make([]string, 0, len(options.Files))
 		for _, file := range options.Files {
@@ -67,6 +71,7 @@ func buildSearchQuery(options SearchOptions, intent TemporalIntent) (string, []a
 				o.importance,
 				o.tags,
 				o.staleness,
+				o.retention,
 				bm25(observations_fts, 2.0, 1.0, 0.5) AS relevance,
 				o.created_at,
 				o.last_accessed,
@@ -89,6 +94,7 @@ func buildSearchQuery(options SearchOptions, intent TemporalIntent) (string, []a
 			matched.importance,
 			matched.tags,
 			matched.staleness,
+			matched.retention,
 			COALESCE(group_concat(DISTINCT f_output.file_path), '') AS linked_files,
 			matched.relevance,
 			matched.created_at,

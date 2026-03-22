@@ -28,6 +28,7 @@ type SearchOptions struct {
 	Kind            observation.Kind
 	Namespace       string
 	Staleness       string
+	Retention       string // optional filter: "operational" or "durable"
 	IncludeStale    bool
 	Files           []string
 	Limit           int
@@ -46,6 +47,7 @@ type Result struct {
 	Confidence      float64
 	Tags            []string
 	Staleness       string
+	Retention       string
 	LinkedFiles     []string
 }
 
@@ -219,6 +221,7 @@ func scanCandidate(scanner interface{ Scan(dest ...any) error }) (candidate, err
 		&item.Importance,
 		&tags,
 		&item.Staleness,
+		&item.Retention,
 		&linkedFiles,
 		&item.RawRelevance,
 		&createdAt,

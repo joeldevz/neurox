@@ -221,6 +221,108 @@ func (f *failingExtractor) Extract(_ context.Context, _, _ string) (int, error) 
 	return 0, fmt.Errorf("simulated extraction failure")
 }
 
+func TestRetentionRoundTrip(t *testing.T) {
+	tests := []struct {
+		name      string
+		input     Retention
+		wantSaved Retention
+	}{
+		{
+			name:      "default retention is durable",
+			input:     "",
+			wantSaved: RetentionDurable,
+		},
+		{
+			name:      "explicit durable",
+			input:     RetentionDurable,
+			wantSaved: RetentionDurable,
+		},
+		{
+			name:      "explicit operational",
+			input:     RetentionOperational,
+			wantSaved: RetentionOperational,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			store, database := newTestStore(t)
+			defer database.Close()
+
+			ctx := context.Background()
+			saved, err := store.Save(ctx, Observation{
+				Title:     "Retention test: " + tc.name,
+				Content:   "Testing retention round-trip",
+				Retention: tc.input,
+			})
+			if err != nil {
+				t.Fatalf("Save returned error: %v", err)
+			}
+			if saved.Retention != tc.wantSaved {
+				t.Fatalf("saved.Retention = %q, want %q", saved.Retention, tc.wantSaved)
+			}
+
+			got, err := store.Get(ctx, saved.ID)
+			if err != nil {
+				t.Fatalf("Get returned error: %v", err)
+			}
+			if got.Retention != tc.wantSaved {
+				t.Fatalf("Get().Retention = %q, want %q", got.Retention, tc.wantSaved)
+			}
+		})
+	}
+}
+
+func TestRetentionUpdateRoundTrip(t *testing.T) {
+	store, database := newTestStore(t)
+	defer database.Close()
+
+	ctx := context.Background()
+	saved, err := store.Save(ctx, Observation{
+		Title:     "Update retention test",
+		Content:   "Initially durable",
+		Retention: RetentionDurable,
+	})
+	if err != nil {
+		t.Fatalf("Save returned error: %v", err)
+	}
+	if saved.Retention != RetentionDurable {
+		t.Fatalf("initial Retention = %q, want %q", saved.Retention, RetentionDurable)
+	}
+
+	saved.Retention = RetentionOperational
+	updated, err := store.Update(ctx, saved)
+	if err != nil {
+		t.Fatalf("Update returned error: %v", err)
+	}
+	if updated.Retention != RetentionOperational {
+		t.Fatalf("updated.Retention = %q, want %q", updated.Retention, RetentionOperational)
+	}
+
+	got, err := store.Get(ctx, saved.ID)
+	if err != nil {
+		t.Fatalf("Get returned error: %v", err)
+	}
+	if got.Retention != RetentionOperational {
+		t.Fatalf("Get().Retention = %q, want %q", got.Retention, RetentionOperational)
+	}
+}
+
+func TestRetentionValidation(t *testing.T) {
+	store, database := newTestStore(t)
+	defer database.Close()
+
+	ctx := context.Background()
+	_, err := store.Save(ctx, Observation{
+		Title:     "Invalid retention",
+		Content:   "Should fail validation",
+		Retention: "invalid_value",
+	})
+	if err == nil {
+		t.Fatal("expected error for invalid retention, got nil")
+	}
+}
+
 func newTestStore(t *testing.T) (*Store, *sql.DB) {
 	t.Helper()
 	ctx := context.Background()

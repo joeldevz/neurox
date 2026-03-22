@@ -93,7 +93,7 @@ Inspirado en los sistemas de memoria humana, Neurox organiza el conocimiento en 
 
 **Reglas de promocion:**
 - Buffer -> Working: umbral de importancia (0.3) o tipo procedural, con quality gate LLM opcional
-- Working -> Core: accedido 5+ veces Y mayor a 7 dias
+- Working -> Core: accedido 5+ veces Y mayor a 7 dias Y `retention = 'durable'` (observaciones operacionales se quedan en Working)
 - Cada capa tiene su propia tasa de decay segun el tipo de memoria
 
 ## Razonamiento Temporal
@@ -212,6 +212,16 @@ Evaluado en [LongMemEval](https://github.com/xiaowu0162/LongMemEval) (ICLR 2025)
 > FTS5 + BM25 + scoring temporal, sin LLM. 500 preguntas en ~2 minutos.
 
 ## Inicio Rapido
+
+### Instalador interactivo
+
+```bash
+./install.sh
+```
+
+El instalador abre una TUI hecha con Bubble Tea donde puedes elegir el directorio del binario, el directorio de configuracion de Neurox, providers locales o remotos, integraciones de editor y si quieres instalar el git hook en el repo actual.
+
+Antes de escribir nada, te muestra exactamente donde va a guardar la configuracion y que settings de provider hacen falta.
 
 ### Compilar
 
@@ -356,10 +366,10 @@ neurox serve  # API REST en puerto 7438
 
 | Tool | Inputs clave |
 |---|---|
-| `save` | `title`, `content`, `observation_type`, `kind`, `confidence`, `topic_key`, `tags`, `files`, `namespace` |
+| `save` | `title`, `content`, `observation_type`, `kind`, `confidence`, `topic_key`, `tags`, `files`, `namespace`, `retention` |
 | `recall` | `query`, `observation_type`, `kind`, `namespace`, `files`, `include_stale`, `limit` |
 | `context` | `namespace`, `files`, `limit` |
-| `update` | `id`, `title`, `content`, `observation_type`, `kind`, `confidence`, `tags`, `files` |
+| `update` | `id`, `title`, `content`, `observation_type`, `kind`, `confidence`, `tags`, `files`, `retention` |
 | `forget` | `id` |
 | `invalidate` | `observation_id`, `reason`, `replacement_title`, `replacement_content` |
 | `status` | sin inputs |

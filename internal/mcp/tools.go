@@ -38,6 +38,10 @@ func saveTool() mcp.Tool {
 		mcp.WithString("namespace",
 			mcp.Description("Namespace for isolation (default: 'default'). Use one per project."),
 		),
+		mcp.WithString("retention",
+			mcp.Description("Memory retention policy: 'durable' (default, eligible for Core) or 'operational' (stays in fast memory, never promoted to Core). Auto-classified if omitted."),
+			mcp.Enum("operational", "durable"),
+		),
 	)
 }
 
@@ -117,6 +121,10 @@ func updateTool() mcp.Tool {
 		),
 		mcp.WithString("files",
 			mcp.Description("Updated comma-separated file paths"),
+		),
+		mcp.WithString("retention",
+			mcp.Description("Memory retention policy: 'durable' (eligible for Core) or 'operational' (stays in fast memory). If omitted, the existing value is preserved."),
+			mcp.Enum("operational", "durable"),
 		),
 	)
 }

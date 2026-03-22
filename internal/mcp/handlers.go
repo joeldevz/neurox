@@ -11,6 +11,7 @@ import (
 
 	"github.com/mark3labs/mcp-go/mcp"
 
+	"neurox/internal/classify"
 	"neurox/internal/consolidate"
 	"neurox/internal/embed"
 	"neurox/internal/facts"
@@ -82,6 +83,13 @@ func (d *Deps) handleSave(ctx context.Context, req mcp.CallToolRequest) (result 
 	}
 	if files := req.GetString("files", ""); files != "" {
 		obs.Files = splitCSV(files)
+	}
+
+	// Retention: use explicit value if provided, otherwise auto-classify.
+	if ret := req.GetString("retention", ""); ret != "" {
+		obs.Retention = observation.Retention(ret)
+	} else {
+		obs.Retention = classify.InferRetention(obs.Title, obs.ObservationType, obs.Source)
 	}
 
 	// Quality gate: check if worth saving
@@ -182,6 +190,7 @@ func (d *Deps) handleRecall(ctx context.Context, req mcp.CallToolRequest) (resul
 			Confidence:      r.Confidence,
 			Tags:            r.Tags,
 			Staleness:       r.Staleness,
+			Retention:       r.Retention,
 			LinkedFiles:     r.LinkedFiles,
 		})
 	}
@@ -309,6 +318,16 @@ func (d *Deps) handleUpdate(ctx context.Context, req mcp.CallToolRequest) (resul
 	}
 	if files := req.GetString("files", ""); files != "" {
 		obs.Files = splitCSV(files)
+	}
+
+	// Preserve retention: use explicit value, or fetch existing from DB.
+	if ret := req.GetString("retention", ""); ret != "" {
+		obs.Retention = observation.Retention(ret)
+	} else {
+		existing, getErr := d.ObservationStore.Get(ctx, id)
+		if getErr == nil {
+			obs.Retention = existing.Retention
+		}
 	}
 
 	updated, err := d.ObservationStore.Update(ctx, obs)
@@ -867,6 +886,7 @@ type recallResponseItem struct {
 	Confidence      float64  `json:"confidence"`
 	Tags            []string `json:"tags,omitempty"`
 	Staleness       string   `json:"staleness"`
+	Retention       string   `json:"retention"`
 	LinkedFiles     []string `json:"linked_files,omitempty"`
 }
 

@@ -34,7 +34,7 @@ func setupTest(t *testing.T) (*Engine, *db.TestDB) {
 
 	idGen := observation.NewULIDGenerator()
 	linkStore := links.NewStore(database, idGen)
-	mock := &mockLLM{response: "1. Insight one\n2. Insight two\n3. Insight three"}
+	mock := &mockLLM{response: "1. Insight one: patterns emerge from codebase analysis.\n2. Insight two: architecture follows clean layered design.\n3. Insight three: testing covers all critical paths."}
 	engine := NewEngine(database, mock, linkStore, idGen)
 	return engine, &db.TestDB{DB: database}
 }
@@ -180,6 +180,101 @@ func TestRunIdempotent(t *testing.T) {
 	}
 	if result2.ReflectionsCreated != 0 {
 		t.Errorf("run 2: reflections = %d, want 0 (already reflected)", result2.ReflectionsCreated)
+	}
+}
+
+func TestEmptyReflectionRejection(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "neurox.db")
+	database, err := db.Open(context.Background(), dbPath)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	t.Cleanup(func() { database.Close() })
+
+	idGen := observation.NewULIDGenerator()
+	linkStore := links.NewStore(database, idGen)
+
+	tests := []struct {
+		name     string
+		response string
+		wantSave bool
+	}{
+		{
+			name:     "empty response is rejected",
+			response: "",
+			wantSave: false,
+		},
+		{
+			name:     "short response is rejected",
+			response: "Too short",
+			wantSave: false,
+		},
+		{
+			name:     "whitespace-only is rejected",
+			response: "   \n  \t  ",
+			wantSave: false,
+		},
+		{
+			name:     "valid response is saved",
+			response: "1. Insight one: patterns emerge from codebase analysis across multiple packages.\n2. Insight two: architecture follows clean design.",
+			wantSave: true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			mock := &mockLLM{response: tc.response}
+			engine := NewEngine(database, mock, linkStore, idGen)
+
+			// Insert enough observations for ForceReflect
+			for i := 0; i < 5; i++ {
+				database.ExecContext(ctx, `INSERT INTO observations(id, title, content, observation_type, layer, confidence, importance, kind, namespace)
+					VALUES(?, 'obs', 'content for test', 'decision', 1, 0.9, 0.8, 'semantic', ?)`,
+					fmt.Sprintf("EMPTY_%s_%d", tc.name[:4], i), "empty_test_"+tc.name[:4])
+			}
+
+			result, err := engine.ForceReflect(ctx, "empty_test_"+tc.name[:4])
+			if err != nil {
+				t.Fatalf("force reflect: %v", err)
+			}
+
+			if tc.wantSave && result.ReflectionsCreated != 1 {
+				t.Errorf("expected 1 reflection, got %d", result.ReflectionsCreated)
+			}
+			if !tc.wantSave && result.ReflectionsCreated != 0 {
+				t.Errorf("expected 0 reflections (rejected), got %d", result.ReflectionsCreated)
+			}
+		})
+	}
+}
+
+func TestReflectionSavedWithDurableRetention(t *testing.T) {
+	e, tdb := setupTest(t)
+	ctx := context.Background()
+
+	// Insert enough observations for ForceReflect
+	for i := 0; i < 5; i++ {
+		tdb.Exec(t, `INSERT INTO observations(id, title, content, observation_type, layer, confidence, importance, kind, namespace)
+			VALUES(?, 'obs', 'content', 'decision', 1, 0.9, 0.8, 'semantic', 'rettest')`, fmt.Sprintf("RET%04d", i))
+	}
+
+	result, err := e.ForceReflect(ctx, "rettest")
+	if err != nil {
+		t.Fatalf("force reflect: %v", err)
+	}
+	if result.ReflectionsCreated != 1 {
+		t.Fatalf("expected 1 reflection, got %d", result.ReflectionsCreated)
+	}
+
+	// Verify the reflection observation has retention = 'durable'
+	var retention string
+	err = tdb.DB.QueryRowContext(ctx, `SELECT retention FROM observations WHERE source = 'reflection' AND namespace = 'rettest' AND deleted_at IS NULL`).Scan(&retention)
+	if err != nil {
+		t.Fatalf("query retention: %v", err)
+	}
+	if retention != "durable" {
+		t.Errorf("retention = %q, want 'durable'", retention)
 	}
 }
 

@@ -13,6 +13,20 @@ const (
 	DefaultKind            = KindSemantic
 	DefaultConfidence      = 0.7
 	LayerBuffer            = 0
+	DefaultRetention       = RetentionDurable
+)
+
+// Retention controls whether an observation is eligible for Core promotion.
+type Retention string
+
+const (
+	// RetentionOperational marks observations as short-lived execution traces
+	// that should stay in Buffer/Working but never be promoted to Core.
+	RetentionOperational Retention = "operational"
+
+	// RetentionDurable marks observations as stable, reusable knowledge
+	// eligible for promotion to Core.
+	RetentionDurable Retention = "durable"
 )
 
 type ObservationType string
@@ -49,6 +63,7 @@ type Observation struct {
 	Namespace       string
 	Source          string
 	TopicKey        string
+	Retention       Retention
 	Files           []string
 	CreatedAt       time.Time
 	UpdatedAt       time.Time
@@ -69,6 +84,9 @@ func (o *Observation) ApplyDefaults() {
 		o.Confidence = DefaultConfidence
 	}
 	o.Layer = LayerBuffer
+	if strings.TrimSpace(string(o.Retention)) == "" {
+		o.Retention = DefaultRetention
+	}
 	o.Tags = normalizeList(o.Tags)
 	o.Files = normalizeList(o.Files)
 	o.TopicKey = strings.TrimSpace(o.TopicKey)
@@ -92,7 +110,19 @@ func (o Observation) Validate() error {
 	if o.Confidence < 0 || o.Confidence > 1 {
 		return fmt.Errorf("confidence must be between 0 and 1")
 	}
+	if err := o.Retention.Validate(); err != nil {
+		return err
+	}
 	return nil
+}
+
+func (r Retention) Validate() error {
+	switch r {
+	case RetentionOperational, RetentionDurable:
+		return nil
+	default:
+		return fmt.Errorf("invalid retention %q", r)
+	}
 }
 
 func (t ObservationType) Validate() error {

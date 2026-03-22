@@ -2,6 +2,7 @@ package consolidate
 
 import (
 	"context"
+	"database/sql"
 	"path/filepath"
 	"testing"
 	"time"
@@ -143,6 +144,132 @@ func TestFullConsolidationRun(t *testing.T) {
 	tdb.DB.QueryRowContext(ctx, "SELECT COUNT(*) FROM consolidation_runs WHERE status = 'completed'").Scan(&runCount)
 	if runCount != 1 {
 		t.Errorf("expected 1 completed run, got %d", runCount)
+	}
+}
+
+func TestPromoteWorkingToCoreRespectsRetention(t *testing.T) {
+	p, tdb := newTestPipeline(t)
+	ctx := context.Background()
+
+	// Durable + old + accessed → should promote to Core
+	tdb.Exec(t, `INSERT INTO observations(id, title, content, observation_type, layer, confidence, importance, kind, namespace, access_count, retention, created_at)
+		VALUES('DUR1', 'Durable decision', 'content', 'decision', 1, 0.9, 0.8, 'semantic', 'default', 10, 'durable', datetime('now', '-30 days'))`)
+
+	// Operational + old + accessed → should NOT promote to Core (retention blocks it)
+	tdb.Exec(t, `INSERT INTO observations(id, title, content, observation_type, layer, confidence, importance, kind, namespace, access_count, retention, created_at)
+		VALUES('OPS1', 'Step 4 progress', 'content', 'discovery', 1, 0.9, 0.8, 'semantic', 'default', 10, 'operational', datetime('now', '-30 days'))`)
+
+	promoted, err := p.promoteWorkingToCore(ctx)
+	if err != nil {
+		t.Fatalf("promote: %v", err)
+	}
+	if promoted != 1 {
+		t.Errorf("expected 1 promoted to Core, got %d", promoted)
+	}
+
+	assertLayer(t, tdb, "DUR1", 2)
+	assertLayer(t, tdb, "OPS1", 1) // stays in Working
+}
+
+func TestForceRunRespectsRetention(t *testing.T) {
+	p, tdb := newTestPipeline(t)
+	ctx := context.Background()
+
+	// Durable in Buffer → should reach Core via ForceRun
+	tdb.Exec(t, `INSERT INTO observations(id, title, content, observation_type, layer, confidence, importance, kind, namespace, retention)
+		VALUES('FBUF_DUR', 'Architecture decision', 'content', 'decision', 0, 0.9, 0.8, 'semantic', 'default', 'durable')`)
+
+	// Operational in Buffer → should reach Working but NOT Core
+	tdb.Exec(t, `INSERT INTO observations(id, title, content, observation_type, layer, confidence, importance, kind, namespace, retention)
+		VALUES('FBUF_OPS', 'Implement Step 3', 'content', 'discovery', 0, 0.9, 0.8, 'semantic', 'default', 'operational')`)
+
+	err := p.ForceRun(ctx)
+	if err != nil {
+		t.Fatalf("force run: %v", err)
+	}
+
+	assertLayer(t, tdb, "FBUF_DUR", 2) // durable → Core
+	assertLayer(t, tdb, "FBUF_OPS", 1) // operational → Working only
+}
+
+func TestEvictBufferPrefersOperational(t *testing.T) {
+	p, tdb := newTestPipeline(t)
+	ctx := context.Background()
+
+	// Insert bufferCap + 2 observations: half operational, half durable, same importance
+	for i := 0; i < bufferCap; i++ {
+		ret := "durable"
+		if i%2 == 0 {
+			ret = "operational"
+		}
+		tdb.Exec(t, `INSERT INTO observations(id, title, content, observation_type, layer, confidence, importance, kind, namespace, retention)
+			VALUES(?, 'obs', 'content', 'discovery', 0, 0.7, 0.5, 'semantic', 'default', ?)`,
+			idFromInt(i), ret)
+	}
+	// Add 2 more to trigger eviction
+	tdb.Exec(t, `INSERT INTO observations(id, title, content, observation_type, layer, confidence, importance, kind, namespace, retention)
+		VALUES('EXTRA_OPS', 'extra op', 'content', 'discovery', 0, 0.7, 0.5, 'semantic', 'default', 'operational')`)
+	tdb.Exec(t, `INSERT INTO observations(id, title, content, observation_type, layer, confidence, importance, kind, namespace, retention)
+		VALUES('EXTRA_DUR', 'extra dur', 'content', 'discovery', 0, 0.7, 0.5, 'semantic', 'default', 'durable')`)
+
+	evicted, err := p.evictBuffer(ctx)
+	if err != nil {
+		t.Fatalf("evict: %v", err)
+	}
+	if evicted != 2 {
+		t.Errorf("expected 2 evicted, got %d", evicted)
+	}
+
+	// Verify: evicted observations should be operational (since they sort first)
+	var deletedOps, deletedDur int
+	tdb.DB.QueryRowContext(ctx, "SELECT COUNT(*) FROM observations WHERE deleted_at IS NOT NULL AND retention = 'operational'").Scan(&deletedOps)
+	tdb.DB.QueryRowContext(ctx, "SELECT COUNT(*) FROM observations WHERE deleted_at IS NOT NULL AND retention = 'durable'").Scan(&deletedDur)
+
+	if deletedOps < deletedDur {
+		t.Errorf("expected operational observations to be evicted first: ops=%d, dur=%d", deletedOps, deletedDur)
+	}
+}
+
+func TestRetentionLifecycleIntegration(t *testing.T) {
+	p, tdb := newTestPipeline(t)
+	ctx := context.Background()
+
+	// Save one operational observation (step log) in Buffer
+	tdb.Exec(t, `INSERT INTO observations(id, title, content, observation_type, layer, confidence, importance, kind, namespace, retention, consolidation_status)
+		VALUES('LIFE_OPS', 'Implement Step 5', 'Created migration files', 'discovery', 0, 0.9, 0.8, 'semantic', 'lifecycle', 'operational', 'pending')`)
+
+	// Save one durable observation (real decision) in Buffer
+	tdb.Exec(t, `INSERT INTO observations(id, title, content, observation_type, layer, confidence, importance, kind, namespace, retention, consolidation_status)
+		VALUES('LIFE_DUR', 'Use SQLite for storage', 'Decided SQLite with WAL mode for single-writer', 'decision', 0, 0.9, 0.8, 'semantic', 'lifecycle', 'durable', 'pending')`)
+
+	// Run normal consolidation (Run)
+	err := p.Run(ctx)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	// Both should be promoted to Working (Buffer→Working doesn't filter by retention)
+	assertLayer(t, tdb, "LIFE_OPS", 1)
+	assertLayer(t, tdb, "LIFE_DUR", 1)
+
+	// Now simulate conditions for Working→Core (set access_count and old created_at)
+	tdb.Exec(t, `UPDATE observations SET access_count = 10, created_at = datetime('now', '-30 days') WHERE id IN ('LIFE_OPS', 'LIFE_DUR')`)
+
+	// Run ForceRun
+	err = p.ForceRun(ctx)
+	if err != nil {
+		t.Fatalf("ForceRun: %v", err)
+	}
+
+	// Durable should reach Core, operational should stay in Working
+	assertLayer(t, tdb, "LIFE_DUR", 2)
+	assertLayer(t, tdb, "LIFE_OPS", 1) // remains in Working
+
+	// Verify operational observation is NOT deleted
+	var deletedAt sql.NullString
+	tdb.DB.QueryRowContext(ctx, "SELECT deleted_at FROM observations WHERE id = 'LIFE_OPS'").Scan(&deletedAt)
+	if deletedAt.Valid {
+		t.Error("operational observation should not be deleted, just kept in Working")
 	}
 }
 
