@@ -17,6 +17,7 @@ import (
 	mcpserver "github.com/mark3labs/mcp-go/server"
 
 	"neurox/internal/api"
+	benchpkg "neurox/internal/benchmark"
 	"neurox/internal/config"
 	"neurox/internal/consolidate"
 	"neurox/internal/db"
@@ -68,6 +69,11 @@ func main() {
 		return
 	case "help", "--help", "-h":
 		printUsage()
+		return
+	case "benchmark":
+		if err := benchpkg.RunCLI(os.Args[2:]); err != nil {
+			log.Fatalf("benchmark: %v", err)
+		}
 		return
 	}
 
@@ -132,6 +138,9 @@ func printUsage() {
 	fmt.Println()
 	fmt.Println("Visualization:")
 	fmt.Println("  graph            Generate interactive graph visualization")
+	fmt.Println()
+	fmt.Println("Benchmark:")
+	fmt.Println("  benchmark        Run brain benchmark suite (--scale small|medium|large)")
 	fmt.Println()
 	fmt.Println("Setup commands:")
 	fmt.Println("  install          Launch interactive installer")

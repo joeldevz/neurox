@@ -1,0 +1,1707 @@
+{
+  "Dimensions": [
+    {
+      "DimensionName": "Knowledge Evolution",
+      "Category": "cognitive",
+      "Score": 87.5,
+      "Max": 100,
+      "Grade": "A",
+      "Checks": [
+        {
+          "Name": "A1: V2 in results",
+          "Passed": true,
+          "Detail": "v2ID=01KMB9J0TJCHD9WRMP98WP702A found=true results=1"
+        },
+        {
+          "Name": "A1: V1 excluded",
+          "Passed": true,
+          "Detail": "v1ID=01KMB9J0TH9QJV1G95332MWZ8H in_results=false (should be absent, staleness=stale)"
+        },
+        {
+          "Name": "A2: V2 in results",
+          "Passed": true,
+          "Detail": "v2ID=01KMB9J0TKEA9AKVSC1JQDASCP found=true results=1"
+        },
+        {
+          "Name": "A2: V1 excluded",
+          "Passed": true,
+          "Detail": "v1ID=01KMB9J0TKEA9AKVSC1EYJQDH8 in_results=false (should be absent, staleness=stale)"
+        },
+        {
+          "Name": "A3: V2 in results",
+          "Passed": true,
+          "Detail": "v2ID=01KMB9J0TNHB23Z8X4YYTYXT37 found=true results=1"
+        },
+        {
+          "Name": "A3: V1 excluded",
+          "Passed": true,
+          "Detail": "v1ID=01KMB9J0TMTKYZKM72MXEPWXT9 in_results=false (should be absent, staleness=stale)"
+        },
+        {
+          "Name": "A4: V2 in results",
+          "Passed": false,
+          "Detail": "v2ID=01KMB9J0TPW6TY3VP31D9QNXWQ found=false results=0"
+        },
+        {
+          "Name": "A4: V1 excluded",
+          "Passed": true,
+          "Detail": "v1ID=01KMB9J0TNHB23Z8X4Z2N0JCZG in_results=false (should be absent, staleness=stale)"
+        },
+        {
+          "Name": "A5: V2 in results",
+          "Passed": true,
+          "Detail": "v2ID=01KMB9J0TQH2KC3MZHCS3WDYRD found=true results=2"
+        },
+        {
+          "Name": "A5: V1 excluded",
+          "Passed": true,
+          "Detail": "v1ID=01KMB9J0TPW6TY3VP31FGDW5M0 in_results=false (should be absent, staleness=stale)"
+        },
+        {
+          "Name": "A6: V2 in results",
+          "Passed": true,
+          "Detail": "v2ID=01KMB9J0TR3K1PB3GYGNAGSG7T found=true results=1"
+        },
+        {
+          "Name": "A6: V1 excluded",
+          "Passed": true,
+          "Detail": "v1ID=01KMB9J0TR3K1PB3GYGM5CKA1F in_results=false (should be absent, staleness=stale)"
+        },
+        {
+          "Name": "A7: V2 in results",
+          "Passed": true,
+          "Detail": "v2ID=01KMB9J0TTEVK8CKS0HZV4FWED found=true results=2"
+        },
+        {
+          "Name": "A7: V1 excluded",
+          "Passed": true,
+          "Detail": "v1ID=01KMB9J0TSXD21T5BZXR9BV3XT in_results=false (should be absent, staleness=stale)"
+        },
+        {
+          "Name": "A8: V2 in results",
+          "Passed": true,
+          "Detail": "v2ID=01KMB9J0TV2HPTBZQ5AYGMPFTQ found=true results=1"
+        },
+        {
+          "Name": "A8: V1 excluded",
+          "Passed": true,
+          "Detail": "v1ID=01KMB9J0TTEVK8CKS0J3EC2ABG in_results=false (should be absent, staleness=stale)"
+        },
+        {
+          "Name": "A9: V2 in results",
+          "Passed": true,
+          "Detail": "v2ID=01KMB9J0TWTAMNVCMDW0T3EWVV found=true results=3"
+        },
+        {
+          "Name": "A9: V1 excluded",
+          "Passed": true,
+          "Detail": "v1ID=01KMB9J0TWTAMNVCMDVYY7N6MH in_results=false (should be absent, staleness=stale)"
+        },
+        {
+          "Name": "A10: V2 in results",
+          "Passed": true,
+          "Detail": "v2ID=01KMB9J0TX7EWKA3QQZP6VGMFW found=true results=1"
+        },
+        {
+          "Name": "A10: V1 excluded",
+          "Passed": true,
+          "Detail": "v1ID=01KMB9J0TX7EWKA3QQZKJBJMHP in_results=false (should be absent, staleness=stale)"
+        },
+        {
+          "Name": "B1: single active row",
+          "Passed": true,
+          "Detail": "active_count=1 (expected 1), topicKey=bench-db-engine"
+        },
+        {
+          "Name": "B1: content matches V3",
+          "Passed": true,
+          "Detail": "content_match=true, err=\u003cnil\u003e"
+        },
+        {
+          "Name": "B2: single active row",
+          "Passed": true,
+          "Detail": "active_count=1 (expected 1), topicKey=bench-api-version"
+        },
+        {
+          "Name": "B2: content matches V3",
+          "Passed": true,
+          "Detail": "content_match=true, err=\u003cnil\u003e"
+        },
+        {
+          "Name": "B3: single active row",
+          "Passed": true,
+          "Detail": "active_count=1 (expected 1), topicKey=bench-auth-provider"
+        },
+        {
+          "Name": "B3: content matches V3",
+          "Passed": true,
+          "Detail": "content_match=true, err=\u003cnil\u003e"
+        },
+        {
+          "Name": "B4: single active row",
+          "Passed": true,
+          "Detail": "active_count=1 (expected 1), topicKey=bench-cache-layer"
+        },
+        {
+          "Name": "B4: content matches V3",
+          "Passed": true,
+          "Detail": "content_match=true, err=\u003cnil\u003e"
+        },
+        {
+          "Name": "B5: single active row",
+          "Passed": true,
+          "Detail": "active_count=1 (expected 1), topicKey=bench-log-platform"
+        },
+        {
+          "Name": "B5: content matches V3",
+          "Passed": true,
+          "Detail": "content_match=true, err=\u003cnil\u003e"
+        },
+        {
+          "Name": "B6: single active row",
+          "Passed": true,
+          "Detail": "active_count=1 (expected 1), topicKey=bench-deploy-cadence"
+        },
+        {
+          "Name": "B6: content matches V3",
+          "Passed": true,
+          "Detail": "content_match=true, err=\u003cnil\u003e"
+        },
+        {
+          "Name": "B7: single active row",
+          "Passed": true,
+          "Detail": "active_count=1 (expected 1), topicKey=bench-orm-choice"
+        },
+        {
+          "Name": "B7: content matches V3",
+          "Passed": true,
+          "Detail": "content_match=true, err=\u003cnil\u003e"
+        },
+        {
+          "Name": "B8: single active row",
+          "Passed": true,
+          "Detail": "active_count=1 (expected 1), topicKey=bench-message-queue"
+        },
+        {
+          "Name": "B8: content matches V3",
+          "Passed": true,
+          "Detail": "content_match=true, err=\u003cnil\u003e"
+        },
+        {
+          "Name": "B9: single active row",
+          "Passed": true,
+          "Detail": "active_count=1 (expected 1), topicKey=bench-frontend-framework"
+        },
+        {
+          "Name": "B9: content matches V3",
+          "Passed": true,
+          "Detail": "content_match=true, err=\u003cnil\u003e"
+        },
+        {
+          "Name": "B10: single active row",
+          "Passed": true,
+          "Detail": "active_count=1 (expected 1), topicKey=bench-state-management"
+        },
+        {
+          "Name": "B10: content matches V3",
+          "Passed": true,
+          "Detail": "content_match=true, err=\u003cnil\u003e"
+        },
+        {
+          "Name": "C1: V2 ranks above V1",
+          "Passed": true,
+          "Detail": "v2_rank=0 v1_rank=-1 results=2"
+        },
+        {
+          "Name": "C1: V1 is stale",
+          "Passed": true,
+          "Detail": "v1_staleness=\"stale\""
+        },
+        {
+          "Name": "C1: supersedes link exists",
+          "Passed": true,
+          "Detail": "replacementID=01KMB9J0V8XGYBK3RMFN1N6841 v1ID=01KMB9J0V7R7F2DSQCFB5CRQ7B link_found=true"
+        },
+        {
+          "Name": "C2: V2 ranks above V1",
+          "Passed": true,
+          "Detail": "v2_rank=0 v1_rank=-1 results=3"
+        },
+        {
+          "Name": "C2: V1 is stale",
+          "Passed": true,
+          "Detail": "v1_staleness=\"stale\""
+        },
+        {
+          "Name": "C2: supersedes link exists",
+          "Passed": true,
+          "Detail": "replacementID=01KMB9J0VAJYGZ8S4N5TF9XQJA v1ID=01KMB9J0V9P3H13H3R24AK7E03 link_found=true"
+        },
+        {
+          "Name": "C3: V2 ranks above V1",
+          "Passed": true,
+          "Detail": "v2_rank=0 v1_rank=-1 results=3"
+        },
+        {
+          "Name": "C3: V1 is stale",
+          "Passed": true,
+          "Detail": "v1_staleness=\"stale\""
+        },
+        {
+          "Name": "C3: supersedes link exists",
+          "Passed": true,
+          "Detail": "replacementID=01KMB9J0VDWBEYA7S8CK13YSGK v1ID=01KMB9J0VB07PYR6WZBZ5TT4EX link_found=true"
+        },
+        {
+          "Name": "C4: V2 ranks above V1",
+          "Passed": true,
+          "Detail": "v2_rank=0 v1_rank=-1 results=2"
+        },
+        {
+          "Name": "C4: V1 is stale",
+          "Passed": true,
+          "Detail": "v1_staleness=\"stale\""
+        },
+        {
+          "Name": "C4: supersedes link exists",
+          "Passed": true,
+          "Detail": "replacementID=01KMB9J0VWR9WR6Z7NB487FK11 v1ID=01KMB9J0VEV2E9HEK7NRWGN7PV link_found=true"
+        },
+        {
+          "Name": "C5: V2 ranks above V1",
+          "Passed": true,
+          "Detail": "v2_rank=0 v1_rank=-1 results=2"
+        },
+        {
+          "Name": "C5: V1 is stale",
+          "Passed": true,
+          "Detail": "v1_staleness=\"stale\""
+        },
+        {
+          "Name": "C5: supersedes link exists",
+          "Passed": true,
+          "Detail": "replacementID=01KMB9J0VYSN5D56R5KBM3A363 v1ID=01KMB9J0VX97093ZQJG0M0XA5N link_found=true"
+        },
+        {
+          "Name": "C6: V2 ranks above V1",
+          "Passed": true,
+          "Detail": "v2_rank=0 v1_rank=-1 results=3"
+        },
+        {
+          "Name": "C6: V1 is stale",
+          "Passed": true,
+          "Detail": "v1_staleness=\"stale\""
+        },
+        {
+          "Name": "C6: supersedes link exists",
+          "Passed": true,
+          "Detail": "replacementID=01KMB9J0W088H2676YSXTCBZRJ v1ID=01KMB9J0VZZE9VXD2Z3ZTG1QH1 link_found=true"
+        },
+        {
+          "Name": "C7: V2 ranks above V1",
+          "Passed": true,
+          "Detail": "v2_rank=0 v1_rank=-1 results=7"
+        },
+        {
+          "Name": "C7: V1 is stale",
+          "Passed": true,
+          "Detail": "v1_staleness=\"stale\""
+        },
+        {
+          "Name": "C7: supersedes link exists",
+          "Passed": true,
+          "Detail": "replacementID=01KMB9J0W2M0KCMWBK60E1GHFV v1ID=01KMB9J0W088H2676YSYRDZDQZ link_found=true"
+        },
+        {
+          "Name": "C8: V2 ranks above V1",
+          "Passed": true,
+          "Detail": "v2_rank=0 v1_rank=-1 results=3"
+        },
+        {
+          "Name": "C8: V1 is stale",
+          "Passed": true,
+          "Detail": "v1_staleness=\"stale\""
+        },
+        {
+          "Name": "C8: supersedes link exists",
+          "Passed": true,
+          "Detail": "replacementID=01KMB9J0W4DQ61CPVBX58AZ73T v1ID=01KMB9J0W2M0KCMWBK64SREAJC link_found=true"
+        },
+        {
+          "Name": "C9: V2 ranks above V1",
+          "Passed": true,
+          "Detail": "v2_rank=1 v1_rank=-1 results=3"
+        },
+        {
+          "Name": "C9: V1 is stale",
+          "Passed": true,
+          "Detail": "v1_staleness=\"stale\""
+        },
+        {
+          "Name": "C9: supersedes link exists",
+          "Passed": true,
+          "Detail": "replacementID=01KMB9J0W61VVZA19TRDZYFN9T v1ID=01KMB9J0W4DQ61CPVBX7T4G1Z4 link_found=true"
+        },
+        {
+          "Name": "C10: V2 ranks above V1",
+          "Passed": true,
+          "Detail": "v2_rank=0 v1_rank=-1 results=4"
+        },
+        {
+          "Name": "C10: V1 is stale",
+          "Passed": true,
+          "Detail": "v1_staleness=\"stale\""
+        },
+        {
+          "Name": "C10: supersedes link exists",
+          "Passed": true,
+          "Detail": "replacementID=01KMB9J0W965VNDDBMGR5EGRE3 v1ID=01KMB9J0W8E73J1P89CJF4NA8K link_found=true"
+        },
+        {
+          "Name": "D1: V2 ranks higher than V1",
+          "Passed": false,
+          "Detail": "v2_rank=1 v1_rank=0 results=3 v2ID=01KMB9J0WAVC4ADN81ZYHCJR8H v1ID=01KMB9J0WAVC4ADN81ZWSTJW94"
+        },
+        {
+          "Name": "D2: V2 ranks higher than V1",
+          "Passed": false,
+          "Detail": "v2_rank=1 v1_rank=0 results=3 v2ID=01KMB9J0WBTYJ9RXQ390TA0C2C v1ID=01KMB9J0WAVC4ADN8201T2EWSB"
+        },
+        {
+          "Name": "D3: V2 ranks higher than V1",
+          "Passed": false,
+          "Detail": "v2_rank=1 v1_rank=0 results=4 v2ID=01KMB9J0WBTYJ9RXQ393K6RDC9 v1ID=01KMB9J0WBTYJ9RXQ392KEH65P"
+        },
+        {
+          "Name": "D4: V2 ranks higher than V1",
+          "Passed": false,
+          "Detail": "v2_rank=1 v1_rank=0 results=4 v2ID=01KMB9J0WCHXF00DDFJA0ECTW2 v1ID=01KMB9J0WCHXF00DDFJ896B577"
+        },
+        {
+          "Name": "D5: V2 ranks higher than V1",
+          "Passed": false,
+          "Detail": "v2_rank=1 v1_rank=0 results=4 v2ID=01KMB9J0WD9ZW7DES40DM8M0XH v1ID=01KMB9J0WD9ZW7DES40BNT9TNM"
+        }
+      ],
+      "Metrics": {
+        "checks_passed": 69,
+        "checks_total": 75,
+        "recall_rate": 92
+      },
+      "Errors": null,
+      "Duration": 61101406
+    },
+    {
+      "DimensionName": "Signal vs Noise",
+      "Category": "cognitive",
+      "Score": 97.63157894736842,
+      "Max": 100,
+      "Grade": "S",
+      "Checks": [
+        {
+          "Name": "A: ≥3 of 5 signals in top-10 context",
+          "Passed": true,
+          "Detail": "signals_found=5/5 in top-10 context (total_items=20)"
+        },
+        {
+          "Name": "A: ≥4 of 5 signals in top-10 context",
+          "Passed": true,
+          "Detail": "signals_found=5/5 in top-10 context"
+        },
+        {
+          "Name": "A: all 5 signals in top-10 context",
+          "Passed": true,
+          "Detail": "signals_found=5/5 in top-10 context"
+        },
+        {
+          "Name": "B1: decision in top-3 recall",
+          "Passed": true,
+          "Detail": "domain=authentication results=10 dec1=01KMB9J0ZGG0S8NQ7Z0862T4RJ dec2=01KMB9J0ZGG0S8NQ7Z0AXV8TGM"
+        },
+        {
+          "Name": "B2: decision in top-3 recall",
+          "Passed": true,
+          "Detail": "domain=database results=10 dec1=01KMB9J0ZPB8SH7GFE96V6E4BH dec2=01KMB9J0ZPB8SH7GFE97K1F1QC"
+        },
+        {
+          "Name": "B3: decision in top-3 recall",
+          "Passed": true,
+          "Detail": "domain=caching results=4 dec1=01KMB9J0ZV279W2SY2E8SN2T6V dec2=01KMB9J1044008HRTM3MFQA2KN"
+        },
+        {
+          "Name": "B4: decision in top-3 recall",
+          "Passed": true,
+          "Detail": "domain=deployment results=10 dec1=01KMB9J10DP15A44N3086Q8PZR dec2=01KMB9J10DP15A44N30B5STJ0E"
+        },
+        {
+          "Name": "B5: decision in top-3 recall",
+          "Passed": true,
+          "Detail": "domain=monitoring results=10 dec1=01KMB9J10J7SV9NCKSM84CXW4V dec2=01KMB9J10J7SV9NCKSM8S86A96"
+        },
+        {
+          "Name": "C1: Implement Step 1: setup databa → operational",
+          "Passed": true,
+          "Detail": "expected operational, got operational (type=discovery source=\"consolidator\")"
+        },
+        {
+          "Name": "C2: Step 2: wire up handlers → operational",
+          "Passed": true,
+          "Detail": "expected operational, got operational (type=decision source=\"consolidator\")"
+        },
+        {
+          "Name": "C3: Plan completed successfully → operational",
+          "Passed": true,
+          "Detail": "expected operational, got operational (type=pattern source=\"consolidator\")"
+        },
+        {
+          "Name": "C4: Build flags configured for FTS → operational",
+          "Passed": true,
+          "Detail": "expected operational, got operational (type=config source=\"consolidator\")"
+        },
+        {
+          "Name": "C5: File observations indexed for  → operational",
+          "Passed": true,
+          "Detail": "expected operational, got operational (type=discovery source=\"consolidator\")"
+        },
+        {
+          "Name": "C6: Reflection on architecture pat → durable",
+          "Passed": true,
+          "Detail": "expected durable, got durable (type=pattern source=\"reflection\")"
+        },
+        {
+          "Name": "C7: Reflection: database access co → durable",
+          "Passed": true,
+          "Detail": "expected durable, got durable (type=discovery source=\"reflection\")"
+        },
+        {
+          "Name": "C8: Reflection: error handling ins → durable",
+          "Passed": true,
+          "Detail": "expected durable, got durable (type=preference source=\"reflection\")"
+        },
+        {
+          "Name": "C9: Reflection: testing strategy s → durable",
+          "Passed": true,
+          "Detail": "expected durable, got durable (type=decision source=\"reflection\")"
+        },
+        {
+          "Name": "C10: Reflection: deployment gotchas → durable",
+          "Passed": true,
+          "Detail": "expected durable, got durable (type=gotcha source=\"reflection\")"
+        },
+        {
+          "Name": "C11: Implement Step 3: add signal n → operational",
+          "Passed": true,
+          "Detail": "expected operational, got operational (type=discovery source=\"\")"
+        },
+        {
+          "Name": "C12: Step 4: wire consolidation pip → operational",
+          "Passed": true,
+          "Detail": "expected operational, got operational (type=discovery source=\"\")"
+        },
+        {
+          "Name": "C13: Plan completed: benchmark suit → operational",
+          "Passed": true,
+          "Detail": "expected operational, got operational (type=decision source=\"\")"
+        },
+        {
+          "Name": "C14: Build flags: enable CGO and FT → operational",
+          "Passed": true,
+          "Detail": "expected operational, got operational (type=config source=\"\")"
+        },
+        {
+          "Name": "C15: File observations linked to so → operational",
+          "Passed": true,
+          "Detail": "expected operational, got operational (type=discovery source=\"\")"
+        },
+        {
+          "Name": "C16: Embeddings queue imported and  → operational",
+          "Passed": true,
+          "Detail": "expected operational, got operational (type=discovery source=\"\")"
+        },
+        {
+          "Name": "C17: Step 7 implemented temporal me → operational",
+          "Passed": true,
+          "Detail": "expected operational, got operational (type=discovery source=\"\")"
+        },
+        {
+          "Name": "C18: Implement Step 9: add benchmar → operational",
+          "Passed": true,
+          "Detail": "expected operational, got operational (type=discovery source=\"\")"
+        },
+        {
+          "Name": "C19: Renamed local variables in han → operational",
+          "Passed": true,
+          "Detail": "expected operational, got operational (type=discovery source=\"\")"
+        },
+        {
+          "Name": "C20: Named return values fixed in M → operational",
+          "Passed": true,
+          "Detail": "expected operational, got operational (type=discovery source=\"\")"
+        },
+        {
+          "Name": "C21: Authentication strategy chosen → durable",
+          "Passed": true,
+          "Detail": "expected durable, got durable (type=decision source=\"\")"
+        },
+        {
+          "Name": "C22: Database selected: PostgreSQL → durable",
+          "Passed": true,
+          "Detail": "expected durable, got durable (type=decision source=\"\")"
+        },
+        {
+          "Name": "C23: API versioning approach decide → durable",
+          "Passed": true,
+          "Detail": "expected durable, got durable (type=decision source=\"\")"
+        },
+        {
+          "Name": "C24: Monorepo structure approved by → durable",
+          "Passed": true,
+          "Detail": "expected durable, got durable (type=decision source=\"\")"
+        },
+        {
+          "Name": "C25: Cache invalidation strategy ag → durable",
+          "Passed": true,
+          "Detail": "expected durable, got durable (type=decision source=\"\")"
+        },
+        {
+          "Name": "C26: Gotcha: Redis KEYS blocks even → durable",
+          "Passed": true,
+          "Detail": "expected durable, got durable (type=gotcha source=\"\")"
+        },
+        {
+          "Name": "C27: Gotcha: CORS preflight require → durable",
+          "Passed": true,
+          "Detail": "expected durable, got durable (type=gotcha source=\"\")"
+        },
+        {
+          "Name": "C28: Gotcha: JWT rotation race cond → durable",
+          "Passed": true,
+          "Detail": "expected durable, got durable (type=gotcha source=\"\")"
+        },
+        {
+          "Name": "C29: Gotcha: pg pool exhaustion und → durable",
+          "Passed": true,
+          "Detail": "expected durable, got durable (type=gotcha source=\"\")"
+        },
+        {
+          "Name": "C30: Gotcha: Docker build cache inv → durable",
+          "Passed": true,
+          "Detail": "expected durable, got durable (type=gotcha source=\"\")"
+        },
+        {
+          "Name": "C31: Pattern: repository pattern fo → durable",
+          "Passed": true,
+          "Detail": "expected durable, got durable (type=pattern source=\"\")"
+        },
+        {
+          "Name": "C32: Pattern: circuit breaker for e → durable",
+          "Passed": true,
+          "Detail": "expected durable, got durable (type=pattern source=\"\")"
+        },
+        {
+          "Name": "C33: Pattern: optimistic UI updates → durable",
+          "Passed": true,
+          "Detail": "expected durable, got durable (type=pattern source=\"\")"
+        },
+        {
+          "Name": "C34: Pattern: event sourcing for or → durable",
+          "Passed": true,
+          "Detail": "expected durable, got durable (type=pattern source=\"\")"
+        },
+        {
+          "Name": "C35: Pattern: saga for distributed  → durable",
+          "Passed": true,
+          "Detail": "expected durable, got durable (type=pattern source=\"\")"
+        },
+        {
+          "Name": "C36: Preference: named exports over → durable",
+          "Passed": true,
+          "Detail": "expected durable, got durable (type=preference source=\"\")"
+        },
+        {
+          "Name": "C37: Preference: Result type for er → durable",
+          "Passed": true,
+          "Detail": "expected durable, got durable (type=preference source=\"\")"
+        },
+        {
+          "Name": "C38: Preference: structured logging → durable",
+          "Passed": true,
+          "Detail": "expected durable, got durable (type=preference source=\"\")"
+        },
+        {
+          "Name": "C39: Preference: commit message con → durable",
+          "Passed": true,
+          "Detail": "expected durable, got durable (type=preference source=\"\")"
+        },
+        {
+          "Name": "C40: Preference: snake_case for dat → durable",
+          "Passed": true,
+          "Detail": "expected durable, got durable (type=preference source=\"\")"
+        },
+        {
+          "Name": "C41: Bug: null pointer in session h → durable",
+          "Passed": true,
+          "Detail": "expected durable, got durable (type=bugfix source=\"\")"
+        },
+        {
+          "Name": "C42: Bug: race condition in token r → durable",
+          "Passed": true,
+          "Detail": "expected durable, got durable (type=bugfix source=\"\")"
+        },
+        {
+          "Name": "C43: Bug: missing index causes slow → durable",
+          "Passed": true,
+          "Detail": "expected durable, got durable (type=bugfix source=\"\")"
+        },
+        {
+          "Name": "C44: Discovery: BullMQ job deduplic → durable",
+          "Passed": true,
+          "Detail": "expected durable, got durable (type=discovery source=\"\")"
+        },
+        {
+          "Name": "C45: Discovery: Zod schemas shareab → durable",
+          "Passed": true,
+          "Detail": "expected durable, got durable (type=discovery source=\"\")"
+        },
+        {
+          "Name": "C46: Discovery: pgvector requires s → durable",
+          "Passed": true,
+          "Detail": "expected durable, got durable (type=discovery source=\"\")"
+        },
+        {
+          "Name": "C47: Config: environment variable n → durable",
+          "Passed": true,
+          "Detail": "expected durable, got durable (type=config source=\"\")"
+        },
+        {
+          "Name": "C48: Config: Kubernetes pod resourc → durable",
+          "Passed": true,
+          "Detail": "expected durable, got durable (type=config source=\"\")"
+        },
+        {
+          "Name": "C49: Question: should we adopt Grap → durable",
+          "Passed": true,
+          "Detail": "expected durable, got durable (type=question source=\"\")"
+        },
+        {
+          "Name": "C50: Question: what retry strategy  → durable",
+          "Passed": true,
+          "Detail": "expected durable, got durable (type=question source=\"\")"
+        },
+        {
+          "Name": "D: durable avg importance \u003e operational avg importance",
+          "Passed": true,
+          "Detail": "durable_avg=0.4400 operational_avg=0.4000"
+        },
+        {
+          "Name": "D: durable avg importance \u003e 0.3",
+          "Passed": true,
+          "Detail": "durable_avg=0.4400 threshold=0.3"
+        },
+        {
+          "Name": "D: operational avg importance \u003c durable avg importance",
+          "Passed": true,
+          "Detail": "operational_avg=0.4000 durable_avg=0.4400"
+        }
+      ],
+      "Metrics": {
+        "checks_passed": 61,
+        "checks_total": 61,
+        "classification_accuracy": 100,
+        "recall_rate": 100,
+        "signals_in_top10": 5
+      },
+      "Errors": null,
+      "Duration": 206282093
+    },
+    {
+      "DimensionName": "Cross-Session Memory",
+      "Category": "cognitive",
+      "Score": 33.333333333333336,
+      "Max": 100,
+      "Grade": "F",
+      "Checks": [
+        {
+          "Name": "A1: tabs preference survives",
+          "Passed": true,
+          "Detail": "id=01KMB9J12WRZ264P4C49MKZ3T6 found_in_top10=true results=2"
+        },
+        {
+          "Name": "A2: English commits preference survives",
+          "Passed": true,
+          "Detail": "id=01KMB9J12WRZ264P4C4D0SSNCD found_in_top10=true results=2"
+        },
+        {
+          "Name": "A3: strict TypeScript preference survives",
+          "Passed": false,
+          "Detail": "id=01KMB9J12XCQYTFHJ4YBVTV5VS found_in_top10=false results=2"
+        },
+        {
+          "Name": "A4: named exports preference survives",
+          "Passed": false,
+          "Detail": "id=01KMB9J12XCQYTFHJ4YC5NA95A found_in_top10=false results=2"
+        },
+        {
+          "Name": "A5: conventional commits preference survives",
+          "Passed": false,
+          "Detail": "id=01KMB9J12XCQYTFHJ4YD6S3RMT found_in_top10=false results=2"
+        },
+        {
+          "Name": "A6: dark mode preference survives",
+          "Passed": false,
+          "Detail": "id=01KMB9J12XCQYTFHJ4YG2E9V31 found_in_top10=false results=2"
+        },
+        {
+          "Name": "A7: functional components preference survives",
+          "Passed": false,
+          "Detail": "id=01KMB9J12YSJXV37WR9RR2P31Z found_in_top10=false results=2"
+        },
+        {
+          "Name": "A8: pnpm preference survives",
+          "Passed": false,
+          "Detail": "id=01KMB9J12YSJXV37WR9VRHTSVK found_in_top10=false results=2"
+        },
+        {
+          "Name": "A9: Result type preference survives",
+          "Passed": false,
+          "Detail": "id=01KMB9J12ZW4MRSGHPD055MK99 found_in_top10=false results=2"
+        },
+        {
+          "Name": "A10: JSDoc preference survives",
+          "Passed": false,
+          "Detail": "id=01KMB9J12ZW4MRSGHPD2GGKFJD found_in_top10=false results=2"
+        },
+        {
+          "Name": "B1: microservices decision found",
+          "Passed": true,
+          "Detail": "id=01KMB9J13401PX5ASJ563GMECV found=true results=2"
+        },
+        {
+          "Name": "B2: PostgreSQL decision found",
+          "Passed": false,
+          "Detail": "id=01KMB9J135AE5J7SDWWSQWDBF7 found=false results=2"
+        },
+        {
+          "Name": "B3: Redis decision found",
+          "Passed": false,
+          "Detail": "id=01KMB9J135AE5J7SDWWX40ZKRP found=false results=2"
+        },
+        {
+          "Name": "B4: Kong API gateway decision found",
+          "Passed": false,
+          "Detail": "id=01KMB9J135AE5J7SDWX03418JH found=false results=2"
+        },
+        {
+          "Name": "B5: Datadog monitoring decision found",
+          "Passed": true,
+          "Detail": "id=01KMB9J135AE5J7SDWX3HMSKGJ found=true results=2"
+        },
+        {
+          "Name": "B6: CI/CD decision found",
+          "Passed": false,
+          "Detail": "id=01KMB9J136ZZGRA9FX71PCAT5B found=false results=2"
+        },
+        {
+          "Name": "C1: auth middleware found via file link",
+          "Passed": true,
+          "Detail": "id=01KMB9J136ZZGRA9FX741TFSVV found=true total_items=5 file=src/middleware/auth.ts"
+        },
+        {
+          "Name": "C2: rate limiter found via file link",
+          "Passed": true,
+          "Detail": "id=01KMB9J137FCDZ1ZEJXR6VA71F found=true total_items=5 file=src/middleware/rateLimit.ts"
+        },
+        {
+          "Name": "C3: database config found via file link",
+          "Passed": true,
+          "Detail": "id=01KMB9J137FCDZ1ZEJXYJBTZA9 found=true total_items=5 file=src/lib/db.ts"
+        },
+        {
+          "Name": "C4: error handler found via file link",
+          "Passed": true,
+          "Detail": "id=01KMB9J138YRTAJGDZ0M9TYVVH found=true total_items=5 file=src/middleware/errorHandler.ts"
+        },
+        {
+          "Name": "C5: health check found via file link",
+          "Passed": true,
+          "Detail": "id=01KMB9J138YRTAJGDZ0TKG6SFV found=true total_items=5 file=src/routes/health.ts"
+        },
+        {
+          "Name": "D1: session started successfully",
+          "Passed": true,
+          "Detail": "session_id=01KMB9J138YRTAJGDZ0Y854DMA namespace=bench-cross-d"
+        },
+        {
+          "Name": "D2: session ended without error",
+          "Passed": true,
+          "Detail": "end_err=\u003cnil\u003e"
+        },
+        {
+          "Name": "D3: session has correct namespace",
+          "Passed": true,
+          "Detail": "db_namespace=\"bench-cross-d\" expected=\"bench-cross-d\" db_err=\u003cnil\u003e"
+        }
+      ],
+      "Metrics": {
+        "checks_passed": 12,
+        "checks_total": 24,
+        "recall_rate": 50
+      },
+      "Errors": null,
+      "Duration": 12244104
+    },
+    {
+      "DimensionName": "Temporal Cognition",
+      "Category": "cognitive",
+      "Score": 97.46913580246914,
+      "Max": 100,
+      "Grade": "S",
+      "Checks": [
+        {
+          "Name": "A1: V3 in top-5 current results",
+          "Passed": true,
+          "Detail": "v3ID=01KMB9J139M87KTGNFMM6ZT5RW found=true results=5 tech=Node"
+        },
+        {
+          "Name": "A2: V3 in top-5 current results",
+          "Passed": true,
+          "Detail": "v3ID=01KMB9J13A0WB3ZB4PBMERR0PY found=true results=5 tech=Postgres"
+        },
+        {
+          "Name": "A3: V3 in top-5 current results",
+          "Passed": true,
+          "Detail": "v3ID=01KMB9J13CTZ2JC85C8NASNG7S found=true results=5 tech=React"
+        },
+        {
+          "Name": "A4: V3 in top-5 current results",
+          "Passed": true,
+          "Detail": "v3ID=01KMB9J13DT8PDWBAMQW9V03V5 found=true results=5 tech=TypeScript"
+        },
+        {
+          "Name": "A5: V3 in top-5 current results",
+          "Passed": true,
+          "Detail": "v3ID=01KMB9J13VZRB4N56ZP2EG4EN9 found=true results=5 tech=Python"
+        },
+        {
+          "Name": "B1: appears in history results",
+          "Passed": true,
+          "Detail": "id=01KMB9J13WTM84VBXGAND2ME6Y found=true results=2"
+        },
+        {
+          "Name": "B2: appears in history results",
+          "Passed": true,
+          "Detail": "id=01KMB9J13WTM84VBXGARK8K89V found=true results=2"
+        },
+        {
+          "Name": "B3: appears in history results",
+          "Passed": false,
+          "Detail": "id=01KMB9J13WTM84VBXGARTCSDKC found=false results=2"
+        },
+        {
+          "Name": "C1: temporal intent detected",
+          "Passed": true,
+          "Detail": "query=\"When did we migrate to React?\" got=\"when\" expected=\"when\""
+        },
+        {
+          "Name": "C1: observation found in results",
+          "Passed": true,
+          "Detail": "id=01KMB9J13XKPV7BWPB5QRE51WX found=true results=1"
+        },
+        {
+          "Name": "C2: temporal intent detected",
+          "Passed": true,
+          "Detail": "query=\"When was Redis deployed for caching?\" got=\"when\" expected=\"when\""
+        },
+        {
+          "Name": "C2: observation found in results",
+          "Passed": true,
+          "Detail": "id=01KMB9J13YYJQ0JK1FX1ATPH93 found=true results=1"
+        },
+        {
+          "Name": "C3: temporal intent detected",
+          "Passed": true,
+          "Detail": "query=\"When did the security audit happen?\" got=\"when\" expected=\"when\""
+        },
+        {
+          "Name": "C3: observation found in results",
+          "Passed": true,
+          "Detail": "id=01KMB9J13YYJQ0JK1FX214YQDJ found=true results=1"
+        },
+        {
+          "Name": "C4: temporal intent detected",
+          "Passed": true,
+          "Detail": "query=\"When did we migrate to PostgreSQL?\" got=\"when\" expected=\"when\""
+        },
+        {
+          "Name": "C4: observation found in results",
+          "Passed": true,
+          "Detail": "id=01KMB9J13ZMS7WW2JBXX0G6TKQ found=true results=1"
+        },
+        {
+          "Name": "C5: temporal intent detected",
+          "Passed": true,
+          "Detail": "query=\"When did we adopt Kubernetes?\" got=\"when\" expected=\"when\""
+        },
+        {
+          "Name": "C5: observation found in results",
+          "Passed": true,
+          "Detail": "id=01KMB9J1408F3JNGV2Y1E7BNEH found=true results=1"
+        },
+        {
+          "Name": "D1: episodic decays faster than semantic",
+          "Passed": true,
+          "Detail": "episodic=0.3000 semantic=0.3800"
+        },
+        {
+          "Name": "D2: semantic decays faster than procedural",
+          "Passed": true,
+          "Detail": "semantic=0.3800 procedural=0.4600"
+        },
+        {
+          "Name": "D3: episodic \u003c semantic \u003c procedural ordering",
+          "Passed": true,
+          "Detail": "episodic=0.3000 semantic=0.3800 procedural=0.4600"
+        },
+        {
+          "Name": "E1: parser no panic + result",
+          "Passed": true,
+          "Detail": "input=\"2026-03-15\" got_kind=\"absolute\" expected_kind=\"absolute\" results=1"
+        },
+        {
+          "Name": "E2: parser no panic + result",
+          "Passed": true,
+          "Detail": "input=\"March 15, 2026\" got_kind=\"absolute\" expected_kind=\"absolute\" results=1"
+        },
+        {
+          "Name": "E3: parser no panic + result",
+          "Passed": true,
+          "Detail": "input=\"15 de marzo de 2026\" got_kind=\"absolute\" expected_kind=\"absolute\" results=1"
+        },
+        {
+          "Name": "E4: parser no panic + result",
+          "Passed": true,
+          "Detail": "input=\"yesterday\" got_kind=\"relative\" expected_kind=\"relative\" results=1"
+        },
+        {
+          "Name": "E5: parser no panic + result",
+          "Passed": true,
+          "Detail": "input=\"3 days ago\" got_kind=\"relative\" expected_kind=\"relative\" results=1"
+        },
+        {
+          "Name": "E6: parser no panic + result",
+          "Passed": true,
+          "Detail": "input=\"hace 2 semanas\" got_kind=\"relative\" expected_kind=\"relative\" results=1"
+        },
+        {
+          "Name": "E7: parser no panic + result",
+          "Passed": true,
+          "Detail": "input=\"currently\" got_kind=\"current_state\" expected_kind=\"current_state\" results=1"
+        },
+        {
+          "Name": "E8: parser no panic + result",
+          "Passed": true,
+          "Detail": "input=\"at the moment\" got_kind=\"current_state\" expected_kind=\"current_state\" results=1"
+        },
+        {
+          "Name": "E9: parser no panic + result",
+          "Passed": true,
+          "Detail": "input=\"for 30 days\" got_kind=\"duration\" expected_kind=\"duration\" results=1"
+        },
+        {
+          "Name": "E10: parser no panic + result",
+          "Passed": false,
+          "Detail": "input=\"since March 2025\" got_kind=\"absolute\" expected_kind=\"duration\" results=2"
+        },
+        {
+          "Name": "E11: parser no panic + result",
+          "Passed": true,
+          "Detail": "input=\"last week we deployed the service\" got_kind=\"relative\" expected_kind=\"relative\" results=1"
+        },
+        {
+          "Name": "E12: parser no panic + result",
+          "Passed": true,
+          "Detail": "input=\"two weeks ago the migration finished\" got_kind=\"relative\" expected_kind=\"relative\" results=1"
+        },
+        {
+          "Name": "E13: parser no panic + result",
+          "Passed": true,
+          "Detail": "input=\"\" results=0 (no panic required only)"
+        },
+        {
+          "Name": "E14: parser no panic + result",
+          "Passed": true,
+          "Detail": "input=\"no temporal expression here at all, just plain text about code\" results=0 (no panic required only)"
+        },
+        {
+          "Name": "E15: parser no panic + result",
+          "Passed": true,
+          "Detail": "input=\"2026-03-01 and yesterday and currently running\" results=3 (no panic required only)"
+        }
+      ],
+      "Metrics": {
+        "checks_passed": 34,
+        "checks_total": 36,
+        "recall_rate": 94.44444444444444
+      },
+      "Errors": null,
+      "Duration": 56410753
+    },
+    {
+      "DimensionName": "30-Day Brain Simulation",
+      "Category": "cognitive",
+      "Score": 62.5,
+      "Max": 100,
+      "Grade": "C",
+      "Checks": [
+        {
+          "Name": "CP01: framework is React",
+          "Passed": true,
+          "Detail": "query=\"What framework does the project use?\" results=10"
+        },
+        {
+          "Name": "CP02: API framework is Fastify not Express",
+          "Passed": false,
+          "Detail": "query=\"What API framework do we use?\" results=10"
+        },
+        {
+          "Name": "CP03: database is PostgreSQL",
+          "Passed": true,
+          "Detail": "query=\"What database does the project use?\" results=10"
+        },
+        {
+          "Name": "CP04: auth method is ES256 not RS256",
+          "Passed": false,
+          "Detail": "query=\"What authentication method do we use?\" results=10"
+        },
+        {
+          "Name": "CP05: user preferences found",
+          "Passed": false,
+          "Detail": "query=\"User preferences\" results=4"
+        },
+        {
+          "Name": "CP06: bugs discovered",
+          "Passed": false,
+          "Detail": "query=\"What bugs were found?\" results=1"
+        },
+        {
+          "Name": "CP07: gotchas present",
+          "Passed": false,
+          "Detail": "query=\"What gotchas should I know?\" results=0"
+        },
+        {
+          "Name": "CP08: patterns present",
+          "Passed": false,
+          "Detail": "query=\"Project patterns and conventions\" results=10"
+        },
+        {
+          "Name": "CP09: Node version is 20",
+          "Passed": true,
+          "Detail": "query=\"Current Node version\" results=2"
+        },
+        {
+          "Name": "CP10: TypeScript version is 5.3",
+          "Passed": true,
+          "Detail": "query=\"Current TypeScript version\" results=6"
+        },
+        {
+          "Name": "CP11: file context for src/auth.ts",
+          "Passed": true,
+          "Detail": "files=[src/auth.ts] items=10"
+        },
+        {
+          "Name": "CP12: file context for src/db.ts",
+          "Passed": true,
+          "Detail": "files=[src/db.ts] items=10"
+        },
+        {
+          "Name": "CP13: Redis usage found",
+          "Passed": true,
+          "Detail": "query=\"Redis usage in project\" results=10"
+        },
+        {
+          "Name": "CP14: Docker configuration found",
+          "Passed": true,
+          "Detail": "query=\"Docker configuration\" results=5"
+        },
+        {
+          "Name": "CP15: CI/CD pipeline found",
+          "Passed": true,
+          "Detail": "query=\"CI/CD pipeline\" results=1"
+        },
+        {
+          "Name": "CP16: architecture decisions found",
+          "Passed": false,
+          "Detail": "query=\"Architecture decisions\" results=0"
+        },
+        {
+          "Name": "CP17: API change history includes Fastify",
+          "Passed": true,
+          "Detail": "query=\"What changed in the API?\" results=7"
+        },
+        {
+          "Name": "CP18: deployment infrastructure found",
+          "Passed": true,
+          "Detail": "query=\"Deployment and infrastructure\" results=10"
+        },
+        {
+          "Name": "CP19: error handling approach found",
+          "Passed": true,
+          "Detail": "query=\"Error handling approach\" results=3"
+        },
+        {
+          "Name": "CP20: caching strategy found",
+          "Passed": true,
+          "Detail": "query=\"Caching strategy\" results=1"
+        }
+      ],
+      "Metrics": {
+        "checks_passed": 13,
+        "checks_total": 20,
+        "recall_rate": 65
+      },
+      "Errors": null,
+      "Duration": 67709569
+    },
+    {
+      "DimensionName": "Write Throughput",
+      "Category": "performance",
+      "Score": 100,
+      "Max": 100,
+      "Grade": "S",
+      "Checks": null,
+      "Metrics": {
+        "p50_ms": 0,
+        "p95_ms": 0,
+        "p99_ms": 8,
+        "throughput_ops_s": 2341.320155626783,
+        "total_count": 10000
+      },
+      "Errors": null,
+      "Duration": 4271737263
+    },
+    {
+      "DimensionName": "Recall Performance",
+      "Category": "performance",
+      "Score": 95.08541215591184,
+      "Max": 100,
+      "Grade": "S",
+      "Checks": null,
+      "Metrics": {
+        "p50_ms": 1,
+        "p95_ms": 5,
+        "p99_ms": 6,
+        "queries_run": 50,
+        "throughput_ops_s": 500.85412155911837
+      },
+      "Errors": null,
+      "Duration": 4907085319
+    },
+    {
+      "DimensionName": "Concurrent Writes",
+      "Category": "performance",
+      "Score": 100,
+      "Max": 100,
+      "Grade": "S",
+      "Checks": [
+        {
+          "Name": "zero write errors",
+          "Passed": true,
+          "Detail": "errors=0 total_writes=4000"
+        },
+        {
+          "Name": "correct total count",
+          "Passed": true,
+          "Detail": "db_count=4000 expected=4000"
+        }
+      ],
+      "Metrics": {
+        "db_count": 4000,
+        "goroutines": 8,
+        "per_goroutine": 500,
+        "throughput_ops_s": 2276.6647281549504,
+        "total_writes": 4000,
+        "write_errors": 0
+      },
+      "Errors": null,
+      "Duration": 1759311879
+    },
+    {
+      "DimensionName": "Context Retrieval",
+      "Category": "performance",
+      "Score": 97,
+      "Max": 100,
+      "Grade": "S",
+      "Checks": null,
+      "Metrics": {
+        "avg_ms": 0.45524200000000004,
+        "p50_ms": 0,
+        "p95_ms": 0,
+        "p99_ms": 0
+      },
+      "Errors": null,
+      "Duration": 1241670792
+    },
+    {
+      "DimensionName": "Lazy vs Perfect Agent",
+      "Category": "agent",
+      "Score": 73.40909090909092,
+      "Max": 100,
+      "Grade": "B",
+      "Checks": [
+        {
+          "Name": "Q1: lazy finds expected obs",
+          "Passed": true,
+          "Detail": "query=\"JWT authentication bug\" expectedKey=\"JWT\" lazy_rank=0 results=2"
+        },
+        {
+          "Name": "Q1: perfect finds expected obs",
+          "Passed": true,
+          "Detail": "query=\"JWT authentication bug\" expectedKey=\"JWT\" perfect_rank=0 results=1"
+        },
+        {
+          "Name": "Q1: perfect outranks lazy",
+          "Passed": true,
+          "Detail": "lazy_rank=0 perfect_rank=0"
+        },
+        {
+          "Name": "Q2: lazy finds expected obs",
+          "Passed": false,
+          "Detail": "query=\"what bugs have we found\" expectedKey=\"bug\" lazy_rank=-1 results=0"
+        },
+        {
+          "Name": "Q2: perfect finds expected obs",
+          "Passed": true,
+          "Detail": "query=\"what bugs have we found\" expectedKey=\"bug\" perfect_rank=0 results=2"
+        },
+        {
+          "Name": "Q2: perfect outranks lazy",
+          "Passed": true,
+          "Detail": "lazy_rank=-1 perfect_rank=0"
+        },
+        {
+          "Name": "Q3: lazy finds expected obs",
+          "Passed": false,
+          "Detail": "query=\"user preferences code style\" expectedKey=\"Preference\" lazy_rank=-1 results=0"
+        },
+        {
+          "Name": "Q3: perfect finds expected obs",
+          "Passed": true,
+          "Detail": "query=\"user preferences code style\" expectedKey=\"Preference\" perfect_rank=0 results=2"
+        },
+        {
+          "Name": "Q3: perfect outranks lazy",
+          "Passed": true,
+          "Detail": "lazy_rank=-1 perfect_rank=0"
+        },
+        {
+          "Name": "Q4: lazy finds expected obs",
+          "Passed": true,
+          "Detail": "query=\"database configuration PostgreSQL\" expectedKey=\"PostgreSQL\" lazy_rank=0 results=2"
+        },
+        {
+          "Name": "Q4: perfect finds expected obs",
+          "Passed": true,
+          "Detail": "query=\"database configuration PostgreSQL\" expectedKey=\"PostgreSQL\" perfect_rank=0 results=2"
+        },
+        {
+          "Name": "Q4: perfect outranks lazy",
+          "Passed": true,
+          "Detail": "lazy_rank=0 perfect_rank=0"
+        },
+        {
+          "Name": "Q5: lazy finds expected obs",
+          "Passed": false,
+          "Detail": "query=\"architecture decisions microservices\" expectedKey=\"microservices\" lazy_rank=-1 results=0"
+        },
+        {
+          "Name": "Q5: perfect finds expected obs",
+          "Passed": true,
+          "Detail": "query=\"architecture decisions microservices\" expectedKey=\"microservices\" perfect_rank=0 results=1"
+        },
+        {
+          "Name": "Q5: perfect outranks lazy",
+          "Passed": true,
+          "Detail": "lazy_rank=-1 perfect_rank=0"
+        },
+        {
+          "Name": "Q6: lazy finds expected obs",
+          "Passed": false,
+          "Detail": "query=\"what gotchas should I know\" expectedKey=\"Gotcha\" lazy_rank=-1 results=0"
+        },
+        {
+          "Name": "Q6: perfect finds expected obs",
+          "Passed": false,
+          "Detail": "query=\"what gotchas should I know\" expectedKey=\"Gotcha\" perfect_rank=-1 results=0"
+        },
+        {
+          "Name": "Q6: perfect outranks lazy",
+          "Passed": false,
+          "Detail": "lazy_rank=-1 perfect_rank=-1"
+        },
+        {
+          "Name": "Q7: lazy finds expected obs",
+          "Passed": false,
+          "Detail": "query=\"patterns and conventions logging\" expectedKey=\"Pattern\" lazy_rank=-1 results=0"
+        },
+        {
+          "Name": "Q7: perfect finds expected obs",
+          "Passed": true,
+          "Detail": "query=\"patterns and conventions logging\" expectedKey=\"Pattern\" perfect_rank=0 results=1"
+        },
+        {
+          "Name": "Q7: perfect outranks lazy",
+          "Passed": true,
+          "Detail": "lazy_rank=-1 perfect_rank=0"
+        },
+        {
+          "Name": "Q8: lazy finds expected obs",
+          "Passed": true,
+          "Detail": "query=\"TypeScript coding style\" expectedKey=\"TypeScript\" lazy_rank=0 results=3"
+        },
+        {
+          "Name": "Q8: perfect finds expected obs",
+          "Passed": true,
+          "Detail": "query=\"TypeScript coding style\" expectedKey=\"TypeScript\" perfect_rank=0 results=4"
+        },
+        {
+          "Name": "Q8: perfect outranks lazy",
+          "Passed": true,
+          "Detail": "lazy_rank=0 perfect_rank=0"
+        },
+        {
+          "Name": "Q9: lazy finds expected obs",
+          "Passed": true,
+          "Detail": "query=\"deployment Kubernetes configuration\" expectedKey=\"Kubernetes\" lazy_rank=0 results=1"
+        },
+        {
+          "Name": "Q9: perfect finds expected obs",
+          "Passed": true,
+          "Detail": "query=\"deployment Kubernetes configuration\" expectedKey=\"Kubernetes\" perfect_rank=0 results=2"
+        },
+        {
+          "Name": "Q9: perfect outranks lazy",
+          "Passed": true,
+          "Detail": "lazy_rank=0 perfect_rank=0"
+        },
+        {
+          "Name": "Q10: perfect health_check score \u003e lazy health_check score",
+          "Passed": true,
+          "Detail": "perfect_score=46 lazy_score=17"
+        },
+        {
+          "Name": "lazy agent finds ≥60% of expected observations",
+          "Passed": false,
+          "Detail": "44% (4/9 queries)"
+        },
+        {
+          "Name": "perfect agent finds ≥80% of expected observations",
+          "Passed": true,
+          "Detail": "89% (8/9 queries)"
+        },
+        {
+          "Name": "perfect outranks lazy on ≥70% of queries",
+          "Passed": false,
+          "Detail": "44% (4/9 queries)"
+        },
+        {
+          "Name": "all 20 lazy observations saved",
+          "Passed": true,
+          "Detail": "20/20 saved"
+        },
+        {
+          "Name": "all 20 perfect observations saved",
+          "Passed": true,
+          "Detail": "20/20 saved"
+        }
+      ],
+      "Metrics": {
+        "checks_passed": 24,
+        "checks_total": 33,
+        "lazy_find_rate": 44.44444444444444,
+        "lazy_health_score": 17,
+        "observations_saved": 20,
+        "perfect_find_rate": 88.88888888888889,
+        "perfect_health_score": 46,
+        "perfect_outrank_rate": 44.44444444444444,
+        "recall_rate": 72.72727272727273
+      },
+      "Errors": null,
+      "Duration": 68285677
+    },
+    {
+      "DimensionName": "Agent Workflow Correctness",
+      "Category": "agent",
+      "Score": 100,
+      "Max": 100,
+      "Grade": "S",
+      "Checks": [
+        {
+          "Name": "WA: session_start creates session",
+          "Passed": true,
+          "Detail": "session_id=\"01KMB9JD6A1VG4BE83XY7CZCTB\" err=\u003cnil\u003e"
+        },
+        {
+          "Name": "WA: all 5 observations saved via MCP",
+          "Passed": true,
+          "Detail": "saved=5 expected=5"
+        },
+        {
+          "Name": "WA: context returns saved observations",
+          "Passed": true,
+          "Detail": "count=5 err=\u003cnil\u003e"
+        },
+        {
+          "Name": "WA: recall finds saved observations",
+          "Passed": true,
+          "Detail": "count=1 err=\u003cnil\u003e found_react=true"
+        },
+        {
+          "Name": "WA: session_end completes session",
+          "Passed": true,
+          "Detail": "session_id=\"01KMB9JD6A1VG4BE83XY7CZCTB\" err=\u003cnil\u003e"
+        },
+        {
+          "Name": "WB: v1 saved with topic_key",
+          "Passed": true,
+          "Detail": "id=\"01KMB9JD6T16BZ12F8HF1DGMAE\" err=\u003cnil\u003e"
+        },
+        {
+          "Name": "WB: v2 upsert with same topic_key succeeds",
+          "Passed": true,
+          "Detail": "id=\"01KMB9JD6T16BZ12F8HF1DGMAE\" v1_id=\"01KMB9JD6T16BZ12F8HF1DGMAE\" err=\u003cnil\u003e"
+        },
+        {
+          "Name": "WB: recall returns latest topic_key value (Node 20)",
+          "Passed": true,
+          "Detail": "count=1 err=\u003cnil\u003e"
+        },
+        {
+          "Name": "WB: base observation for invalidation saved",
+          "Passed": true,
+          "Detail": "id=\"01KMB9JD6V4Y6RTPY2YCJ51AMY\" err=\u003cnil\u003e"
+        },
+        {
+          "Name": "WB: invalidate replaces old framework with Fastify",
+          "Passed": true,
+          "Detail": "invalidated=\"01KMB9JD6V4Y6RTPY2YCJ51AMY\" replacement=\"01KMB9JD6V4Y6RTPY2YD0X30MP\" err=\u003cnil\u003e"
+        },
+        {
+          "Name": "WB: recall returns Fastify after invalidation",
+          "Passed": true,
+          "Detail": "count=1 err=\u003cnil\u003e fastify_found=true"
+        },
+        {
+          "Name": "WB: status shows expected observation counts",
+          "Passed": true,
+          "Detail": "total=3 stale=1 err=\u003cnil\u003e"
+        },
+        {
+          "Name": "WC: all 10 observations saved",
+          "Passed": true,
+          "Detail": "saved=10 expected=10"
+        },
+        {
+          "Name": "WC: precise queries ≥60% success rate",
+          "Passed": true,
+          "Detail": "100% (5/5)"
+        },
+        {
+          "Name": "WC: precise queries outperform vague queries",
+          "Passed": true,
+          "Detail": "precise=5 vague=0"
+        },
+        {
+          "Name": "WC: overall precision_success_rate ≥40%",
+          "Passed": true,
+          "Detail": "100% (10/10)"
+        },
+        {
+          "Name": "WC: precision_success_rate \u003e vague_success_rate",
+          "Passed": true,
+          "Detail": "precise=100% vague=30%"
+        },
+        {
+          "Name": "WD: all 30 mixed observations saved",
+          "Passed": true,
+          "Detail": "total=30 durable=10 pattern=10 noise=10"
+        },
+        {
+          "Name": "WD: status before consolidation shows observations",
+          "Passed": true,
+          "Detail": "total=30 buffer=30 err=\u003cnil\u003e"
+        },
+        {
+          "Name": "WD: consolidate executes via MCP",
+          "Passed": true,
+          "Detail": "buffer=0 working=0 core=30 err=\u003cnil\u003e"
+        },
+        {
+          "Name": "WD: status after consolidation still shows observations",
+          "Passed": true,
+          "Detail": "total=30 buffer=0 working=0 core=30 err=\u003cnil\u003e"
+        },
+        {
+          "Name": "WD: recall works after consolidation",
+          "Passed": true,
+          "Detail": "count=8 err=\u003cnil\u003e"
+        },
+        {
+          "Name": "WD: context accessible after consolidation",
+          "Passed": true,
+          "Detail": "count=20 err=\u003cnil\u003e"
+        },
+        {
+          "Name": "WE: file-linked observation saved",
+          "Passed": true,
+          "Detail": "id=\"01KMB9JDA0JJXCCCTV8R00THNW\" err=\u003cnil\u003e"
+        },
+        {
+          "Name": "WE: non-linked control observation saved",
+          "Passed": true,
+          "Detail": "id=\"01KMB9JDA0JJXCCCTV8YRH26J4\" err=\u003cnil\u003e"
+        },
+        {
+          "Name": "WE: file-linked observation found before git_hook",
+          "Passed": true,
+          "Detail": "count=1 err=\u003cnil\u003e found=true"
+        },
+        {
+          "Name": "WE: git_hook processes changed file",
+          "Passed": true,
+          "Detail": "result=map[commit_sha:abc1234def5678 files_processed:1 message:git hook processed observations_staled:1] err=\u003cnil\u003e"
+        },
+        {
+          "Name": "WE: status shows stale observation after git_hook",
+          "Passed": true,
+          "Detail": "stale=1 total=2 err=\u003cnil\u003e"
+        },
+        {
+          "Name": "WE: stale observation discoverable with include_stale",
+          "Passed": true,
+          "Detail": "count=1 err=\u003cnil\u003e"
+        },
+        {
+          "Name": "WE: context call succeeds after git_hook",
+          "Passed": true,
+          "Detail": "count=2 err=\u003cnil\u003e"
+        }
+      ],
+      "Metrics": {
+        "checks_passed": 30,
+        "checks_total": 30,
+        "pass_rate": 100
+      },
+      "Errors": null,
+      "Duration": 141285872
+    },
+    {
+      "DimensionName": "Param Richness Impact",
+      "Category": "agent",
+      "Score": 90.83333333333334,
+      "Max": 100,
+      "Grade": "A",
+      "Checks": [
+        {
+          "Name": "Level 1 (title+content): all 10 observations saved",
+          "Passed": true,
+          "Detail": "saved=10 expected=10"
+        },
+        {
+          "Name": "Level 2 (+type+kind): all 10 observations saved",
+          "Passed": true,
+          "Detail": "saved=10 expected=10"
+        },
+        {
+          "Name": "Level 3 (+tags+namespace): all 10 observations saved",
+          "Passed": true,
+          "Detail": "saved=10 expected=10"
+        },
+        {
+          "Name": "Level 4 (+files+topic_key): all 10 observations saved",
+          "Passed": true,
+          "Detail": "saved=10 expected=10"
+        },
+        {
+          "Name": "Level 5 (+confidence+retention): all 10 observations saved",
+          "Passed": true,
+          "Detail": "saved=10 expected=10"
+        },
+        {
+          "Name": "Level 1 (title+content): recall hit rate",
+          "Passed": true,
+          "Detail": "100% (10/10)"
+        },
+        {
+          "Name": "Level 2 (+type+kind): recall hit rate",
+          "Passed": true,
+          "Detail": "100% (10/10)"
+        },
+        {
+          "Name": "Level 3 (+tags+namespace): recall hit rate",
+          "Passed": true,
+          "Detail": "100% (10/10)"
+        },
+        {
+          "Name": "Level 4 (+files+topic_key): recall hit rate",
+          "Passed": true,
+          "Detail": "100% (10/10)"
+        },
+        {
+          "Name": "Level 5 (+confidence+retention): recall hit rate",
+          "Passed": true,
+          "Detail": "100% (10/10)"
+        },
+        {
+          "Name": "Level 5 outperforms Level 1 on recall",
+          "Passed": false,
+          "Detail": "L5=100% L1=100%"
+        },
+        {
+          "Name": "Level 3+ finds ≥80% of observations",
+          "Passed": true,
+          "Detail": "L3=100% L4=100% L5=100%"
+        },
+        {
+          "Name": "Richer params (L4+L5) recall better than minimal params (L1+L2)",
+          "Passed": false,
+          "Detail": "L4+L5 avg=100% L1+L2 avg=100%"
+        },
+        {
+          "Name": "Classification auto-correct works (InferRetention)",
+          "Passed": true,
+          "Detail": "100% (10/10) correct, expected=durable for all corpus obs"
+        },
+        {
+          "Name": "Namespace isolation works (no cross-namespace leakage)",
+          "Passed": true,
+          "Detail": "L3 ns=\"bench-param-level3\" queried from L4 harness → count=0 (expected 0)"
+        }
+      ],
+      "Metrics": {
+        "checks_passed": 13,
+        "checks_total": 15,
+        "classify_accuracy": 100,
+        "level1_hit_rate": 100,
+        "level2_hit_rate": 100,
+        "level3_hit_rate": 100,
+        "level3plus_80pct": 1,
+        "level4_hit_rate": 100,
+        "level5_beats_level1": 0,
+        "level5_hit_rate": 100,
+        "namespace_isolated": 1,
+        "pass_rate": 86.66666666666667
+      },
+      "Errors": null,
+      "Duration": 151093191
+    }
+  ],
+  "OverallScore": 86.23015704012558,
+  "Grade": "A",
+  "Duration": 12944227693,
+  "Scale": "large",
+  "Recommendations": [
+    "Improve Cross-Session Memory (grade F, gap 66.7 pts)",
+    "Improve 30-Day Brain Simulation (grade C, gap 37.5 pts)",
+    "Improve Lazy vs Perfect Agent (grade B, gap 26.6 pts)"
+  ]
+}

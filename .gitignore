@@ -6,6 +6,7 @@ neurox
 
 # Erroneous tilde directory
 ~/
-benchmarks
+benchmarks/*.json
+!benchmarks/results_2026-03-22_large.json
 .claude
 .ruff_cache

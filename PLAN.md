@@ -1,183 +1,678 @@
-# Plan: Separate Fast Memory from Core Knowledge
+# Plan: Neurox Brain Benchmark — Cognitive + Performance Stress Test
 
 ## Goal
-Implement a clear memory lifecycle so Neurox keeps operational tracking and step-by-step execution context in fast memory (Buffer/Working) without automatically promoting it into Core, while Core only retains stable, generalized, reusable knowledge for the project namespace.
+Build a dual-axis benchmark suite that tests both **cognitive quality** (can Neurox remember the right thing at the right time?) and **performance** (can it do so fast and at scale?). The cognitive half simulates realistic multi-session agent workflows with ground-truth answers. The performance half stress-tests throughput, concurrency, and scale. Together they produce a scored "Brain Benchmark" report card.
 
 ## Business Context
-- **Problem**: The current memory store mixes durable project knowledge with task logs like `Step 4`, `Plan completed`, build-success notes, and overly literal consolidator outputs. This pollutes long-term recall and makes Core less trustworthy.
-- **Desired behavior**: Execution traces, plans, and short-term progress notes should remain available for recent context and traceability, but they should not become top long-term memories unless they are generalized into a durable lesson.
-- **Preservation rule**: Consolidating Buffer should not delete useful short-term memories by default. Consolidation should reorganize, summarize, downgrade visibility, or promote selectively.
-- **Core rule**: Core should only contain stable project knowledge such as business decisions, generalized architecture, durable gotchas, conventions, and reusable patterns.
-- **Edge cases**:
-  - Reflections should not be stored if they are empty or low-signal.
-  - Personal/user metadata should not be stored in the project namespace unless it is truly project-scoped.
-  - Existing step/plan memories already in Core need a migration path so the new policy improves current data, not only future saves.
+- **Problem**: Current benchmarking covers raw speed (2 Go benchmarks) and retrieval quality on an academic dataset (LongMemEval). Neither tests the full cognitive pipeline: save → consolidate → decay → recall → invalidate → re-recall → context. The system needs a benchmark that answers: "If an agent used Neurox for 30 days on a real project, would it remember the right things?"
+- **Current LongMemEval baselines**: global recall_any@10 = 29.6%, temporal-reasoning = 14.9%, single-session-assistant = 1.8%.
+- **Difficulty**: Three tiers — Base (current state), Target (meaningful improvement), Elite (near-impossible without architectural changes).
+- **Output**: `neurox benchmark` CLI command with lipgloss scorecard + JSON export. Standard Go benchmarks for CI.
 
 ## Technical Context
-- **Schema** (`internal/db/schema.sql`): Models `layer` (0/1/2), `staleness`, `kind`, `source`, `consolidation_status` (`pending/promoted/rejected/rejected-2/rejected-final`), but has no explicit retention or promotion policy for operational vs durable memory. FTS5 virtual table `observations_fts` syncs via triggers on `id`, `title`, `content`, `tags` — no retention field needed in FTS since it's used for filtering, not full-text search.
-- **Migration system** (`internal/db/db.go`): Numbered `.sql` files embedded via `//go:embed`, registered in `var migrations` slice. Current: `schema.sql` (v1), `002_temporal_mentions.sql` (v2), `003_tool_calls.sql` (v3). Next migration is `004_retention_policy.sql` (v4).
-- **Promotion pipeline** (`internal/consolidate/pipeline.go`):
-  - `promoteBufferToWorking()`: importance >= 0.3 or procedural; with LLM gate for gray zone.
-  - `promoteWorkingToCore()`: `access_count >= 5` AND `age >= 7 days` — no content-quality or retention check.
-  - `ForceRun()`: Promotes **everything** from Buffer→Working→Core unconditionally (lines 144-166) — worst offender for pollution.
-  - `evictBuffer()`: Soft-deletes lowest-importance Buffer observations when count exceeds cap (200).
-- **Reflection engine** (`internal/reflect/engine.go`): `saveReflection()` does raw `INSERT INTO observations` with hardcoded `layer=2, confidence=0.9, importance=0.9` (line 237-239), **bypassing the observation Store entirely** — no validation, no retention classification, no write gate.
-- **Proactive context** (`internal/proactive/context.go`): `getTopActivation()` sorts by `layer DESC, importance DESC`, so any high-layer junk dominates startup context.
-- **Observation model** (`internal/observation/observation.go`): No first-class retention concept. `ApplyDefaults()` forces `Layer = 0` on all new saves.
-- **Write paths that create observations** (all must be aware of retention):
-  1. MCP `handleSave` → `observation.Store.Save()` (has LLM SaveGate)
-  2. HTTP `handleSave` → `observation.Store.Save()` (no SaveGate)
-  3. `reflect/engine.go` `saveReflection()` → raw SQL INSERT (bypasses Store)
-  4. `consolidate/pipeline.go` dedup/eviction → only deletes, no creation issue
-- **Health check** (`internal/health/health.go`): `checkConsolidationHealth()` scores based on layer distribution and consolidation runs. Changes to promotion behavior may shift the expected ratios.
-- **Existing `consolidation_status`**: Tracks the lifecycle of _whether_ an observation was promoted, not _whether it should be_. The new `retention` field is orthogonal — an operational observation can have `consolidation_status = 'promoted'` (promoted to Working for short-term use) while `retention = 'operational'` (never eligible for Core).
+
+### Key cognitive flows to test (each becomes a narrative scenario)
+1. **Save → Recall**: Can it find what was saved?
+2. **Save → Consolidate → Recall**: Does consolidation preserve accessibility?
+3. **Save V1 → Invalidate → Save V2 → Recall**: Does it return V2, not V1?
+4. **Save operational + durable → Consolidate → Context**: Does context prioritize durable over operational?
+5. **Save across sessions → Recall connecting them**: Cross-session memory
+6. **Save with temporal info → Temporal query**: Temporal reasoning correctness
+7. **High noise + rare signal → Recall signal**: Signal-to-noise filtering
+8. **Decay over time → Recall important vs trivial**: Ebbinghaus curve correctness
+9. **Concurrent saves → Recall consistency**: No lost writes
+10. **File-linked observations → Git hook → Context**: Staleness pipeline
+
+### Architecture
+- New package: `internal/benchmark/` — engine, scenarios, generators, scoring, report
+- CLI command: `neurox benchmark` with `--scale small|medium|large`
+- Cognitive tests use **narrative scenarios** — a scripted sequence of operations that simulates real agent usage, with expected outcomes checked at each checkpoint
+- Performance tests use standard Go benchmark patterns
+- `FakeEmbedder` — deterministic 384-dim vectors from content hash, enabling hybrid recall testing without Ollama
+
+### Patterns
+- `-tags fts5` required
+- `db.Open()` with temp dirs for isolation
+- Mock LLM (`llm.Disabled{}`) + `llm.GateModeOff` for deterministic consolidation
+- `mockLLM` with canned responses for session extraction and reflection scenarios
+- Table-driven scenarios with `[]struct{ name, setup, query, expected }`
 
 ## Implementation Steps
 
-### Step 1: Add retention field to schema and observation model
+### Step 1: Benchmark framework, FakeEmbedder, and data generators
 - **What**:
-  1. Create `internal/db/004_retention_policy.sql` with `ALTER TABLE observations ADD COLUMN retention TEXT NOT NULL DEFAULT 'durable' CHECK (retention IN ('operational', 'durable'))`.
-  2. Register migration v4 in `db.go`: add `//go:embed 004_retention_policy.sql` directive and entry in `var migrations` slice.
-  3. Add `Retention` field to `observation.Observation` struct with type `Retention string` and constants `RetentionOperational = "operational"`, `RetentionDurable = "durable"`.
-  4. Update `ApplyDefaults()` to default `Retention` to `RetentionDurable` if empty.
-  5. Update `Validate()` to check `Retention` is valid.
-  6. Update `Store.saveTx()` and `Store.Update()` SQL to include the `retention` column.
-  7. Update `Store.getTx()` scan to read `retention`.
-  8. FTS5 triggers do NOT need changes — `retention` is used for filtering, not text search.
-- **Why**: The schema cannot currently distinguish a step log from a stable architectural decision, so promotion rules are forced to guess.
-- **Where**: `internal/db/004_retention_policy.sql` (new), `internal/db/db.go`, `internal/observation/observation.go`, `internal/observation/store.go`.
+  1. Create `internal/benchmark/benchmark.go`:
+     - `Suite` — registers dimensions, runs them in order, produces `Report`
+     - `Dimension` interface — `Name() string`, `Category() string`, `Run(ctx, *BenchEnv) DimensionResult`
+     - `BenchEnv` — shared environment with temp DB, stores, engines, config, FakeEmbedder
+     - `DimensionResult` — score (0-100), max, metrics map, passed checks, failed checks, errors, latencies
+     - `Report` — all dimensions, overall score, letter grade (S/A/B/C/D/F), duration, recommendations
+     - `ScaleConfig` — small (1K), medium (10K), large (100K) base observation counts
+  2. Create `internal/benchmark/env.go`:
+     - `NewBenchEnv(scale)` — creates isolated temp DB, initializes all stores (observation, recall, links, facts, session, temporal, consolidate, proactive, decay, classify)
+     - Uses FakeEmbedder, mock LLM, disabled gate for deterministic behavior
+     - `Close()` for cleanup
+  3. Create `internal/benchmark/fake_embedder.go`:
+     - `FakeEmbedder` — implements `embed.Provider`
+     - `Embed(text)` — hashes text with FNV-1a, uses bits to seed a deterministic 384-dim float32 vector
+     - Semantically similar texts (shared words) produce closer vectors via additive word-vector composition
+     - `EmbedBatch` — calls Embed per item
+     - This is critical: enables testing hybrid recall, dedup, contradiction detection, semantic context — all without Ollama
+  4. Create `internal/benchmark/generator.go`:
+     - `GenerateProjectHistory(env, days int) ProjectHistory` — generates a realistic multi-day project history:
+       - Day 1-3: Architecture decisions, tech stack choices, initial patterns
+       - Day 5-10: Bug discoveries, gotchas, config changes
+       - Day 12-20: Preference updates, pattern refinements, knowledge updates (old→new)
+       - Day 22-30: Consolidation-worthy vs operational noise
+       - Each observation has realistic title/content, correct types/kinds/tags/files/retention
+     - `GenerateFacts(n)`, `GenerateLinks(obsIDs, density)`, `GenerateSessions(n)`
+  5. Create `internal/benchmark/scoring.go`:
+     - Three-tier thresholds per dimension: Base/Target/Elite
+     - Letter grading: S (>95%), A (>85%), B (>70%), C (>55%), D (>40%), F (≤40%)
+     - Weighted average for overall score
+  6. Create `internal/benchmark/report.go`:
+     - Lipgloss-styled terminal output: colored scorecard, per-dimension bars, overall grade
+     - JSON export with full metrics
+     - Recommendations list for worst-scoring dimensions
+- **Why**: The framework, FakeEmbedder, and project history generator must exist before any cognitive or performance test. The FakeEmbedder is the most critical piece — it unlocks testing the entire hybrid pipeline deterministically.
+- **Where**: `internal/benchmark/*.go`
 - **Acceptance**:
-  - Migration runs successfully on existing databases; `retention` column exists with default `'durable'`.
-  - `Observation` struct has `Retention` field; `ApplyDefaults` and `Validate` handle it.
-  - `Save`, `Update`, and `Get` round-trip the `retention` field correctly.
-  - Existing saves continue to work with `'durable'` as safe default.
-  - `go test -tags fts5 ./internal/observation/... ./internal/db/...` passes.
-- **Tests** (in this step): Add table-driven test in `observation/store_test.go` verifying retention round-trip and default behavior.
+  - `BenchEnv` creates and tears down isolated DB with all stores
+  - FakeEmbedder produces consistent vectors; similar texts produce higher cosine similarity
+  - ProjectHistory generates 30 days of realistic observations with ground-truth metadata
+  - Scoring evaluates against 3-tier thresholds
+  - Report renders colored terminal output and valid JSON
+  - `go build -tags fts5 ./internal/benchmark/...` passes
+  - `go vet ./internal/benchmark/...` passes
 - **Status**: [x] done
 
-### Step 2: Wire retention into all write paths and add classification logic
-- **What**:
-  1. Create `internal/classify/classify.go` with a centralized `InferRetention(title, content, observationType, source string) Retention` function that applies heuristic rules:
-     - `source == "consolidator"` → `operational`
-     - `source == "reflection"` → `durable` (but subject to quality check in Step 3)
-     - Title matches step/plan patterns (e.g., `"Implement Step"`, `"Step N:"`, `"Plan completed"`, `"Build flags"`) → `operational`
-     - `observation_type` in `{decision, gotcha, pattern, preference}` → `durable`
-     - `observation_type` in `{bugfix, discovery, config, question}` → `durable` (default)
-     - Fallback → `durable`
-  2. MCP `handleSave`: if caller does not explicitly provide `retention`, call `InferRetention()` to auto-classify.
-  3. HTTP `handleSave`: same — call `InferRetention()` when retention is not provided.
-  4. Expose `retention` as an optional MCP tool parameter so agents can explicitly mark operational saves (e.g., session summaries, plan tracking).
-  5. **Fix `reflect/engine.go` `saveReflection()`**: Refactor to either use `observation.Store.Save()` or at minimum include the `retention` column in the raw INSERT. Add a quality guard: reject and skip persistence if `strings.TrimSpace(content) == ""` or content length < 50 chars.
-  6. Add tests for `classify.InferRetention()` with table-driven cases.
-- **Why**: If classification only happens at consolidation time, polluted data keeps entering Core. All write paths must be aware of retention at creation time.
-- **Where**: `internal/classify/classify.go` (new), `internal/classify/classify_test.go` (new), `internal/mcp/handlers.go`, `internal/api/handlers.go`, `internal/reflect/engine.go`.
+### Step 2: Cognitive Scenario 1 — Knowledge Update & Contradiction Resolution
+- **What**: Test the brain's ability to handle evolving knowledge correctly.
+  
+  **`dim_cog_knowledge_update.go`** — "Knowledge Evolution":
+  
+  Narrative: A coding agent works on a project over 30 days. Facts change.
+  
+  **Scenario A — Simple supersession** (10 cases):
+  - Save "Database is Postgres 14" (day 1)
+  - Save "Database is Postgres 16" (day 15) with invalidation of the first
+  - Query: "What database do we use?"
+  - **Expected**: Returns Postgres 16, NOT Postgres 14. Stale observation excluded.
+  - Variations: framework version changes, API endpoint changes, config value changes
+  
+  **Scenario B — Topic key upsert evolution** (10 cases):
+  - Save "Go version" with topic_key="go-version", content="Go 1.21" (day 1)
+  - Update same topic_key with "Go 1.22" (day 10)
+  - Update again with "Go 1.23" (day 20)
+  - Query: "What Go version?"
+  - **Expected**: Returns "Go 1.23". Exactly 1 active observation with that topic_key.
+  
+  **Scenario C — Contradiction after consolidation** (10 cases):
+  - Save "We use REST APIs" (day 1, importance 0.8)
+  - Run consolidation (promotes to Working/Core)
+  - Save "We migrated to gRPC" (day 20, importance 0.8)
+  - Invalidate the REST observation
+  - Query: "What API protocol do we use?"
+  - **Expected**: Returns gRPC. REST observation is stale/expired. Supersedes link exists.
+  
+  **Scenario D — Partial update** (5 cases):
+  - Save "Auth uses JWT with RS256" (day 1)
+  - Save "Auth now uses JWT with ES256 (changed from RS256)" (day 15)
+  - Query: "What signing algorithm for JWT?"
+  - **Expected**: ES256 result ranks higher than RS256.
+  
+  **Scoring**: Each scenario is pass/fail. Score = passed / total.
+  - **Base**: >70% scenarios pass | **Target**: >85% | **Elite**: >95%
+
+- **Why**: This is the #1 cognitive failure mode — returning outdated information when newer information exists. Tests invalidation, supersession, topic_key upsert, staleness filtering, and link creation.
+- **Where**: `internal/benchmark/dim_cog_knowledge_update.go`
 - **Acceptance**:
-  - `InferRetention` is tested and reusable from any write path.
-  - MCP save accepts optional `retention` param; auto-classifies when absent.
-  - HTTP save auto-classifies when `retention` not provided in body.
-  - `saveReflection()` includes `retention = 'durable'` in its INSERT and rejects empty/short reflections.
-  - Empty reflections are not persisted (unit test confirms).
-  - `go test -tags fts5 ./internal/classify/... ./internal/mcp/... ./internal/reflect/...` passes.
+  - 35 scenarios execute with clear pass/fail
+  - Stale/expired observations are correctly excluded from recall
+  - Supersedes links are created and verified
+  - Topic key upsert produces exactly 1 active observation
+  - `go test -tags fts5 -run TestCogKnowledgeUpdate ./internal/benchmark/...` passes
 - **Status**: [x] done
 
-### Step 3: Change promotion rules to respect retention policy
-- **What**:
-  1. **`promoteWorkingToCore()`**: Add `AND retention = 'durable'` to the promotion SQL. Operational observations in Working stay in Working regardless of age/access.
-  2. **`promoteBufferToWorking()`**: Operational observations can still be promoted to Working (they need to be queryable), but the gate-assisted path should log retention awareness. No blocking change here — the key gate is Working→Core.
-  3. **`ForceRun()`**: Fix the unconditional promotion. Buffer→Working can remain unconditional (fast memory should be visible), but Working→Core MUST add `AND retention = 'durable'`. This is the biggest behavioral fix.
-  4. **`evictBuffer()`**: When evicting, prefer evicting `retention = 'operational'` observations first (lower preservation priority). Modify the eviction ORDER BY to sort operational before durable at same importance level.
-  5. Define what happens to long-lived operational observations in Working: they stay in Working indefinitely but get decayed normally. If they become stale/expired through Ebbinghaus decay, GC can collect them. No special expiry beyond normal decay.
-  6. Add table-driven tests for each modified function covering both retention classes.
-- **Why**: This is the core behavioral change — consolidation must stop promoting operational tracking into Core memory.
-- **Where**: `internal/consolidate/pipeline.go`, `internal/consolidate/pipeline_test.go`.
+### Step 3: Cognitive Scenario 2 — Signal vs Noise & Memory Priority
+- **What**: Test that the brain surfaces important knowledge over operational noise.
+  
+  **`dim_cog_signal_noise.go`** — "Signal Extraction from Noise":
+  
+  **Scenario A — Needle in haystack** (10 cases):
+  - Save 200 operational observations (step logs, build outputs, plan progress)
+  - Save 5 critical durable observations (architecture decision, gotcha, preference)
+  - Run consolidation (operational stays in Working, durable reaches Core)
+  - Call `proactive.GetContext()` for the namespace
+  - **Expected**: All 5 durable observations appear in context. Operational noise does NOT dominate.
+  - Score: % of durable observations in top-10 context results
+  
+  **Scenario B — Importance-weighted recall** (10 cases):
+  - Save 50 observations about "authentication": 45 low-importance operational logs, 5 high-importance decisions
+  - Query: "authentication"
+  - **Expected**: The 5 decisions rank above the 45 operational logs in results
+  - Score: Average rank position of the 5 decisions (lower = better)
+  
+  **Scenario C — Retention classification accuracy** (50 cases):
+  - Feed observations with known expected retention through `classify.InferRetention()`
+  - Test all classification rules: consolidator source → operational, reflection → durable, step patterns → operational, decision/gotcha/pattern/preference types → durable
+  - **Expected**: Correct classification for all 50
+  - **Base**: >90% correct | **Target**: >95% | **Elite**: >99%
+  
+  **Scenario D — Consolidation preserves signal, decays noise** (5 cases):
+  - Save 100 mixed observations (50 high-importance durable, 50 low-importance operational)
+  - Run 5 consolidation epochs with decay
+  - Query the namespace
+  - **Expected**: High-importance durable observations maintain accessibility. Low-importance operational observations have decayed importance.
+  - Score: Importance ratio between durable and operational after decay
+  
+  **Scoring**: Weighted combination of all sub-scenarios.
+  - **Base**: >60% | **Target**: >80% | **Elite**: >95%
+
+- **Why**: A memory system that drowns signal in noise is worse than no memory at all. This tests the entire retention→promotion→decay→context pipeline as an integrated cognitive system.
+- **Where**: `internal/benchmark/dim_cog_signal_noise.go`
 - **Acceptance**:
-  - `promoteWorkingToCore()` only promotes `retention = 'durable'` observations.
-  - `ForceRun()` only promotes `retention = 'durable'` from Working→Core.
-  - Operational observations survive in Working without being deleted or promoted.
-  - `evictBuffer()` prefers evicting operational observations first.
-  - Tests: operational step memory stays in Working after consolidation; durable gotcha reaches Core; ForceRun respects retention.
-  - `go test -tags fts5 ./internal/consolidate/...` passes.
+  - Proactive context correctly prioritizes durable Core observations
+  - Recall ranks high-importance observations above operational noise
+  - Classification is quantitatively measured
+  - Decay visibly separates durable from operational after multiple epochs
 - **Status**: [x] done
 
-### Step 4: Adjust retrieval to prefer durable knowledge
-- **What**:
-  1. **`proactive/context.go` `getTopActivation()`**: Add secondary sort preference for `retention = 'durable'` so durable observations rank above operational at the same layer/importance. Add `AND (retention = 'durable' OR created_at > datetime('now', '-7 days'))` to exclude old operational noise while keeping recent operational items visible.
-  2. **`proactive/context.go` `getReflections()`**: Add `AND content != '' AND LENGTH(content) > 50` to filter out empty/trivial reflections from context.
-  3. **`recall/engine.go`**: No hard filter — recall should find everything when queried. But add `retention` to the response payload so callers can see and filter by it. Include retention as an optional filter parameter in `SearchOptions`.
-  4. **`health/health.go`**: Review `checkConsolidationHealth()` — if it scores based on Core observation counts, adjust expectations since fewer observations will now reach Core. Add a note/recommendation if operational ratio in Core is high.
-  5. Update `ContextItem` struct in proactive to include `Retention` field.
-- **Why**: Even with better promotion, retrieval should clearly separate "what the project knows" from "what happened during the current workstream."
-- **Where**: `internal/proactive/context.go`, `internal/proactive/context_test.go`, `internal/recall/engine.go`, `internal/health/health.go`.
+### Step 4: Cognitive Scenario 3 — Cross-Session Memory & Preference Recall
+- **What**: Test that information saved across different sessions can be connected and recalled.
+  
+  **`dim_cog_cross_session.go`** — "Cross-Session Memory":
+  
+  **Scenario A — Preference persistence** (10 cases):
+  - Session 1: Save preference "User prefers tabs over spaces" (day 1)
+  - Session 2: Save preference "User wants English commit messages" (day 5)
+  - Session 3: Save preference "Always use strict TypeScript" (day 10)
+  - 15 days pass. Run consolidation + decay.
+  - Session 4: Query "user preferences" (day 25)
+  - **Expected**: All 3 preferences appear in results. Preferences are type=preference, kind=semantic, retention=durable → they should survive decay and consolidation.
+  
+  **Scenario B — Accumulated project knowledge** (10 cases):
+  - Session 1: "Architecture decision: use microservices" + "Database: Postgres"
+  - Session 2: "Added Redis for caching" + "API gateway: Kong"
+  - Session 3: "Monitoring: Datadog" + "CI: GitHub Actions"
+  - Query from Session 4: "project architecture"
+  - **Expected**: Results contain information from ALL prior sessions, not just the most recent
+  - Score: % of cross-session facts found in top-10 results
+  
+  **Scenario C — File-linked context across sessions** (5 cases):
+  - Session 1: Save observation about "auth middleware" linked to `src/auth.go`
+  - Session 2: Save observation about "rate limiting" linked to `src/middleware.go`
+  - Session 3: Call `proactive.GetContext()` with files=["src/auth.go", "src/middleware.go"]
+  - **Expected**: Both file-linked observations appear in context
+  
+  **Scenario D — Session extraction quality** (5 cases):
+  - Start session, do work, end with summary
+  - Mock LLM extracts observations from summary
+  - Query the extracted observations
+  - **Expected**: Extracted observations are findable and correctly typed
+  
+  **Scoring**: Combined across all sub-scenarios.
+  - **Base**: >60% | **Target**: >80% | **Elite**: >95%
+
+- **Why**: The whole point of persistent memory is remembering across sessions. If the brain forgets or can't connect information from session 1 when in session 5, it's fundamentally broken.
+- **Where**: `internal/benchmark/dim_cog_cross_session.go`
 - **Acceptance**:
-  - Proactive context ranks durable knowledge above operational traces.
-  - Empty/trivial reflections are excluded from context results.
-  - Recall search results include `retention` field.
-  - Recall supports optional `retention` filter in `SearchOptions`.
-  - Health check doesn't penalize a healthy brain that has fewer Core items post-policy.
-  - Tests demonstrate ranking difference between durable and operational observations.
-  - `go test -tags fts5 ./internal/proactive/... ./internal/recall/... ./internal/health/...` passes.
+  - Preferences survive consolidation and decay
+  - Cross-session facts are discoverable from any later session
+  - File-linked observations appear in file-filtered context
+  - Session extraction produces queryable observations
 - **Status**: [x] done
 
-### Step 5: Migrate existing polluted memories
-- **What**:
-  1. Create `internal/db/005_backfill_retention.sql` (migration v5) with UPDATE statements that reclassify existing data:
-     - `UPDATE observations SET retention = 'operational' WHERE source = 'consolidator' AND deleted_at IS NULL` — consolidator-generated implementation notes.
-     - `UPDATE observations SET retention = 'operational' WHERE title LIKE 'Implement Step%' OR title LIKE 'Step %' OR title LIKE 'Plan completed%' OR title LIKE 'Build flags%' OR title LIKE 'File Observations%' OR title LIKE 'Embeddings%' OR title LIKE 'TestToolsList%' OR title LIKE 'Tracker Wiring%' OR title LIKE 'Fixing schema%' OR title LIKE 'Renamed Local%' OR title LIKE 'Named Return%'` — known operational titles from current data.
-     - `UPDATE observations SET deleted_at = datetime('now') WHERE source = 'reflection' AND (content = '' OR LENGTH(TRIM(content)) < 50) AND deleted_at IS NULL` — soft-delete empty/trivial reflections.
-     - Do NOT touch observations with `observation_type IN ('decision', 'gotcha', 'preference')` and `source IS NULL OR source = ''` — these are likely genuine user saves.
-  2. Register migration v5 in `db.go`.
-  3. The migration is idempotent (WHERE clauses are safe to re-run; soft-delete checks `deleted_at IS NULL`).
-- **Why**: Without backfill, the new policy only helps future saves while the current Core remains noisy with step logs and empty reflections.
-- **Where**: `internal/db/005_backfill_retention.sql` (new), `internal/db/db.go`.
+### Step 5: Cognitive Scenario 4 — Temporal Reasoning & Decay Correctness
+- **What**: Test the brain's understanding of time.
+  
+  **`dim_cog_temporal.go`** — "Temporal Cognition":
+  
+  **Scenario A — "What is current?" queries** (10 cases):
+  - Save "Using Node 16" (day 1), "Upgraded to Node 18" (day 10), "Migrated to Node 20" (day 20)
+  - Mark older versions as stale via invalidation chain
+  - Query: "What Node version are we currently using?"
+  - **Expected**: Node 20. Temporal intent detected as `current_state`. Fresh observation ranked highest.
+  
+  **Scenario B — "What changed?" queries** (10 cases):
+  - Save a sequence of technology changes over 30 days
+  - Query: "What changed in our stack?"
+  - **Expected**: History intent detected. Results include stale/expired observations (the history). Ordered by time.
+  
+  **Scenario C — "When did X happen?" queries** (10 cases):
+  - Save observations with temporal expressions: "Migrated to Postgres 16 on March 15, 2026"
+  - Query: "When did we migrate to Postgres 16?"
+  - **Expected**: When intent detected. Observation with the date-bearing content ranks highest.
+  
+  **Scenario D — Decay preserves important old knowledge** (5 cases):
+  - Save a critical architecture decision (importance 0.9, kind=semantic)
+  - Save a trivial build log (importance 0.3, kind=episodic)
+  - Apply 10 decay epochs
+  - **Expected**: Architecture decision still has importance >0.5. Build log has decayed below 0.1 (or GC'd).
+  - Verify: Episodic decays faster than semantic (kind ratios: episodic=1.0, semantic=0.6, procedural=0.2)
+  
+  **Scenario E — Temporal parser edge cases** (30 cases):
+  - ISO dates, English/Spanish dates, relative expressions, durations, current state markers
+  - Mixed bilingual: "Migrated el 15 de marzo de 2026"
+  - Edge cases: empty string, very long string, only punctuation
+  - **Expected**: Correct parse results, zero panics
+  
+  **Scoring**: Combined accuracy across all temporal sub-scenarios.
+  - **Base**: >55% | **Target**: >75% | **Elite**: >90%
+
+- **Why**: Temporal reasoning scored 14.9% on LongMemEval — the weakest dimension. This benchmark quantifies exactly where temporal cognition fails: intent detection? staleness filtering? parser coverage? scoring multipliers?
+- **Where**: `internal/benchmark/dim_cog_temporal.go`
 - **Acceptance**:
-  - Existing empty reflections are soft-deleted.
-  - Existing consolidator-generated step/plan memories are marked `retention = 'operational'`.
-  - Genuine user decisions, gotchas, and preferences remain `retention = 'durable'` and untouched.
-  - Migration is idempotent — running it twice produces no change.
-  - `go test -tags fts5 ./internal/db/...` passes.
+  - Current-state queries return fresh observations, not stale
+  - History queries include stale/expired observations
+  - When queries detect temporal intent
+  - Decay curve respects kind ratios
+  - Parser handles 30 edge cases without panic
 - **Status**: [x] done
 
-### Step 6: End-to-end verification and integration tests
-- **What**:
-  1. Add an integration-style test in `internal/consolidate/pipeline_test.go` that exercises the full lifecycle:
-     - Save one operational observation and one durable observation.
-     - Run consolidation (both `Run` and `ForceRun`).
-     - Assert: operational stays in Working, durable reaches Core.
-     - Assert: proactive context returns durable items first.
-  2. Add a test in `internal/reflect/engine_test.go` verifying empty reflection rejection.
-  3. Run full project verification.
-- **Why**: This change affects the meaning of memory across multiple packages. Integration tests catch cross-package regressions that unit tests miss.
-- **Where**: `internal/consolidate/pipeline_test.go`, `internal/reflect/engine_test.go`, `internal/proactive/context_test.go`.
+### Step 6: Cognitive Scenario 5 — Full Lifecycle Stress & Consistency
+- **What**: The ultimate cognitive test — a complete simulated 30-day agent workflow.
+  
+  **`dim_cog_lifecycle.go`** — "30-Day Brain Simulation":
+  
+  Simulate a coding agent working on a project for 30 days:
+  
+  **Phase 1 — Project bootstrap (Day 1-3)**: 30 observations
+  - Architecture decisions, tech stack, initial patterns, config setup
+  - Start 3 sessions, end with summaries
+  - Create 20 facts (project→uses_framework→react, etc.)
+  
+  **Phase 2 — Active development (Day 5-15)**: 100 observations
+  - Bug discoveries, gotchas, preference changes
+  - 50 operational (step logs, build output), 50 durable (real knowledge)
+  - File-linked observations for key source files
+  - Run consolidation after day 7 and day 12
+  
+  **Phase 3 — Knowledge evolution (Day 16-25)**: 40 observations
+  - 10 knowledge updates (invalidate old → save new)
+  - 5 contradictions resolved
+  - Topic key upserts for evolving config
+  - Git hook triggers: mark files as changed → observations go stale
+  
+  **Phase 4 — Maturity (Day 26-30)**: 20 observations
+  - Run ForceRun consolidation
+  - Run decay (5 more epochs)
+  
+  **Checkpoint queries (20 questions with expected answers)**:
+  1. "What framework do we use?" → React (not whatever was before if changed)
+  2. "What are the project's architecture decisions?" → All decisions from Phase 1 that weren't invalidated
+  3. "What bugs did we find?" → Bug discoveries from Phase 2
+  4. "User preferences" → All preference observations
+  5. "What changed about the database?" → History of changes with temporal awareness
+  6. Context for files ["src/auth.go"] → File-linked observations (stale or fresh depending on git hook)
+  7. "Current deployment config" → Latest config, not old versions
+  8. "Project patterns and conventions" → Pattern-type observations
+  9. "What gotchas should I know about?" → Gotcha-type observations
+  10. "What happened last week?" → Temporal-aware recent observations
+  11-20: More domain-specific queries testing edge cases
+  
+  **Scoring**: Each checkpoint question has 1-3 expected outcomes (observation ID, content match, or ranking requirement). Score = passed checks / total checks.
+  - **Base**: >50% checkpoints pass | **Target**: >70% | **Elite**: >90%
+
+- **Why**: This is the single hardest dimension. It tests EVERYTHING — save, consolidation, decay, invalidation, temporal reasoning, proactive context, cross-session memory, signal-vs-noise, file linking, git hooks, fact graph — in one integrated narrative. If this passes at Elite, Neurox is genuinely functioning as a brain.
+- **Where**: `internal/benchmark/dim_cog_lifecycle.go`
 - **Acceptance**:
-  - Full lifecycle test passes for both operational and durable observations.
-  - Empty reflection rejection test passes.
-  - `CGO_ENABLED=1 go build -tags fts5 ./...` passes.
-  - `go vet ./...` passes.
-  - `go test -tags fts5 ./...` passes (all packages).
+  - 30-day simulation completes without errors
+  - All 190 observations saved across 4 phases
+  - Consolidation runs produce expected promotion/eviction behavior
+  - Decay visibly reduces low-importance observations
+  - 20 checkpoint queries produce scored results
+  - No data corruption across the entire simulation
 - **Status**: [x] done
+
+### Step 7: Performance dimensions
+- **What**: Benchmark raw speed, scale, and resilience (this is the performance half).
+  
+  **`dim_perf_write.go`** — "Write Throughput":
+  - Save 1K/10K observations, measure ops/sec, p50/p95/p99 latency
+  - **Base**: >500 obs/sec | **Target**: >1000 | **Elite**: >2000
+  
+  **`dim_perf_write_scale.go`** — "Write at Scale":
+  - Pre-seed 50K, measure additional save latency
+  - **Base**: <5ms p95 | **Target**: <2ms | **Elite**: <1ms
+  
+  **`dim_perf_concurrent.go`** — "Concurrent Write Stress":
+  - 8 goroutines × 500 saves simultaneously
+  - **Base**: 0 errors, >200 obs/sec total | **Target**: >800 | **Elite**: >1500
+  
+  **`dim_perf_recall.go`** — "Recall Performance":
+  - 100 queries over 10K/50K/100K observations
+  - **Base**: >100 q/sec @10K | **Target**: >200 @50K | **Elite**: >500 @100K
+  
+  **`dim_perf_consolidation.go`** — "Consolidation Performance":
+  - Pipeline.Run() over 5K observations
+  - **Base**: <5s | **Target**: <2s | **Elite**: <500ms
+  
+  **`dim_perf_facts.go`** — "Fact Graph Performance":
+  - 2K facts, measure save/search/traverse
+  - **Base**: >200 facts/sec, traverse depth-3 <50ms | **Target**: >500, <20ms | **Elite**: >1000, <10ms
+  
+  **`dim_perf_context.go`** — "Context Retrieval Performance":
+  - GetContext over 5K observations
+  - **Base**: <100ms | **Target**: <50ms | **Elite**: <20ms
+
+- **Why**: Speed matters — a brilliant memory that takes 10 seconds per query is unusable in an interactive agent. These dimensions ensure cognitive quality doesn't come at the expense of responsiveness.
+- **Where**: `internal/benchmark/dim_perf_*.go` (7 files)
+- **Acceptance**:
+  - All 7 performance dimensions produce ops/sec and latency metrics
+  - Concurrent writes produce zero data corruption
+  - Scale tests exercise FTS5 trigger overhead at large table sizes
+  - `go test -tags fts5 -run TestPerfDimensions ./internal/benchmark/...` passes
+- **Status**: [x] done
+
+### Step 8: CLI command, Go benchmarks, and final wiring
+- **What**:
+  1. Create `internal/benchmark/cli.go`:
+     - `RunCLI(args []string) error` — parses flags, creates BenchEnv, runs Suite, prints Report
+     - Flags: `--scale small|medium|large`, `--output results.json`, `--dimensions dim1,dim2`, `--verbose`, `--category cognitive|performance|all`
+  2. Wire `neurox benchmark` in `main.go`:
+     - New subcommand calling `benchmark.RunCLI()`
+  3. Expand `tests/integration/bench_test.go`:
+     - Standard Go benchmarks wrapping key dimensions: `BenchmarkSave_10K`, `BenchmarkRecallFTS_50K`, `BenchmarkConsolidation_5K`, `BenchmarkConcurrentWrites`, `BenchmarkFactGraph`
+  4. Add `TestBenchmarkSuite_Small` integration test that runs the full suite at small scale and verifies Report completeness
+  5. Write `benchmarks/README.md` with dimension descriptions, threshold tables, and usage guide
+- **Why**: Everything must be runnable from one command, compatible with CI, and documented.
+- **Where**: `internal/benchmark/cli.go`, `main.go`, `tests/integration/bench_test.go`, `benchmarks/README.md`
+- **Acceptance**:
+  - `neurox benchmark --scale small` completes in <60 seconds, prints colored scorecard
+  - `neurox benchmark --scale medium` completes in <5 minutes
+  - `neurox benchmark --category cognitive` runs only cognitive dimensions
+  - JSON output is parseable with all dimension scores
+  - Go benchmarks run via `go test -tags fts5 -bench=. ./tests/integration/...`
+  - `go build -tags fts5 ./...` passes
+  - `go vet ./...` passes
+  - `go test -tags fts5 ./...` passes
+- **Status**: [x] done
+
+## Dimension Summary Table
+
+| # | Dimension | Category | What it really tests | Base | Target | Elite | Weight |
+|---|-----------|----------|---------------------|------|--------|-------|--------|
+| 1 | Knowledge Evolution | Cognitive | Supersession, invalidation, topic upsert, contradiction | >70% | >85% | >95% | 12% |
+| 2 | Signal vs Noise | Cognitive | Retention, promotion, context priority, classification | >60% | >80% | >95% | 12% |
+| 3 | Cross-Session Memory | Cognitive | Preferences, accumulated knowledge, file-linked context | >60% | >80% | >95% | 10% |
+| 4 | Temporal Cognition | Cognitive | Intent detection, staleness, parser, decay curves | >55% | >75% | >90% | 10% |
+| 5 | 30-Day Lifecycle | Cognitive | EVERYTHING integrated — the ultimate test | >50% | >70% | >90% | 16% |
+| 6 | Write Throughput | Performance | Save speed | >500/s | >1K/s | >2K/s | 6% |
+| 7 | Write at Scale | Performance | FTS5 overhead at 50K | <5ms p95 | <2ms | <1ms | 4% |
+| 8 | Concurrent Writes | Performance | WAL contention, data integrity | 0 errors | >800/s | >1500/s | 6% |
+| 9 | Recall Performance | Performance | FTS5 query speed at scale | >100 q/s | >200 | >500 | 6% |
+| 10 | Consolidation Perf | Performance | Pipeline throughput | <5s | <2s | <500ms | 5% |
+| 11 | Fact Graph Perf | Performance | Fact CRUD and traversal | >200 f/s | >500 | >1K | 4% |
+| 12 | Context Retrieval | Performance | Proactive context latency | <100ms | <50ms | <20ms | 4% |
+| | | | | | | | **100%** |
+
+**Cognitive: 60%** · **Performance: 40%**
 
 ## Verification
 ```bash
+# Build
 CGO_ENABLED=1 go build -tags fts5 ./...
 go vet ./...
+
+# Unit tests
+go test -tags fts5 ./internal/benchmark/...
+
+# Quick benchmark (small scale, ~30s)
+go run -tags fts5 . benchmark --scale small
+
+# Full cognitive benchmark
+go run -tags fts5 . benchmark --scale medium --category cognitive
+
+# Full performance benchmark
+go run -tags fts5 . benchmark --scale medium --category performance
+
+# Complete torture test (large scale)
+go run -tags fts5 . benchmark --scale large --output benchmarks/results_large.json
+
+# Standard Go benchmarks for CI
+go test -tags fts5 -bench=. -benchmem ./tests/integration/...
+
+# All tests pass
 go test -tags fts5 ./...
-go test -tags fts5 ./internal/consolidate/... ./internal/reflect/... ./internal/proactive/... ./internal/observation/... ./internal/db/... ./internal/classify/... ./internal/recall/... ./internal/health/...
 ```
 
-Manual checks:
-- Save one operational/step-style observation and verify it stays in fast memory after consolidation.
-- Save one durable project decision/gotcha and verify it remains core-eligible and reaches Core.
-- Run `ForceRun` consolidation and verify operational observations do NOT reach Core.
-- Run proactive context for the namespace and verify durable knowledge ranks ahead of operational logs.
-- Verify empty or weak reflections are not returned in default context.
-- Check health score is reasonable after migration (no false penalties for fewer Core items).
+---
+
+# Part 2: Agent Simulation Benchmark
+
+## Goal (Part 2)
+Add a second benchmark axis that tests Neurox **through the MCP tool interface** — simulating how a real AI coding agent (Claude, Cursor, etc.) would actually call the tools. The internal benchmark (Part 1) proves the engine works; this part proves the engine **works when used the way agents use it**.
+
+## Business Context (Part 2)
+- **Problem**: The internal benchmark calls `ObsStore.Save()` directly with perfect parameters. Real agents call `save` via MCP with imperfect parameters — they forget namespaces, use vague queries, don't set observation_type, don't link files, skip sessions. The question is: **Does Neurox still deliver correct results when the agent is messy?**
+- **Key insight**: Neurox already has a telemetry system (`internal/telemetry/tracker.go`) that records every tool call with params used. And it has a full MCP server test harness (`internal/mcp/server_test.go`) with `mcpTestHelper.callTool()`. We can simulate agent workflows through the real MCP handlers.
+
+## Technical Context (Part 2)
+
+### What we'll test through MCP handlers (not store APIs):
+1. **Agent saves with minimal params** — just title + content, no type/kind/tags/files/namespace → Does recall still find it?
+2. **Agent saves with perfect params** — all fields filled → How much better is recall?
+3. **Agent forgets to use `context` at session start** → How much context is lost?
+4. **Agent uses vague recall queries** — "what do I know about auth" vs "JWT authentication RS256 middleware" → Quality delta
+5. **Agent never invalidates old info** — saves V2 without invalidating V1 → Does V1 pollute results?
+6. **Agent workflow: session_start → saves → context → recall → session_end** — Full lifecycle through MCP
+7. **Agent workflow: save → consolidate → recall** — Does consolidation via MCP preserve accessibility?
+8. **Agent uses topic_key correctly** — Repeated saves to same topic_key via MCP → Upsert works?
+9. **Agent calls health_check** — Does the score reflect actual usage quality?
+10. **Param richness correlation** — Saves with more params filled → Better recall scores?
+
+### Architecture
+- New files in `internal/benchmark/` — agent simulation dimensions
+- Reuse `internal/mcp/server_test.go` pattern: create `mcpTestHelper` in the benchmark env
+- Call tools via `HandleMessage()` JSON-RPC — identical to how a real agent calls them
+- Parse JSON responses to verify outcomes
+- Compare "perfect agent" vs "lazy agent" scenarios
+
+## Implementation Steps (Part 2)
+
+### Step 9: MCP test harness for benchmarks
+- **What**:
+  1. Create `internal/benchmark/mcp_harness.go`:
+     - `MCPHarness` struct wrapping an initialized MCP server + test helper
+     - `NewMCPHarness(env *BenchEnv) *MCPHarness` — creates full MCP Deps from BenchEnv, initializes server
+     - `CallTool(name string, args map[string]any) (map[string]any, error)` — sends JSON-RPC tool call, parses response
+     - Helper methods: `Save(args)`, `Recall(query, opts)`, `Context(ns, files)`, `SessionStart(...)`, `SessionEnd(...)`, `Invalidate(...)`, `Consolidate()`, `HealthCheck()`
+     - Each helper returns parsed response struct, not raw JSON
+  2. Wire the MCP Deps from BenchEnv:
+     - `ObservationStore`, `RecallEngine`, `LinkStore`, `FactStore`, `SessionManager`, `ProactiveEngine`, `Pipeline`, `DB` — all from env
+     - `Embedder` = env.Embedder (FakeEmbedder)
+     - `LLMProvider` = llm.Disabled{}
+     - `LLMGate` = llm.NewGate(llm.Disabled{}, llm.GateModeOff)
+     - `EmbedQueue` = embed.NewQueue(env.Embedder, env.DB)
+     - `Tracker` = telemetry.NewTracker(env.DB)
+- **Why**: All agent simulation dimensions need to call MCP tools the same way a real agent does. This harness makes that easy and type-safe.
+- **Where**: `internal/benchmark/mcp_harness.go`
+- **Acceptance**:
+  - MCPHarness can call all 13 MCP tools
+  - Responses are correctly parsed from JSON-RPC
+  - `go build -tags fts5 ./internal/benchmark/...` passes
+- **Status**: [x] done
+
+### Step 10: Agent Simulation — Lazy vs Perfect Agent
+- **What**: The core agent simulation dimension.
+
+  **`dim_agent_lazy_vs_perfect.go`** — "Agent Quality Impact":
+
+  Run two parallel simulations through MCP, then compare recall quality:
+
+  **Simulation A — Lazy Agent** (saves with minimal params):
+  Save 20 observations through MCP `save` tool with ONLY title + content:
+  ```json
+  {"title": "Fixed auth bug", "content": "The JWT token was expiring too early because timezone offset wasn't accounted for"}
+  ```
+  No observation_type, no kind, no tags, no files, no namespace, no topic_key.
+
+  **Simulation B — Perfect Agent** (saves with all params):
+  Save the SAME 20 observations but with every field filled:
+  ```json
+  {
+    "title": "Fixed JWT token early expiration bug",
+    "content": "What: JWT token was expiring too early. Why: Timezone offset wasn't accounted for in exp claim. Where: api/middleware/auth.ts. Learned: Always use UTC for JWT timestamps.",
+    "observation_type": "bugfix",
+    "kind": "procedural",
+    "tags": "jwt,auth,bugfix,timezone",
+    "files": "api/middleware/auth.ts",
+    "namespace": "bench-agent-perfect",
+    "confidence": 0.9
+  }
+  ```
+
+  **Checkpoint queries** (10 queries run against both simulations):
+  1. "JWT authentication bug" → Should find the auth fix
+  2. "What bugs have we found?" → Should return bugfix-type observations
+  3. "user preferences" → Should return preference observations
+  4. "database configuration" → Should return config observations
+  5. Context call with files → Should return file-linked observations
+  6. "architecture decisions" → Should return decisions
+  7. "what gotchas should I know?" → Should find gotchas
+  8. "patterns and conventions" → Should find patterns
+  9. "TypeScript coding style" → Should find related preferences
+  10. health_check → Compare brain power scores
+
+  **Scoring**: For each query, score both lazy and perfect:
+  - Did the query find the expected observation?
+  - What rank position was it?
+  - Compare: perfect should rank higher than lazy for EVERY query
+
+  **Checks**:
+  - "Lazy finds ≥60% of observations" — even lazy agent should work basically
+  - "Perfect finds ≥80% of observations" — better params = better recall
+  - "Perfect outranks lazy on ≥70% of queries" — param quality matters
+  - "Perfect health_check score > lazy health_check score"
+  - Per-query pass/fail for both agents
+
+  **Thresholds**: Base >50% | Target >70% | Elite >90%
+
+- **Why**: This is THE question — does it matter if the agent fills all params? If lazy and perfect score the same, our tool design doesn't incentivize good behavior. If perfect is way better, Neurox rewards good agents.
+- **Where**: `internal/benchmark/dim_agent_lazy_vs_perfect.go`
+- **Acceptance**:
+  - Both simulations run through MCP handlers (not store APIs)
+  - Recall quality is quantitatively compared
+  - Health check scores reflect param usage quality
+- **Status**: [x] done
+
+### Step 11: Agent Simulation — Realistic Workflows
+- **What**: Simulate realistic multi-step agent workflows through MCP.
+
+  **`dim_agent_workflows.go`** — "Agent Workflow Correctness":
+
+  **Workflow A — Session Lifecycle** (5 checks):
+  1. Call `session_start` with title, directory, branch, namespace
+  2. Call `save` 5 times (varied observations)
+  3. Call `context` for the namespace → verify saved observations appear
+  4. Call `recall` for a specific query → verify correct result
+  5. Call `session_end` with summary
+  - Check: session created, context returns saves, recall works, session ended
+
+  **Workflow B — Knowledge Update via MCP** (5 checks):
+  1. `save` "Database is Postgres 14" (with topic_key "db-version")
+  2. `save` "Database is Postgres 16" (same topic_key) → should upsert
+  3. `recall` "database version" → should return "Postgres 16", NOT "14"
+  4. Also test `invalidate` flow: save V1 → invalidate with replacement → recall returns V2
+  5. `status` → verify observation counts are correct
+
+  **Workflow C — Vague vs Precise Queries** (10 checks):
+  1. Save 10 observations about different topics
+  2. Run 5 precise queries and 5 vague queries for the same information
+  3. Check: precise queries have higher success rate than vague ones
+  - Precise: "JWT RS256 authentication middleware bugfix" → finds auth bug
+  - Vague: "auth stuff" → may or may not find it
+  - Score: precision_success_rate vs vague_success_rate
+
+  **Workflow D — Consolidation via MCP** (3 checks):
+  1. `save` 30 observations (mix of durable and operational)
+  2. `consolidate` via MCP tool
+  3. `status` → verify promotions happened (Working > 0)
+  4. `recall` → verify durable observations still accessible
+  5. `context` → verify durable observations in context
+
+  **Workflow E — Git Hook Staleness** (3 checks):
+  1. `save` observation linked to "src/auth.ts"
+  2. `git_hook` with changed_files="src/auth.ts", commit_sha="abc123"
+  3. `recall` → observation should be marked stale
+  4. `context` with files=["src/auth.ts"] → should still appear but marked stale
+
+  **Scoring**: Combined check pass rate.
+  - **Base**: >55% | **Target**: >75% | **Elite**: >90%
+
+- **Why**: Tests the real-world workflows an agent performs — not isolated operations, but sequences that depend on each other. If save→consolidate→recall breaks through MCP, it's a production bug.
+- **Where**: `internal/benchmark/dim_agent_workflows.go`
+- **Acceptance**:
+  - All 5 workflows execute through MCP handlers
+  - Session lifecycle works end-to-end
+  - Knowledge update via topic_key works through MCP
+  - Consolidation via MCP produces correct promotions
+  - Git hook staleness propagates correctly
+- **Status**: [x] done
+
+### Step 12: Agent Simulation — Param Richness Impact & Final Integration
+- **What**:
+  1. **`dim_agent_param_impact.go`** — "Param Richness Impact":
+     - Save 50 observations with incrementally more params filled:
+       - Level 1: title + content only (10 saves)
+       - Level 2: + observation_type + kind (10 saves)
+       - Level 3: + tags + namespace (10 saves)
+       - Level 4: + files + topic_key (10 saves)
+       - Level 5: + confidence + retention (10 saves, all params)
+     - Run the same query against each level's namespace
+     - **Score**: Correlation between param richness and recall quality
+     - **Checks**:
+       - "Level 5 outperforms Level 1 on recall"
+       - "Level 3+ finds ≥80% of observations"
+       - "Classification auto-correct works" — even without explicit retention, InferRetention classifies correctly
+       - "Namespace isolation works" — queries to one namespace don't leak from another
+     - **Base**: >50% | **Target**: >70% | **Elite**: >90%
+
+  2. **Register agent dimensions in CLI** (`cli.go`):
+     - Add new category: `agent` (in addition to `cognitive`, `performance`, `all`)
+     - Register: `AgentLazyVsPerfect{}`, `AgentWorkflows{}`, `AgentParamImpact{}`
+     - `--category agent` runs only agent simulation dimensions
+
+  3. **Update dimension weights** in the suite to include agent dimensions:
+     - Cognitive: 40%, Performance: 25%, Agent: 35%
+     - Or: keep as separate category with its own sub-score
+
+- **Why**: This completes the three-axis benchmark: engine internals (cognitive), speed (performance), and real-world usage (agent). The param impact dimension directly answers: "Does Neurox reward agents that use it well?"
+- **Where**: `internal/benchmark/dim_agent_param_impact.go`, `internal/benchmark/cli.go`
+- **Acceptance**:
+  - Param richness correlates with recall quality
+  - Agent category filters correctly in CLI
+  - `neurox benchmark --category agent` runs only agent dimensions
+  - `neurox benchmark` (all) includes all three categories
+  - `go build -tags fts5 ./...` passes
+  - `go test -tags fts5 ./...` passes
+- **Status**: [x] done
+
+## Updated Dimension Summary Table
+
+| # | Dimension | Category | What it really tests | Base | Target | Elite | Weight |
+|---|-----------|----------|---------------------|------|--------|-------|--------|
+| 1 | Knowledge Evolution | Cognitive | Supersession, invalidation, topic upsert | >70% | >85% | >95% | 10% |
+| 2 | Signal vs Noise | Cognitive | Retention, promotion, context priority | >60% | >80% | >95% | 10% |
+| 3 | Cross-Session Memory | Cognitive | Preferences, accumulated knowledge | >60% | >80% | >95% | 8% |
+| 4 | Temporal Cognition | Cognitive | Intent detection, staleness, parser | >55% | >75% | >90% | 7% |
+| 5 | 30-Day Lifecycle | Cognitive | Everything integrated | >50% | >70% | >90% | 10% |
+| 6 | Write Throughput | Performance | Save speed | >500/s | >1K/s | >2K/s | 5% |
+| 7 | Concurrent Writes | Performance | WAL contention, data integrity | 0 errors | >800/s | >1500/s | 5% |
+| 8 | Recall Performance | Performance | FTS5 query speed at scale | >100 q/s | >200 | >500 | 5% |
+| 9 | Context Retrieval | Performance | Proactive context latency | <100ms | <50ms | <20ms | 5% |
+| 10 | **Lazy vs Perfect Agent** | **Agent** | **Does param quality matter?** | >50% | >70% | >90% | **12%** |
+| 11 | **Agent Workflows** | **Agent** | **MCP tool sequences work correctly** | >55% | >75% | >90% | **12%** |
+| 12 | **Param Richness Impact** | **Agent** | **More params = better recall** | >50% | >70% | >90% | **11%** |
+| | | | | | | | **100%** |
+
+**Cognitive: 45%** · **Performance: 20%** · **Agent: 35%**
 
 ## Risks / Notes
-- **Default `'durable'`**: Chosen as the safe default because most agent saves are intended as lasting knowledge. Operational saves are the exception (consolidator output, step tracking) and are auto-classified. If an agent explicitly saves step tracking without marking it, the classifier catches common patterns.
-- **`ForceRun` is the worst offender**: It unconditionally promotes everything. Step 3 fixes this, but be careful — if someone relies on ForceRun to "make everything permanent," the behavior change will be visible.
-- **`saveReflection()` bypasses the Store**: This is a pre-existing code smell. Step 2 adds retention to the raw INSERT and a quality guard, but a future refactor should route reflections through the Store for full validation coverage.
-- **Existing data migration must be conservative**: The backfill in Step 5 uses explicit pattern matching, not broad heuristics. It's better to miss a few operational memories than to accidentally demote real knowledge.
-- **Health check scoring**: Step 4 adjusts the health check, but monitor whether the score changes significantly post-migration. If Core observation counts drop meaningfully, the scoring thresholds may need tuning.
-- **Interaction with `consolidation_status`**: The new `retention` field is orthogonal to `consolidation_status`. An operational observation can be `promoted` (to Working for short-term use) while staying `operational` (never eligible for Core). These are independent dimensions.
-- **FTS5 is unaffected**: The `retention` column is not indexed in FTS5. It's used for SQL WHERE filtering only. No trigger changes needed.
-- **Reflection quality gating**: The 50-char minimum is a conservative floor. If legitimate insights are shorter, this threshold can be lowered, but current empty reflections (content = "") are clearly bugs.
+- **FakeEmbedder quality**: The word-additive hash approach produces vectors where texts sharing words have higher cosine similarity, but it's not true semantic similarity. Hybrid recall benchmarks measure "does the pipeline work?" not "is the embedder smart?" That's fine — the real embedder quality is tested via LongMemEval.
+- **30-Day Lifecycle is the flagship test**: If this dimension scores Elite (>90%), Neurox is genuinely working as a brain-inspired memory system. Current expectation: it'll score around Base (~50%) initially, revealing specific subsystem weaknesses.
+- **Mock LLM limitations**: Session extraction, reflection, and gate-assisted promotion use mock LLMs with canned responses. This means cognitive tests measure the pipeline, not the LLM integration quality.
+- **Temporal scoring is the weakest cognitive area**: Based on LongMemEval (14.9%), expect the temporal dimension to score lowest. The benchmark will pinpoint exactly which temporal operations fail (intent detection? parser coverage? scoring multipliers?).
+- **Concurrent write contention**: SQLite's single-write architecture means concurrent writes will bottleneck. The benchmark measures the real cost — WAL provides read concurrency but writes are serialized.
+- **No external dependencies**: The entire benchmark runs with FakeEmbedder + mock LLM. Zero network calls. Fully reproducible.
