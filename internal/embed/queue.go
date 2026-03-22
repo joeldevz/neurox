@@ -203,6 +203,31 @@ func IsAvailable(p Provider) bool {
 	return !disabled
 }
 
+// BackfillPending queries all observations without embeddings and enqueues them.
+// Best-effort: logs errors but never returns them.
+func (q *Queue) BackfillPending(ctx context.Context) {
+	rows, err := q.db.QueryContext(ctx,
+		"SELECT id FROM observations WHERE embedding IS NULL AND deleted_at IS NULL ORDER BY importance DESC LIMIT 500")
+	if err != nil {
+		log.Printf("backfill query: %v", err)
+		return
+	}
+	defer rows.Close()
+
+	var count int
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			continue
+		}
+		q.Enqueue(id)
+		count++
+	}
+	if count > 0 {
+		log.Printf("backfill: enqueued %d observations for embedding", count)
+	}
+}
+
 // PendingCount returns the number of observations without embeddings.
 func PendingCount(ctx context.Context, db *sql.DB) (int, error) {
 	var count int

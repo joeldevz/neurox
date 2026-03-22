@@ -39,4 +39,5 @@ func register(s *server.MCPServer, deps *Deps) {
 	add(gitHookTool(), deps.handleGitHook)
 	add(reflectTool(), deps.handleReflect)
 	add(consolidateTool(), deps.handleConsolidate)
+	add(healthCheckTool(), deps.handleHealthCheck)
 }

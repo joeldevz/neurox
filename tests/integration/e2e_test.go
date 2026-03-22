@@ -54,7 +54,7 @@ func TestE2E_SaveConsolidateRecall(t *testing.T) {
 	linkStore := links.NewStore(tdb.DB, idGen)
 	gate := llm.NewGate(llm.Disabled{}, llm.GateModeOff)
 	decayEngine := decay.NewEngine(tdb.DB)
-	pipeline := consolidate.NewPipeline(tdb.DB, decayEngine, embed.Disabled{}, gate, linkStore, llm.Disabled{}, idGen, consolidate.Config{})
+	pipeline := consolidate.NewPipeline(tdb.DB, decayEngine, embed.Disabled{}, nil, gate, linkStore, llm.Disabled{}, idGen, consolidate.Config{})
 
 	// Save 100 observations with varying importance
 	for i := 0; i < 100; i++ {
@@ -451,7 +451,7 @@ func TestE2E_DegradedMode(t *testing.T) {
 	linkStore := links.NewStore(tdb.DB, idGen)
 	gate := llm.NewGate(llm.Disabled{}, llm.GateModeOff)
 	decayEngine := decay.NewEngine(tdb.DB)
-	pipeline := consolidate.NewPipeline(tdb.DB, decayEngine, embed.Disabled{}, gate, linkStore, llm.Disabled{}, idGen, consolidate.Config{})
+	pipeline := consolidate.NewPipeline(tdb.DB, decayEngine, embed.Disabled{}, nil, gate, linkStore, llm.Disabled{}, idGen, consolidate.Config{})
 	proactiveEng := proactive.NewEngine(tdb.DB, embed.Disabled{})
 	sessionMgr := session.NewManager(tdb.DB, llm.Disabled{}, idGen)
 

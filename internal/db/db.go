@@ -14,6 +14,7 @@ import (
 
 //go:embed schema.sql
 //go:embed 002_temporal_mentions.sql
+//go:embed 003_tool_calls.sql
 var schemaFS embed.FS
 
 type migration struct {
@@ -32,6 +33,11 @@ var migrations = []migration{
 		version: 2,
 		name:    "temporal_mentions",
 		path:    "002_temporal_mentions.sql",
+	},
+	{
+		version: 3,
+		name:    "tool_calls",
+		path:    "003_tool_calls.sql",
 	},
 }
 

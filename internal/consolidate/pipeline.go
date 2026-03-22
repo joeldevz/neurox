@@ -39,6 +39,7 @@ type Pipeline struct {
 	db                    *sql.DB
 	decay                 *decay.Engine
 	embedder              embed.Provider
+	embedQueue            *embed.Queue
 	gate                  *llm.Gate
 	contradictionDetector *contradiction.Detector
 	reflectEngine         *reflectpkg.Engine
@@ -47,7 +48,7 @@ type Pipeline struct {
 	wg                    sync.WaitGroup
 }
 
-func NewPipeline(db *sql.DB, decayEngine *decay.Engine, embedder embed.Provider, gate *llm.Gate, linkStore *links.Store, llmProvider llm.Provider, idGen filelink.IDGenerator, cfg Config) *Pipeline {
+func NewPipeline(db *sql.DB, decayEngine *decay.Engine, embedder embed.Provider, embedQueue *embed.Queue, gate *llm.Gate, linkStore *links.Store, llmProvider llm.Provider, idGen filelink.IDGenerator, cfg Config) *Pipeline {
 	if cfg.Interval == 0 {
 		cfg.Interval = defaultInterval
 	}
@@ -55,6 +56,7 @@ func NewPipeline(db *sql.DB, decayEngine *decay.Engine, embedder embed.Provider,
 		db:                    db,
 		decay:                 decayEngine,
 		embedder:              embedder,
+		embedQueue:            embedQueue,
 		gate:                  gate,
 		contradictionDetector: contradiction.NewDetector(db, embedder, llmProvider, linkStore),
 		reflectEngine:         reflectpkg.NewEngine(db, llmProvider, linkStore, idGen),
@@ -97,16 +99,16 @@ func (p *Pipeline) loop(ctx context.Context) {
 
 // RunResult holds stats from a consolidation run.
 type RunResult struct {
-	Epoch                int
-	Decayed              int64
-	PromotedToWorking    int64
-	PromotedToCore       int64
-	Deduped              int64
-	ContradictionsFound  int
-	ContradictionsFixed  int
-	ReflectionsCreated   int
-	Evicted              int64
-	GarbageCollected     int64
+	Epoch               int
+	Decayed             int64
+	PromotedToWorking   int64
+	PromotedToCore      int64
+	Deduped             int64
+	ContradictionsFound int
+	ContradictionsFixed int
+	ReflectionsCreated  int
+	Evicted             int64
+	GarbageCollected    int64
 }
 
 // ForceRun executes consolidation ignoring all thresholds — promotes everything
@@ -132,6 +134,11 @@ func (p *Pipeline) ForceRun(ctx context.Context) error {
 	if err != nil {
 		p.failRun(ctx, runID, err)
 		return fmt.Errorf("decay: %w", err)
+	}
+
+	// 1.5 Backfill missing embeddings
+	if p.embedQueue != nil {
+		p.embedQueue.BackfillPending(ctx)
 	}
 
 	// 2. Force promote ALL Buffer → Working
@@ -232,6 +239,11 @@ func (p *Pipeline) Run(ctx context.Context) error {
 	if err != nil {
 		p.failRun(ctx, runID, err)
 		return fmt.Errorf("decay: %w", err)
+	}
+
+	// 1.5 Backfill missing embeddings
+	if p.embedQueue != nil {
+		p.embedQueue.BackfillPending(ctx)
 	}
 
 	// 2. Retry previously rejected observations (3-strike system)

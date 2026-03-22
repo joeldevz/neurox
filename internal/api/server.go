@@ -9,9 +9,11 @@ import (
 	"net/http"
 	"time"
 
+	"neurox/internal/embed"
 	"neurox/internal/links"
 	"neurox/internal/observation"
 	"neurox/internal/recall"
+	"neurox/internal/telemetry"
 )
 
 type Config struct {
@@ -31,6 +33,8 @@ type Deps struct {
 	LLMProvider      string
 	EmbedProvider    string
 	GateMode         string
+	EmbedQueue       *embed.Queue
+	Tracker          *telemetry.Tracker
 }
 
 func NewServer(cfg Config, deps *Deps) *Server {
@@ -84,6 +88,7 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/v1/hooks/git", s.handleGitHook)
 	mux.HandleFunc("POST /api/v1/reflect", s.handleReflect)
 	mux.HandleFunc("GET /api/v1/graph", s.handleGraph)
+	mux.HandleFunc("GET /api/v1/health-check", s.handleHealthCheck)
 }
 
 func corsMiddleware(next http.Handler) http.Handler {

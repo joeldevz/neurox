@@ -12,7 +12,9 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 
 	"neurox/internal/consolidate"
+	"neurox/internal/embed"
 	"neurox/internal/facts"
+	"neurox/internal/health"
 	"neurox/internal/links"
 	"neurox/internal/llm"
 	"neurox/internal/observation"
@@ -20,6 +22,7 @@ import (
 	"neurox/internal/recall"
 	reflectpkg "neurox/internal/reflect"
 	"neurox/internal/session"
+	"neurox/internal/telemetry"
 )
 
 type Deps struct {
@@ -35,9 +38,25 @@ type Deps struct {
 	DB               *sql.DB
 	LLMProvider      llm.Provider
 	LLMGate          *llm.Gate
+	EmbedQueue       *embed.Queue
+	Embedder         embed.Provider
+	Tracker          *telemetry.Tracker
 }
 
-func (d *Deps) handleSave(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+func (d *Deps) handleSave(ctx context.Context, req mcp.CallToolRequest) (result *mcp.CallToolResult, err error) {
+	start := time.Now()
+	defer func() {
+		if d.Tracker != nil {
+			d.Tracker.Record(telemetry.CallRecord{
+				ToolName:   "save",
+				Namespace:  req.GetString("namespace", ""),
+				ParamsUsed: nonEmptyParams(req, "title", "content", "observation_type", "kind", "confidence", "topic_key", "tags", "files", "namespace"),
+				Success:    err == nil && (result == nil || !result.IsError),
+				DurationMs: time.Since(start).Milliseconds(),
+			})
+		}
+	}()
+
 	title := req.GetString("title", "")
 	content := req.GetString("content", "")
 
@@ -90,6 +109,11 @@ func (d *Deps) handleSave(ctx context.Context, req mcp.CallToolRequest) (*mcp.Ca
 		go d.FactExtractor.ExtractAndSave(context.Background(), saved.ID, saved.Title, saved.Content, saved.Namespace)
 	}
 
+	// Enqueue for embedding
+	if d.EmbedQueue != nil {
+		d.EmbedQueue.Enqueue(saved.ID)
+	}
+
 	return toolResultJSON(saveResponse{
 		ID:        saved.ID,
 		Title:     saved.Title,
@@ -100,7 +124,20 @@ func (d *Deps) handleSave(ctx context.Context, req mcp.CallToolRequest) (*mcp.Ca
 	})
 }
 
-func (d *Deps) handleRecall(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+func (d *Deps) handleRecall(ctx context.Context, req mcp.CallToolRequest) (result *mcp.CallToolResult, err error) {
+	start := time.Now()
+	defer func() {
+		if d.Tracker != nil {
+			d.Tracker.Record(telemetry.CallRecord{
+				ToolName:   "recall",
+				Namespace:  req.GetString("namespace", ""),
+				ParamsUsed: nonEmptyParams(req, "query", "observation_type", "kind", "namespace", "files", "include_stale", "limit"),
+				Success:    err == nil && (result == nil || !result.IsError),
+				DurationMs: time.Since(start).Milliseconds(),
+			})
+		}
+	}()
+
 	query := req.GetString("query", "")
 
 	opts := recall.SearchOptions{
@@ -164,7 +201,20 @@ func (d *Deps) handleRecall(ctx context.Context, req mcp.CallToolRequest) (*mcp.
 	return toolResultJSON(resp)
 }
 
-func (d *Deps) handleContext(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+func (d *Deps) handleContext(ctx context.Context, req mcp.CallToolRequest) (result *mcp.CallToolResult, err error) {
+	start := time.Now()
+	defer func() {
+		if d.Tracker != nil {
+			d.Tracker.Record(telemetry.CallRecord{
+				ToolName:   "context",
+				Namespace:  req.GetString("namespace", ""),
+				ParamsUsed: nonEmptyParams(req, "namespace", "files", "limit"),
+				Success:    err == nil && (result == nil || !result.IsError),
+				DurationMs: time.Since(start).Milliseconds(),
+			})
+		}
+	}()
+
 	namespace := req.GetString("namespace", "default")
 	limit := 20
 	if args := req.GetArguments(); args != nil {
@@ -220,7 +270,20 @@ func (d *Deps) handleContext(ctx context.Context, req mcp.CallToolRequest) (*mcp
 	})
 }
 
-func (d *Deps) handleUpdate(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+func (d *Deps) handleUpdate(ctx context.Context, req mcp.CallToolRequest) (result *mcp.CallToolResult, err error) {
+	start := time.Now()
+	defer func() {
+		if d.Tracker != nil {
+			d.Tracker.Record(telemetry.CallRecord{
+				ToolName:   "update",
+				Namespace:  req.GetString("namespace", ""),
+				ParamsUsed: nonEmptyParams(req, "id", "title", "content", "observation_type", "kind", "confidence", "tags", "files"),
+				Success:    err == nil && (result == nil || !result.IsError),
+				DurationMs: time.Since(start).Milliseconds(),
+			})
+		}
+	}()
+
 	id := req.GetString("id", "")
 	title := req.GetString("title", "")
 	content := req.GetString("content", "")
@@ -253,6 +316,11 @@ func (d *Deps) handleUpdate(ctx context.Context, req mcp.CallToolRequest) (*mcp.
 		return mcp.NewToolResultError(fmt.Sprintf("update failed: %v", err)), nil
 	}
 
+	// Enqueue for embedding
+	if d.EmbedQueue != nil {
+		d.EmbedQueue.Enqueue(updated.ID)
+	}
+
 	return toolResultJSON(saveResponse{
 		ID:        updated.ID,
 		Title:     updated.Title,
@@ -262,7 +330,20 @@ func (d *Deps) handleUpdate(ctx context.Context, req mcp.CallToolRequest) (*mcp.
 	})
 }
 
-func (d *Deps) handleForget(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+func (d *Deps) handleForget(ctx context.Context, req mcp.CallToolRequest) (result *mcp.CallToolResult, err error) {
+	start := time.Now()
+	defer func() {
+		if d.Tracker != nil {
+			d.Tracker.Record(telemetry.CallRecord{
+				ToolName:   "forget",
+				Namespace:  "",
+				ParamsUsed: nonEmptyParams(req, "id"),
+				Success:    err == nil && (result == nil || !result.IsError),
+				DurationMs: time.Since(start).Milliseconds(),
+			})
+		}
+	}()
+
 	id := req.GetString("id", "")
 	if strings.TrimSpace(id) == "" {
 		return mcp.NewToolResultError("id is required"), nil
@@ -278,7 +359,20 @@ func (d *Deps) handleForget(ctx context.Context, req mcp.CallToolRequest) (*mcp.
 	})
 }
 
-func (d *Deps) handleInvalidate(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+func (d *Deps) handleInvalidate(ctx context.Context, req mcp.CallToolRequest) (result *mcp.CallToolResult, err error) {
+	start := time.Now()
+	defer func() {
+		if d.Tracker != nil {
+			d.Tracker.Record(telemetry.CallRecord{
+				ToolName:   "invalidate",
+				Namespace:  "",
+				ParamsUsed: nonEmptyParams(req, "observation_id", "reason", "replacement_title", "replacement_content"),
+				Success:    err == nil && (result == nil || !result.IsError),
+				DurationMs: time.Since(start).Milliseconds(),
+			})
+		}
+	}()
+
 	input := observation.InvalidateInput{
 		ObservationID:      req.GetString("observation_id", ""),
 		Reason:             req.GetString("reason", ""),
@@ -286,25 +380,38 @@ func (d *Deps) handleInvalidate(ctx context.Context, req mcp.CallToolRequest) (*
 		ReplacementContent: req.GetString("replacement_content", ""),
 	}
 
-	result, err := d.ObservationStore.Invalidate(ctx, d.LinkStore, input)
-	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("invalidate failed: %v", err)), nil
+	invResult, invErr := d.ObservationStore.Invalidate(ctx, d.LinkStore, input)
+	if invErr != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("invalidate failed: %v", invErr)), nil
 	}
 
 	resp := map[string]string{
-		"invalidated_id": result.InvalidatedID,
+		"invalidated_id": invResult.InvalidatedID,
 		"message":        "observation marked as stale",
 	}
-	if result.ReplacementID != "" {
-		resp["replacement_id"] = result.ReplacementID
-		resp["link_id"] = result.LinkID
+	if invResult.ReplacementID != "" {
+		resp["replacement_id"] = invResult.ReplacementID
+		resp["link_id"] = invResult.LinkID
 		resp["message"] = "observation invalidated and replaced"
 	}
 
 	return toolResultJSON(resp)
 }
 
-func (d *Deps) handleStatus(ctx context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+func (d *Deps) handleStatus(ctx context.Context, req mcp.CallToolRequest) (result *mcp.CallToolResult, err error) {
+	start := time.Now()
+	defer func() {
+		if d.Tracker != nil {
+			d.Tracker.Record(telemetry.CallRecord{
+				ToolName:   "status",
+				Namespace:  "",
+				ParamsUsed: nonEmptyParams(req),
+				Success:    err == nil && (result == nil || !result.IsError),
+				DurationMs: time.Since(start).Milliseconds(),
+			})
+		}
+	}()
+
 	var total, buffer, working, core int
 	var staleCount, expiredCount int
 
@@ -331,6 +438,15 @@ func (d *Deps) handleStatus(ctx context.Context, _ mcp.CallToolRequest) (*mcp.Ca
 	var temporalMentionCount int
 	d.DB.QueryRowContext(ctx, "SELECT COUNT(*) FROM temporal_mentions").Scan(&temporalMentionCount)
 
+	var embeddingsTotal, embeddingsPending int
+	d.DB.QueryRowContext(ctx, "SELECT COUNT(*) FROM observations WHERE deleted_at IS NULL AND embedding IS NOT NULL").Scan(&embeddingsTotal)
+	d.DB.QueryRowContext(ctx, "SELECT COUNT(*) FROM observations WHERE deleted_at IS NULL AND embedding IS NULL").Scan(&embeddingsPending)
+
+	embedProvider := "disabled"
+	if d.Embedder != nil {
+		embedProvider = d.Embedder.Name()
+	}
+
 	llmName := "disabled"
 	gateMode := "off"
 	if d.LLMProvider != nil {
@@ -341,22 +457,38 @@ func (d *Deps) handleStatus(ctx context.Context, _ mcp.CallToolRequest) (*mcp.Ca
 	}
 
 	return toolResultJSON(statusResponse{
-		Total:            total,
-		Buffer:           buffer,
-		Working:          working,
-		Core:             core,
-		Stale:            staleCount,
-		Expired:          expiredCount,
-		Links:            linkCount,
-		Facts:            factCount,
-		TemporalMentions: temporalMentionCount,
-		ActiveSessions:   sessionCount,
-		LLMProvider:      llmName,
-		GateMode:         gateMode,
+		Total:             total,
+		Buffer:            buffer,
+		Working:           working,
+		Core:              core,
+		Stale:             staleCount,
+		Expired:           expiredCount,
+		Links:             linkCount,
+		Facts:             factCount,
+		TemporalMentions:  temporalMentionCount,
+		ActiveSessions:    sessionCount,
+		LLMProvider:       llmName,
+		GateMode:          gateMode,
+		EmbeddingsTotal:   embeddingsTotal,
+		EmbeddingsPending: embeddingsPending,
+		EmbedProvider:     embedProvider,
 	})
 }
 
-func (d *Deps) handleSessionStart(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+func (d *Deps) handleSessionStart(ctx context.Context, req mcp.CallToolRequest) (result *mcp.CallToolResult, err error) {
+	start := time.Now()
+	defer func() {
+		if d.Tracker != nil {
+			d.Tracker.Record(telemetry.CallRecord{
+				ToolName:   "session_start",
+				Namespace:  req.GetString("namespace", ""),
+				ParamsUsed: nonEmptyParams(req, "title", "directory", "branch", "namespace"),
+				Success:    err == nil && (result == nil || !result.IsError),
+				DurationMs: time.Since(start).Milliseconds(),
+			})
+		}
+	}()
+
 	title := req.GetString("title", "")
 	directory := req.GetString("directory", "")
 	branch := req.GetString("branch", "")
@@ -401,12 +533,13 @@ func (d *Deps) handleSessionStart(ctx context.Context, req mcp.CallToolRequest) 
 	`, namespace)
 
 	id := d.LinkStore.IDGen()
-	_, err := d.DB.ExecContext(ctx, `
+	var execErr error
+	_, execErr = d.DB.ExecContext(ctx, `
 		INSERT INTO sessions(id, title, directory, branch, namespace, status)
 		VALUES(?, ?, ?, ?, ?, 'active')
 	`, id, nullableString(title), nullableString(directory), nullableString(branch), namespace)
-	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("start session failed: %v", err)), nil
+	if execErr != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("start session failed: %v", execErr)), nil
 	}
 
 	return toolResultJSON(map[string]string{
@@ -416,7 +549,20 @@ func (d *Deps) handleSessionStart(ctx context.Context, req mcp.CallToolRequest) 
 	})
 }
 
-func (d *Deps) handleSessionEnd(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+func (d *Deps) handleSessionEnd(ctx context.Context, req mcp.CallToolRequest) (result *mcp.CallToolResult, err error) {
+	start := time.Now()
+	defer func() {
+		if d.Tracker != nil {
+			d.Tracker.Record(telemetry.CallRecord{
+				ToolName:   "session_end",
+				Namespace:  "",
+				ParamsUsed: nonEmptyParams(req, "session_id", "summary"),
+				Success:    err == nil && (result == nil || !result.IsError),
+				DurationMs: time.Since(start).Milliseconds(),
+			})
+		}
+	}()
+
 	sessionID := req.GetString("session_id", "")
 	summary := req.GetString("summary", "")
 
@@ -428,27 +574,27 @@ func (d *Deps) handleSessionEnd(ctx context.Context, req mcp.CallToolRequest) (*
 	}
 
 	if d.SessionManager != nil {
-		endResult, err := d.SessionManager.End(ctx, sessionID, summary)
-		if err != nil {
-			return mcp.NewToolResultError(fmt.Sprintf("end session failed: %v", err)), nil
+		endResult, endErr := d.SessionManager.End(ctx, sessionID, summary)
+		if endErr != nil {
+			return mcp.NewToolResultError(fmt.Sprintf("end session failed: %v", endErr)), nil
 		}
 
 		return toolResultJSON(map[string]any{
-			"session_id":              endResult.SessionID,
-			"observations_extracted":  endResult.ObservationsExtracted,
-			"message":                 "session completed",
+			"session_id":             endResult.SessionID,
+			"observations_extracted": endResult.ObservationsExtracted,
+			"message":                "session completed",
 		})
 	}
 
 	// Fallback
-	result, err := d.DB.ExecContext(ctx, `
+	sqlResult, sqlErr := d.DB.ExecContext(ctx, `
 		UPDATE sessions SET status = 'completed', summary = ?, ended_at = datetime('now')
 		WHERE id = ? AND status = 'active'
 	`, summary, sessionID)
-	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("end session failed: %v", err)), nil
+	if sqlErr != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("end session failed: %v", sqlErr)), nil
 	}
-	affected, _ := result.RowsAffected()
+	affected, _ := sqlResult.RowsAffected()
 	if affected == 0 {
 		return mcp.NewToolResultError("session not found or already ended"), nil
 	}
@@ -459,7 +605,20 @@ func (d *Deps) handleSessionEnd(ctx context.Context, req mcp.CallToolRequest) (*
 	})
 }
 
-func (d *Deps) handleGitHook(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+func (d *Deps) handleGitHook(ctx context.Context, req mcp.CallToolRequest) (result *mcp.CallToolResult, err error) {
+	start := time.Now()
+	defer func() {
+		if d.Tracker != nil {
+			d.Tracker.Record(telemetry.CallRecord{
+				ToolName:   "git_hook",
+				Namespace:  "",
+				ParamsUsed: nonEmptyParams(req, "changed_files", "commit_sha", "branch"),
+				Success:    err == nil && (result == nil || !result.IsError),
+				DurationMs: time.Since(start).Milliseconds(),
+			})
+		}
+	}()
+
 	changedFilesStr := req.GetString("changed_files", "")
 	commitSha := req.GetString("commit_sha", "")
 
@@ -507,41 +666,67 @@ func (d *Deps) handleGitHook(ctx context.Context, req mcp.CallToolRequest) (*mcp
 		  )
 	`, strings.Join(placeholders, ","))
 
-	result, err := d.DB.ExecContext(ctx, markStaleQuery, args...)
-	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("mark stale failed: %v", err)), nil
+	sqlRes, sqlErr := d.DB.ExecContext(ctx, markStaleQuery, args...)
+	if sqlErr != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("mark stale failed: %v", sqlErr)), nil
 	}
-	affected, _ := result.RowsAffected()
+	affected, _ := sqlRes.RowsAffected()
 
 	return toolResultJSON(map[string]any{
-		"commit_sha":           commitSha,
-		"files_processed":      len(changedFiles),
-		"observations_staled":  affected,
-		"message":              "git hook processed",
+		"commit_sha":          commitSha,
+		"files_processed":     len(changedFiles),
+		"observations_staled": affected,
+		"message":             "git hook processed",
 	})
 }
 
-func (d *Deps) handleReflect(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+func (d *Deps) handleReflect(ctx context.Context, req mcp.CallToolRequest) (result *mcp.CallToolResult, err error) {
+	start := time.Now()
+	defer func() {
+		if d.Tracker != nil {
+			d.Tracker.Record(telemetry.CallRecord{
+				ToolName:   "reflect",
+				Namespace:  req.GetString("namespace", ""),
+				ParamsUsed: nonEmptyParams(req, "namespace"),
+				Success:    err == nil && (result == nil || !result.IsError),
+				DurationMs: time.Since(start).Milliseconds(),
+			})
+		}
+	}()
+
 	namespace := req.GetString("namespace", "default")
 
 	if d.ReflectEngine == nil {
 		return mcp.NewToolResultError("reflection engine not configured"), nil
 	}
 
-	result, err := d.ReflectEngine.ForceReflect(ctx, namespace)
-	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("reflection failed: %v", err)), nil
+	reflectResult, reflectErr := d.ReflectEngine.ForceReflect(ctx, namespace)
+	if reflectErr != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("reflection failed: %v", reflectErr)), nil
 	}
 
 	return toolResultJSON(map[string]any{
-		"namespace":            namespace,
-		"source_observations":  result.SourceCount,
-		"reflections_created":  result.ReflectionsCreated,
-		"message":              "reflection completed",
+		"namespace":           namespace,
+		"source_observations": reflectResult.SourceCount,
+		"reflections_created": reflectResult.ReflectionsCreated,
+		"message":             "reflection completed",
 	})
 }
 
-func (d *Deps) handleConsolidate(ctx context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+func (d *Deps) handleConsolidate(ctx context.Context, req mcp.CallToolRequest) (result *mcp.CallToolResult, err error) {
+	start := time.Now()
+	defer func() {
+		if d.Tracker != nil {
+			d.Tracker.Record(telemetry.CallRecord{
+				ToolName:   "consolidate",
+				Namespace:  "",
+				ParamsUsed: nonEmptyParams(req),
+				Success:    err == nil && (result == nil || !result.IsError),
+				DurationMs: time.Since(start).Milliseconds(),
+			})
+		}
+	}()
+
 	if d.Pipeline == nil {
 		return mcp.NewToolResultError("consolidation pipeline not available"), nil
 	}
@@ -563,7 +748,67 @@ func (d *Deps) handleConsolidate(ctx context.Context, _ mcp.CallToolRequest) (*m
 	})
 }
 
+func (d *Deps) handleHealthCheck(ctx context.Context, req mcp.CallToolRequest) (result *mcp.CallToolResult, err error) {
+	start := time.Now()
+	days := 7
+	if args := req.GetArguments(); args != nil {
+		if v, ok := args["days"]; ok {
+			if f, ok := v.(float64); ok && f > 0 {
+				days = int(f)
+			}
+		}
+	}
+	defer func() {
+		if d.Tracker != nil {
+			d.Tracker.Record(telemetry.CallRecord{
+				ToolName:   "health_check",
+				ParamsUsed: nonEmptyParams(req, "days"),
+				Success:    err == nil,
+				DurationMs: time.Since(start).Milliseconds(),
+			})
+		}
+	}()
+
+	hdeps := health.Deps{
+		DB:        d.DB,
+		Tracker:   d.Tracker,
+		UsageDays: days,
+	}
+	if d.Embedder != nil {
+		hdeps.Embedder = d.Embedder
+		hdeps.EmbedderName = d.Embedder.Name()
+	}
+	if d.LLMProvider != nil {
+		hdeps.LLMProvider = d.LLMProvider
+		hdeps.LLMProviderName = d.LLMProvider.Name()
+	}
+	report := health.Check(ctx, hdeps)
+	return toolResultJSON(report)
+}
+
 // helpers
+
+// nonEmptyParams returns the names of request arguments that are present and non-empty.
+func nonEmptyParams(req mcp.CallToolRequest, names ...string) []string {
+	var used []string
+	args := req.GetArguments()
+	if args == nil {
+		return used
+	}
+	for _, name := range names {
+		if v, ok := args[name]; ok && v != nil {
+			switch val := v.(type) {
+			case string:
+				if val != "" {
+					used = append(used, name)
+				}
+			default:
+				used = append(used, name)
+			}
+		}
+	}
+	return used
+}
 
 func splitCSV(s string) []string {
 	parts := strings.Split(s, ",")
@@ -646,16 +891,19 @@ type contextResponseItem struct {
 }
 
 type statusResponse struct {
-	Total            int    `json:"total"`
-	Buffer           int    `json:"buffer"`
-	Working          int    `json:"working"`
-	Core             int    `json:"core"`
-	Stale            int    `json:"stale"`
-	Expired          int    `json:"expired"`
-	Links            int    `json:"links"`
-	Facts            int    `json:"facts"`
-	TemporalMentions int    `json:"temporal_mentions"`
-	ActiveSessions   int    `json:"active_sessions"`
-	LLMProvider      string `json:"llm_provider"`
-	GateMode         string `json:"gate_mode"`
+	Total             int    `json:"total"`
+	Buffer            int    `json:"buffer"`
+	Working           int    `json:"working"`
+	Core              int    `json:"core"`
+	Stale             int    `json:"stale"`
+	Expired           int    `json:"expired"`
+	Links             int    `json:"links"`
+	Facts             int    `json:"facts"`
+	TemporalMentions  int    `json:"temporal_mentions"`
+	ActiveSessions    int    `json:"active_sessions"`
+	LLMProvider       string `json:"llm_provider"`
+	GateMode          string `json:"gate_mode"`
+	EmbeddingsTotal   int    `json:"embeddings_total"`
+	EmbeddingsPending int    `json:"embeddings_pending"`
+	EmbedProvider     string `json:"embedding_provider"`
 }

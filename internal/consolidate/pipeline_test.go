@@ -28,7 +28,7 @@ func newTestPipeline(t *testing.T) (*Pipeline, *db.TestDB) {
 	gate := llm.NewGate(llm.Disabled{}, llm.GateModeOff)
 	idGen := observation.NewULIDGenerator()
 	linkStore := links.NewStore(database, idGen)
-	p := NewPipeline(database, decayEngine, embed.Disabled{}, gate, linkStore, llm.Disabled{}, idGen, Config{})
+	p := NewPipeline(database, decayEngine, embed.Disabled{}, nil, gate, linkStore, llm.Disabled{}, idGen, Config{})
 	return p, &db.TestDB{DB: database}
 }
 

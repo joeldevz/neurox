@@ -24,6 +24,7 @@ import (
 	"neurox/internal/embed"
 	"neurox/internal/facts"
 	"neurox/internal/graph"
+	"neurox/internal/installer"
 	"neurox/internal/links"
 	"neurox/internal/llm"
 	neuroxmcp "neurox/internal/mcp"
@@ -32,6 +33,7 @@ import (
 	"neurox/internal/recall"
 	reflectpkg "neurox/internal/reflect"
 	"neurox/internal/session"
+	"neurox/internal/telemetry"
 	"neurox/internal/temporal"
 )
 
@@ -53,6 +55,11 @@ func main() {
 
 	// Commands that don't need DB
 	switch cmd {
+	case "install":
+		if err := installer.Run(ctx, "."); err != nil {
+			log.Fatalf("installer: %v", err)
+		}
+		return
 	case "install-hook":
 		installHook()
 		return
@@ -127,6 +134,7 @@ func printUsage() {
 	fmt.Println("  graph            Generate interactive graph visualization")
 	fmt.Println()
 	fmt.Println("Setup commands:")
+	fmt.Println("  install          Launch interactive installer")
 	fmt.Println("  install-hook     Install git post-commit hook")
 	fmt.Println("  config           Show current configuration")
 	fmt.Println("  version          Show version")
@@ -457,6 +465,9 @@ func runMCP(ctx context.Context, database *sql.DB, cfg config.Config) {
 		DB:               database,
 		LLMProvider:      d.llmProvider,
 		LLMGate:          d.llmGate,
+		EmbedQueue:       d.embedQueue,
+		Embedder:         d.embedder,
+		Tracker:          d.tracker,
 	}
 
 	srv := neuroxmcp.NewServer(mcpDeps)
@@ -482,6 +493,8 @@ func runHTTP(ctx context.Context, database *sql.DB, cfg config.Config) {
 		LLMProvider:      d.llmProvider.Name(),
 		EmbedProvider:    d.embedder.Name(),
 		GateMode:         string(d.llmGate.Mode()),
+		EmbedQueue:       d.embedQueue,
+		Tracker:          d.tracker,
 	}
 
 	srv := api.NewServer(api.Config{Port: defaultHTTPPort}, apiDeps)
@@ -512,6 +525,7 @@ type deps struct {
 	pipeline        *consolidate.Pipeline
 	llmProvider     llm.Provider
 	llmGate         *llm.Gate
+	tracker         *telemetry.Tracker
 }
 
 func initDeps(ctx context.Context, database *sql.DB, cfg config.Config) *deps {
@@ -548,7 +562,9 @@ func initDeps(ctx context.Context, database *sql.DB, cfg config.Config) *deps {
 	}
 
 	decayEngine := decay.NewEngine(database)
-	pipeline := consolidate.NewPipeline(database, decayEngine, embedder, gate, linkStore, llmProvider, idGen, consolidate.Config{})
+	pipeline := consolidate.NewPipeline(database, decayEngine, embedder, embedQueue, gate, linkStore, llmProvider, idGen, consolidate.Config{})
+
+	tracker := telemetry.NewTracker(database)
 
 	return &deps{
 		obsStore:        obsStore,
@@ -564,6 +580,7 @@ func initDeps(ctx context.Context, database *sql.DB, cfg config.Config) *deps {
 		pipeline:        pipeline,
 		llmProvider:     llmProvider,
 		llmGate:         gate,
+		tracker:         tracker,
 	}
 }
 

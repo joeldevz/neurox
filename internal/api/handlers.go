@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"neurox/internal/graph"
+	"neurox/internal/health"
 	"neurox/internal/observation"
 	"neurox/internal/recall"
 )
@@ -35,12 +36,18 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	db.QueryRowContext(ctx, "SELECT COUNT(*) FROM facts WHERE valid_until IS NULL").Scan(&factCount)
 	db.QueryRowContext(ctx, "SELECT COUNT(*) FROM temporal_mentions").Scan(&temporalCount)
 
+	var embeddingsTotal, embeddingsPending int
+	db.QueryRowContext(ctx, "SELECT COUNT(*) FROM observations WHERE deleted_at IS NULL AND embedding IS NOT NULL").Scan(&embeddingsTotal)
+	db.QueryRowContext(ctx, "SELECT COUNT(*) FROM observations WHERE deleted_at IS NULL AND embedding IS NULL").Scan(&embeddingsPending)
+
 	writeJSON(w, http.StatusOK, map[string]any{
 		"total": total, "buffer": buffer, "working": working, "core": core,
 		"stale": stale, "expired": expired, "links": linkCount, "active_sessions": sessions,
 		"facts": factCount, "temporal_mentions": temporalCount,
 		"llm_provider": s.deps.LLMProvider, "embedding_provider": s.deps.EmbedProvider,
-		"gate_mode": s.deps.GateMode,
+		"gate_mode":          s.deps.GateMode,
+		"embeddings_total":   embeddingsTotal,
+		"embeddings_pending": embeddingsPending,
 	})
 }
 
@@ -76,6 +83,10 @@ func (s *Server) handleSave(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
+	}
+
+	if s.deps.EmbedQueue != nil {
+		s.deps.EmbedQueue.Enqueue(saved.ID)
 	}
 
 	writeJSON(w, http.StatusCreated, observationToJSON(saved))
@@ -242,6 +253,10 @@ func (s *Server) handleUpdate(w http.ResponseWriter, r *http.Request) {
 		}
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
+	}
+
+	if s.deps.EmbedQueue != nil {
+		s.deps.EmbedQueue.Enqueue(updated.ID)
 	}
 
 	writeJSON(w, http.StatusOK, observationToJSON(updated))
@@ -589,7 +604,7 @@ func (s *Server) handleBreakdown(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"by_type":      byType,
 		"by_layer":     byLayer,
-		"by_namespace":  byNamespace,
+		"by_namespace": byNamespace,
 		"by_kind":      byKind,
 		"by_relation":  byRelation,
 	})
@@ -642,6 +657,24 @@ func (s *Server) handleReflect(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{
 		"message": "reflection requires LLM provider (not yet implemented)",
 	})
+}
+
+func (s *Server) handleHealthCheck(w http.ResponseWriter, r *http.Request) {
+	days := 7
+	if d := r.URL.Query().Get("days"); d != "" {
+		if v, err := strconv.Atoi(d); err == nil && v > 0 {
+			days = v
+		}
+	}
+	hdeps := health.Deps{
+		DB:              s.deps.DB,
+		EmbedderName:    s.deps.EmbedProvider,
+		LLMProviderName: s.deps.LLMProvider,
+		Tracker:         s.deps.Tracker,
+		UsageDays:       days,
+	}
+	report := health.Check(r.Context(), hdeps)
+	writeJSON(w, http.StatusOK, report)
 }
 
 // helpers

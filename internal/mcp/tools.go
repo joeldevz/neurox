@@ -220,3 +220,12 @@ func consolidateTool() mcp.Tool {
 		mcp.WithDescription("Force immediate memory consolidation: decay, promote, dedup, detect contradictions, reflect, and evict. Normally runs every 30 minutes automatically."),
 	)
 }
+
+func healthCheckTool() mcp.Tool {
+	return mcp.NewTool("health_check",
+		mcp.WithDescription("Compute brain power score (0-100%) showing how much of Neurox's potential is being used. Returns per-dimension breakdown with status and actionable recommendations."),
+		mcp.WithNumber("days",
+			mcp.Description("Number of days to analyze for usage stats (default: 7)"),
+		),
+	)
+}

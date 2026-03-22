@@ -5,10 +5,12 @@ import (
 	"encoding/json"
 	"path/filepath"
 	"testing"
+	"time"
 
 	mcpserver "github.com/mark3labs/mcp-go/server"
 
 	"neurox/internal/db"
+	"neurox/internal/embed"
 	"neurox/internal/links"
 	"neurox/internal/observation"
 	"neurox/internal/recall"
@@ -257,7 +259,7 @@ func TestToolsList(t *testing.T) {
 	expectedTools := []string{
 		"save", "recall", "context", "update", "forget",
 		"invalidate", "status", "session_start", "session_end",
-		"git_hook", "reflect", "consolidate",
+		"git_hook", "reflect", "consolidate", "health_check",
 	}
 
 	toolNames := make(map[string]bool)
@@ -515,6 +517,64 @@ func TestStatusIncludesTemporalMentions(t *testing.T) {
 	// but the field should be in the response)
 	if status.Total != 1 {
 		t.Errorf("total = %d, want 1", status.Total)
+	}
+}
+
+// mockEmbedProvider is a local test double for embed.Provider.
+// We cannot use embed.MockProvider because it lives in a _test.go file (not exported).
+type mockEmbedProvider struct {
+	dims int
+}
+
+func (m *mockEmbedProvider) Embed(_ context.Context, _ string) ([]float32, error) {
+	vec := make([]float32, m.dims)
+	for i := range vec {
+		vec[i] = float32(i) * 0.01
+	}
+	return vec, nil
+}
+
+func (m *mockEmbedProvider) EmbedBatch(_ context.Context, texts []string) ([][]float32, error) {
+	result := make([][]float32, len(texts))
+	for i := range texts {
+		vec := make([]float32, m.dims)
+		for j := range vec {
+			vec[j] = float32(i+1) * 0.01
+		}
+		result[i] = vec
+	}
+	return result, nil
+}
+
+func (m *mockEmbedProvider) Dimensions() int { return m.dims }
+func (m *mockEmbedProvider) Name() string    { return "mock" }
+
+func TestSaveEnqueuesEmbedding(t *testing.T) {
+	deps := newTestDeps(t)
+	provider := &mockEmbedProvider{dims: 384}
+	queue := embed.NewQueue(provider, deps.DB)
+	ctx, cancel := context.WithCancel(context.Background())
+	queue.Start(ctx)
+	deps.EmbedQueue = queue
+
+	h := initServer(t, deps)
+	result := h.callTool("save", map[string]any{
+		"title": "test embedding", "content": "should get embedded",
+	})
+
+	var resp map[string]any
+	json.Unmarshal([]byte(result), &resp)
+	id := resp["id"].(string)
+
+	time.Sleep(800 * time.Millisecond)
+	cancel()
+	queue.Stop()
+
+	var embeddingBlob []byte
+	deps.DB.QueryRowContext(context.Background(),
+		"SELECT embedding FROM observations WHERE id = ?", id).Scan(&embeddingBlob)
+	if embeddingBlob == nil {
+		t.Error("observation should have embedding after save+queue flush")
 	}
 }
 
