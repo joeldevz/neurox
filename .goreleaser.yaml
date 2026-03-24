@@ -1,50 +1,8 @@
 version: 2
 
-before:
-  hooks:
-    - go mod tidy
-
-builds:
-  - main: .
-    binary: neurox
-    env:
-      - CGO_ENABLED=1
-      - >-
-        {{- if eq .Os "linux" }}
-          {{- if eq .Arch "amd64" }}CC=x86_64-linux-gnu-gcc{{- end }}
-          {{- if eq .Arch "arm64" }}CC=aarch64-linux-gnu-gcc{{- end }}
-        {{- end }}
-    goos:
-      - linux
-      - darwin
-    goarch:
-      - amd64
-      - arm64
-    ldflags:
-      - -s -w
-      - -X main.version={{.Version}}
-
-archives:
-  - formats:
-      - tar.gz
-    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
-
-checksum:
-  name_template: checksums.txt
-
-homebrew_casks:
-  - name: neurox
-    repository:
-      owner: joeldevz
-      name: homebrew-tap
-      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
-    directory: Casks
-    homepage: https://github.com/joeldevz/neurox
-    description: "Brain-inspired memory engine for AI coding agents"
-    license: MIT
-
-partial:
-  by: target
+# GoReleaser is not used for builds (CGO cross-compilation is handled
+# directly in .github/workflows/release.yml using native runners).
+# This file is kept for reference and future use.
 
 changelog:
   sort: asc
