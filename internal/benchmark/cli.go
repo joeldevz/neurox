@@ -30,6 +30,7 @@ func RunCLI(args []string) error {
 	fs := flag.NewFlagSet("benchmark", flag.ExitOnError)
 	scale := fs.String("scale", "small", "Scale: small, medium, large")
 	output := fs.String("output", "", "JSON output file path")
+	outputHTML := fs.String("output-html", "", "HTML report output file path")
 	category := fs.String("category", "all", "Filter by category: cognitive, performance, agent, all")
 	dimensions := fs.String("dimensions", "", "Comma-separated dimension names to run (overrides --category when set)")
 	verbose := fs.Bool("verbose", false, "Show detailed check results per dimension")
@@ -127,6 +128,13 @@ func RunCLI(args []string) error {
 			return fmt.Errorf("export JSON: %w", err)
 		}
 		fmt.Printf("Results exported to %s\n", *output)
+	}
+
+	if *outputHTML != "" {
+		if err := ExportHTML(report, *outputHTML); err != nil {
+			return fmt.Errorf("export HTML: %w", err)
+		}
+		fmt.Printf("HTML report exported to %s\n", *outputHTML)
 	}
 
 	return nil

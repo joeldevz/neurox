@@ -23,6 +23,7 @@ import (
 	"github.com/joeldevz/neurox/internal/db"
 	"github.com/joeldevz/neurox/internal/decay"
 	"github.com/joeldevz/neurox/internal/embed"
+	exportpkg "github.com/joeldevz/neurox/internal/export"
 	"github.com/joeldevz/neurox/internal/facts"
 	"github.com/joeldevz/neurox/internal/graph"
 	"github.com/joeldevz/neurox/internal/installer"
@@ -109,6 +110,10 @@ func main() {
 		runStatus(ctx, database, cfg)
 	case "consolidate":
 		runConsolidate(ctx, database, cfg)
+	case "export":
+		runExport(ctx, database)
+	case "import":
+		runImport(ctx, database)
 	case "graph":
 		runGraph(ctx, database)
 	case "config":
@@ -141,6 +146,10 @@ func printUsage() {
 	fmt.Println()
 	fmt.Println("Benchmark:")
 	fmt.Println("  benchmark        Run brain benchmark suite (--scale small|medium|large)")
+	fmt.Println()
+	fmt.Println("Export / Import:")
+	fmt.Println("  export           Export observations as Markdown files (--format markdown --output dir --namespace ns)")
+	fmt.Println("  import           Import .md observation files into the database (--source dir)")
 	fmt.Println()
 	fmt.Println("Setup commands:")
 	fmt.Println("  install          Launch interactive installer")
@@ -393,6 +402,40 @@ func runConsolidate(ctx context.Context, database *sql.DB, cfg config.Config) {
 		"working": working,
 		"core":    core,
 	})
+}
+
+func runExport(ctx context.Context, database *sql.DB) {
+	fs := flag.NewFlagSet("export", flag.ExitOnError)
+	format := fs.String("format", "markdown", "Export format: markdown")
+	output := fs.String("output", "./neurox-export", "Output directory")
+	namespace := fs.String("namespace", "", "Namespace to export (empty = all)")
+	fs.Parse(os.Args[2:])
+
+	if *format != "markdown" {
+		log.Fatalf("unsupported format: %s (only markdown supported)", *format)
+	}
+
+	count, err := exportpkg.ExportMarkdown(ctx, database, *namespace, *output)
+	if err != nil {
+		log.Fatalf("export: %v", err)
+	}
+	fmt.Printf("Exported %d observations to %s\n", count, *output)
+}
+
+func runImport(ctx context.Context, database *sql.DB) {
+	fs := flag.NewFlagSet("import", flag.ExitOnError)
+	source := fs.String("source", "", "Source directory with .md files (required)")
+	fs.Parse(os.Args[2:])
+
+	if *source == "" {
+		log.Fatalf("--source is required")
+	}
+
+	count, err := exportpkg.ImportMarkdown(ctx, database, *source)
+	if err != nil {
+		log.Fatalf("import: %v", err)
+	}
+	fmt.Printf("Imported %d observations from %s\n", count, *source)
 }
 
 func runGraph(ctx context.Context, database *sql.DB) {

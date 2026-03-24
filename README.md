@@ -28,9 +28,24 @@
 
 ---
 
-Neurox gives AI coding agents persistent, structured memory that works like a brain. It stores observations across three memory layers, automatically promotes important memories, detects and resolves contradictions, and understands *when* things happened — not just *what*.
+Your AI coding agent forgets everything between sessions. Every conversation starts from scratch — no memory of the architecture decisions you made last week, the bug you fixed yesterday, or your preference for tabs over spaces.
 
-**98% retrieval accuracy** on LongMemEval benchmark (S setting, 48 distractor sessions per query). Pure FTS5, no LLM required.
+Neurox gives your agent persistent, structured memory that works like a brain.
+
+- 🧠 **Architecture decisions** — Decided to use Postgres over SQLite? Neurox remembers why, what tradeoffs were discussed, and which files are affected.
+- 🐛 **Bug discoveries** — Fixed a subtle timezone bug in JWT auth? Neurox stores the what, why, and where so your agent never has to rediscover it.
+- ⚙️ **Preferences** — Prefer tabs over spaces? English commit messages? Neurox saves your preferences and applies them automatically.
+
+### 30-second install
+
+```bash
+git clone https://github.com/joeldevz/neurox.git
+cd neurox && ./install.sh
+```
+
+See [docs/quickstart.md](docs/quickstart.md) for Claude Desktop, Cursor, VS Code setup.
+
+**98% recall on LongMemEval** · **Brain Benchmark** · Zero infrastructure · Local-first
 
 ## How it works
 
@@ -327,6 +342,8 @@ Per-client setup guides with copy-paste config and verification steps:
 | OpenCode | [docs/opencode.md](docs/opencode.md) |
 
 All clients use the same pattern: install the binary, add `neurox` to `mcpServers` with `command: "neurox"` and `args: ["mcp"]`, then restart the client.
+
+**Further reading:** [docs/concepts.md](docs/concepts.md) defines the key terms — decay curve, consolidation epoch, memory layer, staleness, temporal intent, observation vs. fact, brain power score.
 
 ### Windsurf / HTTP clients
 
