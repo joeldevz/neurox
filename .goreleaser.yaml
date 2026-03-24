@@ -43,6 +43,9 @@ homebrew_casks:
     description: "Brain-inspired memory engine for AI coding agents"
     license: MIT
 
+partial:
+  by: target
+
 changelog:
   sort: asc
   filters:
@@ -50,3 +53,4 @@ changelog:
       - "^docs:"
       - "^test:"
       - "^chore:"
+      - "^ci:"
