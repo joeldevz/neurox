@@ -116,7 +116,7 @@ Execute five strategic initiatives that together position Neurox as the category
   - Layer funnel shows Buffer/Working/Core counts with promotion stats
   - All data loads from existing API endpoints (no mocks)
   - Works without LLM configured (gracefully shows limited score with explanation)
-- **Status**: [ ] pending
+- **Status**: [x] done
 
 ### Step 4: Shareable benchmark report + Markdown export — close the technical gaps
 - **What**:

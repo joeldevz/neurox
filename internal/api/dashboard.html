@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>neurox — brain</title>
 <script src="https://unpkg.com/vis-network@9.1.9/standalone/umd/vis-network.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
   :root {
@@ -456,6 +457,31 @@
   .legend-item { display: flex; align-items: center; gap: 0.4rem; font-size: 0.62rem; color: var(--text-dim); margin-bottom: 0.15rem; }
   .legend-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
   .legend-line { width: 16px; height: 2px; flex-shrink: 0; }
+
+  /* ── HEALTH TAB ── */
+  .health-tab { flex-direction: column; overflow-y: auto; padding: 1.5rem; gap: 1.5rem; }
+  .health-score-card { display: flex; align-items: center; gap: 1.5rem; background: var(--surface); border-radius: 12px; padding: 1.5rem 2rem; }
+  .health-score-num { font-size: 4rem; font-weight: 800; line-height: 1; }
+  .health-grade { font-size: 1.8rem; font-weight: 700; padding: 0.3rem 0.8rem; border-radius: 8px; }
+  .health-score-info { flex: 1; }
+  .health-score-summary { color: var(--text-dim); font-size: 0.9rem; margin-top: 0.3rem; }
+  .health-actions { margin-top: 0.8rem; padding-left: 1rem; }
+  .health-actions li { color: var(--cyan); font-size: 0.85rem; margin-bottom: 0.2rem; }
+  .health-section { background: var(--surface); border-radius: 12px; padding: 1.2rem 1.5rem; }
+  .health-section h3 { font-size: 0.75rem; letter-spacing: 2px; color: var(--text-dim); text-transform: uppercase; margin-bottom: 1rem; }
+  .dim-row { display: flex; align-items: center; gap: 0.8rem; padding: 0.4rem 0; border-bottom: 1px solid var(--border); }
+  .dim-row:last-child { border-bottom: none; }
+  .dim-name { width: 180px; font-size: 0.85rem; flex-shrink: 0; }
+  .dim-cat { font-size: 0.7rem; padding: 0.1rem 0.4rem; border-radius: 4px; background: var(--border); color: var(--text-dim); flex-shrink: 0; }
+  .dim-bar-wrap { flex: 1; background: var(--border); border-radius: 3px; height: 6px; }
+  .dim-bar { height: 6px; border-radius: 3px; transition: width 0.6s ease; }
+  .dim-status { width: 16px; text-align: center; flex-shrink: 0; }
+  .dim-rec { font-size: 0.75rem; color: var(--text-dim); flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .funnel-row { display: flex; align-items: center; gap: 1rem; margin-bottom: 0.6rem; }
+  .funnel-label { width: 70px; font-size: 0.85rem; color: var(--text-dim); }
+  .funnel-bar-wrap { flex: 1; background: var(--border); border-radius: 4px; height: 20px; }
+  .funnel-bar { height: 20px; border-radius: 4px; display: flex; align-items: center; padding-left: 8px; font-size: 0.75rem; font-weight: 600; color: #fff; min-width: 2px; transition: width 0.6s ease; }
+  .chart-wrap { position: relative; height: 220px; }
 </style>
 </head>
 <body>
@@ -470,6 +496,7 @@
       <div class="tab active" data-tab="brain">Brain</div>
       <div class="tab" data-tab="explorer">Explorer</div>
       <div class="tab" data-tab="graph">Graph</div>
+      <div class="tab" data-tab="health">Health</div>
     </div>
   </div>
   <div class="provider-info">
@@ -633,6 +660,40 @@
   </div>
 </div>
 
+<!-- ═══ HEALTH TAB ═══ -->
+<div class="tab-content health-tab" id="tab-health">
+  <!-- Section 1: Brain Power Score -->
+  <div class="health-score-card">
+    <span class="health-score-num" id="health-score-num">—</span>
+    <span class="health-grade" id="health-grade">—</span>
+    <div class="health-score-info">
+      <div style="font-size:1rem;font-weight:600">Brain Power Score</div>
+      <div class="health-score-summary" id="health-summary"></div>
+      <ul class="health-actions" id="health-actions"></ul>
+    </div>
+  </div>
+
+  <!-- Section 2: Dimension Breakdown -->
+  <div class="health-section">
+    <h3>Dimension Breakdown</h3>
+    <div id="health-dims"></div>
+  </div>
+
+  <!-- Section 3: Memory Layer Funnel -->
+  <div class="health-section">
+    <h3>Memory Layer Funnel</h3>
+    <div id="health-funnel"></div>
+  </div>
+
+  <!-- Section 4: Decay Timeline Chart -->
+  <div class="health-section">
+    <h3>Average Importance by Layer (last 30 days)</h3>
+    <div class="chart-wrap" id="decay-chart-wrap">
+      <canvas id="decay-chart"></canvas>
+    </div>
+  </div>
+</div>
+
 <script>
 const API = window.location.origin;
 const TYPE_COLORS = {
@@ -672,6 +733,7 @@ document.querySelectorAll('.tab').forEach(t => {
     t.classList.add('active');
     $('tab-'+t.dataset.tab).classList.add('active');
     if(t.dataset.tab==='explorer' && !breakdown) loadBreakdown();
+    if(t.dataset.tab==='health') loadHealth();
   });
 });
 
@@ -703,6 +765,8 @@ async function loadBreakdown() {
   renderSidebar();
   populateNamespaceSelects();
   browse();
+  // If health tab is currently active, update its funnel
+  if(document.querySelector('.tab[data-tab="health"]')?.classList.contains('active')) renderFunnel();
 }
 
 function populateNamespaceSelects() {
@@ -920,6 +984,124 @@ async function loadGraph() {
       $('graph-info').classList.add('visible');
     } else {
       $('graph-info').classList.remove('visible');
+    }
+  });
+}
+
+// ── Health Tab ──
+async function loadHealth() {
+  const [hRes, tlRes] = await Promise.all([
+    fetch(API+'/api/v1/health-check').then(r => r.json()).catch(() => null),
+    fetch(API+'/api/v1/decay-timeline').then(r => r.json()).catch(() => ({ points: [] }))
+  ]);
+
+  if (!hRes) {
+    $('health-score-num').textContent = '—';
+    $('health-summary').textContent = 'Could not load health data.';
+    return;
+  }
+
+  // Score + grade
+  const scoreEl = $('health-score-num');
+  const score = hRes.score ?? 0;
+  scoreEl.textContent = score;
+  scoreEl.style.color = score >= 70 ? 'var(--green)' : score >= 40 ? 'var(--amber)' : 'var(--red)';
+
+  const gradeEl = $('health-grade');
+  gradeEl.textContent = hRes.grade ?? '—';
+  gradeEl.style.background = score >= 70 ? 'var(--green)' : score >= 40 ? 'var(--amber)' : 'var(--red)';
+  gradeEl.style.color = '#000';
+
+  $('health-summary').textContent = hRes.summary ?? '';
+
+  const actionsEl = $('health-actions');
+  actionsEl.innerHTML = (hRes.top_actions ?? []).slice(0, 3).map(a => `<li>${esc(a)}</li>`).join('');
+
+  // Dimensions
+  const dimsEl = $('health-dims');
+  dimsEl.innerHTML = (hRes.dimensions ?? []).map(d => {
+    const pct = d.max > 0 ? Math.round((d.score / d.max) * 100) : 0;
+    const color = d.status === 'optimal' ? 'var(--green)' : d.status === 'warning' ? 'var(--amber)' : 'var(--red)';
+    const icon = d.status === 'optimal' ? '✓' : d.status === 'warning' ? '⚠' : '✗';
+    return `<div class="dim-row">
+      <span class="dim-name">${esc(d.name)}</span>
+      <span class="dim-cat">${esc(d.category)}</span>
+      <div class="dim-bar-wrap"><div class="dim-bar" style="width:${pct}%;background:${color}"></div></div>
+      <span class="dim-status" style="color:${color}">${icon}</span>
+      <span class="dim-rec" title="${esc(d.recommendation ?? '')}">${esc(d.recommendation ?? '')}</span>
+    </div>`;
+  }).join('');
+
+  // Funnel — load breakdown if not yet available, then render
+  if (breakdown) {
+    renderFunnel();
+  } else {
+    fetchJSON(API+'/api/v1/stats/breakdown').then(data => {
+      breakdown = data;
+      renderFunnel();
+    }).catch(() => {});
+  }
+
+  // Decay timeline chart
+  renderDecayChart(tlRes.points ?? []);
+}
+
+function renderFunnel() {
+  const buf = breakdown.by_layer.buffer ?? 0;
+  const wrk = breakdown.by_layer.working ?? 0;
+  const cor = breakdown.by_layer.core ?? 0;
+  const total = buf + wrk + cor;
+  if (total === 0) {
+    $('health-funnel').innerHTML = '<p style="color:var(--text-dim);font-size:0.85rem">No observations yet.</p>';
+    return;
+  }
+  const layers = [
+    { key: 'buffer',  label: 'Buffer',  color: '#10b981', count: buf },
+    { key: 'working', label: 'Working', color: '#3b82f6', count: wrk },
+    { key: 'core',    label: 'Core',    color: '#8b5cf6', count: cor },
+  ];
+  $('health-funnel').innerHTML = layers.map(l => {
+    const pct = total > 0 ? Math.round((l.count / total) * 100) : 0;
+    return `<div class="funnel-row">
+      <span class="funnel-label">${l.label}</span>
+      <div class="funnel-bar-wrap">
+        <div class="funnel-bar" style="width:${Math.max(pct,2)}%;background:${l.color}">${l.count} (${pct}%)</div>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function renderDecayChart(points) {
+  const ctx = $('decay-chart');
+  if (!ctx) return;
+  if (!points || points.length === 0) {
+    $('decay-chart-wrap').innerHTML = '<p style="color:var(--text-dim);font-size:0.85rem;text-align:center;padding:2rem">Not enough data yet — importance timeline will appear after Neurox has been running for a few days.</p>';
+    return;
+  }
+  // Group by day
+  const days = [...new Set(points.map(p => p.day))].sort();
+  const byLayerDay = (layer) => days.map(d => {
+    const pt = points.find(p => p.day === d && p.layer === layer);
+    return pt ? Math.round(pt.avg_imp * 100) / 100 : null;
+  });
+  if (window._decayChart) window._decayChart.destroy();
+  window._decayChart = new Chart(ctx, {
+    type: 'line',
+    data: {
+      labels: days,
+      datasets: [
+        { label: 'Buffer',  data: byLayerDay(0), borderColor: '#10b981', backgroundColor: '#10b98122', tension: 0.4, spanGaps: true },
+        { label: 'Working', data: byLayerDay(1), borderColor: '#3b82f6', backgroundColor: '#3b82f622', tension: 0.4, spanGaps: true },
+        { label: 'Core',    data: byLayerDay(2), borderColor: '#8b5cf6', backgroundColor: '#8b5cf622', tension: 0.4, spanGaps: true },
+      ]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      scales: {
+        y: { min: 0, max: 1, grid: { color: '#ffffff11' }, ticks: { color: '#888' } },
+        x: { grid: { color: '#ffffff11' }, ticks: { color: '#888', maxTicksLimit: 10 } }
+      },
+      plugins: { legend: { labels: { color: '#ccc' } } }
     }
   });
 }

@@ -680,6 +680,45 @@ func (s *Server) handleReflect(w http.ResponseWriter, _ *http.Request) {
 	})
 }
 
+func (s *Server) handleDecayTimeline(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	db := s.deps.DB
+
+	rows, err := db.QueryContext(ctx, `
+		SELECT DATE(created_at) as day, layer, AVG(importance) as avg_imp, COUNT(*) as cnt
+		FROM observations
+		WHERE deleted_at IS NULL
+		  AND created_at >= datetime('now', '-30 days')
+		GROUP BY day, layer
+		ORDER BY day ASC, layer ASC
+	`)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		return
+	}
+	defer rows.Close()
+
+	type point struct {
+		Day    string  `json:"day"`
+		Layer  int     `json:"layer"`
+		AvgImp float64 `json:"avg_imp"`
+		Count  int     `json:"count"`
+	}
+	var points []point
+	for rows.Next() {
+		var p point
+		if err := rows.Scan(&p.Day, &p.Layer, &p.AvgImp, &p.Count); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+			return
+		}
+		points = append(points, p)
+	}
+	if points == nil {
+		points = []point{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"points": points})
+}
+
 func (s *Server) handleHealthCheck(w http.ResponseWriter, r *http.Request) {
 	days := 7
 	if d := r.URL.Query().Get("days"); d != "" {
