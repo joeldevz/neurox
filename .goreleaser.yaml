@@ -26,6 +26,21 @@ archives:
 checksum:
   name_template: checksums.txt
 
+brews:
+  - name: neurox
+    repository:
+      owner: joeldevz
+      name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
+    directory: Formula
+    homepage: https://github.com/joeldevz/neurox
+    description: "Brain-inspired memory engine for AI coding agents"
+    license: MIT
+    install: |
+      bin.install "neurox"
+    test: |
+      system "#{bin}/neurox", "version"
+
 changelog:
   sort: asc
   filters:
