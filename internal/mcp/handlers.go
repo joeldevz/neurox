@@ -11,19 +11,19 @@ import (
 
 	"github.com/mark3labs/mcp-go/mcp"
 
-	"neurox/internal/classify"
-	"neurox/internal/consolidate"
-	"neurox/internal/embed"
-	"neurox/internal/facts"
-	"neurox/internal/health"
-	"neurox/internal/links"
-	"neurox/internal/llm"
-	"neurox/internal/observation"
-	"neurox/internal/proactive"
-	"neurox/internal/recall"
-	reflectpkg "neurox/internal/reflect"
-	"neurox/internal/session"
-	"neurox/internal/telemetry"
+	"github.com/joeldevz/neurox/internal/classify"
+	"github.com/joeldevz/neurox/internal/consolidate"
+	"github.com/joeldevz/neurox/internal/embed"
+	"github.com/joeldevz/neurox/internal/facts"
+	"github.com/joeldevz/neurox/internal/health"
+	"github.com/joeldevz/neurox/internal/links"
+	"github.com/joeldevz/neurox/internal/llm"
+	"github.com/joeldevz/neurox/internal/observation"
+	"github.com/joeldevz/neurox/internal/proactive"
+	"github.com/joeldevz/neurox/internal/recall"
+	reflectpkg "github.com/joeldevz/neurox/internal/reflect"
+	"github.com/joeldevz/neurox/internal/session"
+	"github.com/joeldevz/neurox/internal/telemetry"
 )
 
 type Deps struct {

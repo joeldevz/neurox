@@ -9,7 +9,7 @@ import (
 
 	"github.com/oklog/ulid/v2"
 
-	"neurox/internal/filelink"
+	"github.com/joeldevz/neurox/internal/filelink"
 )
 
 type Store struct {

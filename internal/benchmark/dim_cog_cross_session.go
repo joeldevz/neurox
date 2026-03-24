@@ -4,8 +4,8 @@ import (
 	"context"
 	"fmt"
 
-	"neurox/internal/observation"
-	"neurox/internal/recall"
+	"github.com/joeldevz/neurox/internal/observation"
+	"github.com/joeldevz/neurox/internal/recall"
 )
 
 // CogCrossSession benchmarks the brain's ability to persist and recall memory

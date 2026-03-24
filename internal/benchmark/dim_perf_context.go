@@ -6,7 +6,7 @@ import (
 	"sort"
 	"time"
 
-	"neurox/internal/observation"
+	"github.com/joeldevz/neurox/internal/observation"
 )
 
 // PerfContext benchmarks proactive context retrieval latency:

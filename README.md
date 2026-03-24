@@ -16,6 +16,18 @@
 
 ---
 
+## Quick Setup
+
+| AI Client | Setup Guide |
+|-----------|-------------|
+| Claude Code | [docs/claude-code.md](docs/claude-code.md) |
+| Claude Desktop | [docs/claude-desktop.md](docs/claude-desktop.md) |
+| Cursor | [docs/cursor.md](docs/cursor.md) |
+| VS Code | [docs/vscode.md](docs/vscode.md) |
+| OpenCode | [docs/opencode.md](docs/opencode.md) |
+
+---
+
 Neurox gives AI coding agents persistent, structured memory that works like a brain. It stores observations across three memory layers, automatically promotes important memories, detects and resolves contradictions, and understands *when* things happened — not just *what*.
 
 **98% retrieval accuracy** on LongMemEval benchmark (S setting, 48 distractor sessions per query). Pure FTS5, no LLM required.
@@ -222,6 +234,10 @@ The installer launches a Bubble Tea TUI where you can choose the binary install 
 
 Before it writes anything, it shows exactly where configuration will be stored and which provider settings are required.
 
+When **Claude Code** is selected as an integration, the installer also copies `skills/neurox/SKILL.md` to `~/.claude/skills/neurox/SKILL.md` automatically, so Claude Code learns to use Neurox proactively without any extra steps.
+
+> **Note for contributors:** `internal/installer/skill.md` is a copy of `skills/neurox/SKILL.md` used for `//go:embed`. If you update the skill, run `cp skills/neurox/SKILL.md internal/installer/skill.md` to keep them in sync.
+
 ### Build
 
 ```bash
@@ -300,45 +316,19 @@ Most CLI commands print JSON, which makes them easy to pipe into other tools or 
 
 ## Agent Setup
 
-### Claude Code
+Per-client setup guides with copy-paste config and verification steps:
 
-Add to `~/.claude/settings.json` or project `.mcp.json`:
+| AI Client | Setup Guide |
+|-----------|-------------|
+| Claude Code | [docs/claude-code.md](docs/claude-code.md) |
+| Claude Desktop | [docs/claude-desktop.md](docs/claude-desktop.md) |
+| Cursor | [docs/cursor.md](docs/cursor.md) |
+| VS Code | [docs/vscode.md](docs/vscode.md) |
+| OpenCode | [docs/opencode.md](docs/opencode.md) |
 
-```json
-{
-  "mcpServers": {
-    "neurox": {
-      "command": "/path/to/neurox",
-      "args": ["mcp"]
-    }
-  }
-}
-```
+All clients use the same pattern: install the binary, add `neurox` to `mcpServers` with `command: "neurox"` and `args: ["mcp"]`, then restart the client.
 
-### Cursor
-
-Settings > MCP Servers > Add:
-- Name: `neurox`
-- Command: `/path/to/neurox mcp`
-- Transport: `stdio`
-
-### OpenCode
-
-Add to `opencode.json`:
-
-```json
-{
-  "mcp": {
-    "neurox": {
-      "type": "local",
-      "command": ["/path/to/neurox", "mcp"],
-      "enabled": true
-    }
-  }
-}
-```
-
-### Windsurf / Copilot / HTTP clients
+### Windsurf / HTTP clients
 
 ```bash
 neurox serve  # REST API on port 7438

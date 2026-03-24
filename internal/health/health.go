@@ -6,9 +6,9 @@ import (
 	"fmt"
 	"sort"
 
-	"neurox/internal/embed"
-	"neurox/internal/llm"
-	"neurox/internal/telemetry"
+	"github.com/joeldevz/neurox/internal/embed"
+	"github.com/joeldevz/neurox/internal/llm"
+	"github.com/joeldevz/neurox/internal/telemetry"
 )
 
 // Dimension represents one scored aspect of brain health.

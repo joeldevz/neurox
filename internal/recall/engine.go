@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	"neurox/internal/embed"
-	"neurox/internal/observation"
+	"github.com/joeldevz/neurox/internal/embed"
+	"github.com/joeldevz/neurox/internal/observation"
 )
 
 const (

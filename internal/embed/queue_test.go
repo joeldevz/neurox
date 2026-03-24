@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"neurox/internal/db"
+	"github.com/joeldevz/neurox/internal/db"
 )
 
 func TestQueueProcessesBatch(t *testing.T) {

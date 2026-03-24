@@ -8,16 +8,16 @@ import (
 	"sync"
 	"testing"
 
-	bench "neurox/internal/benchmark"
-	"neurox/internal/consolidate"
-	"neurox/internal/db"
-	"neurox/internal/decay"
-	"neurox/internal/embed"
-	"neurox/internal/facts"
-	"neurox/internal/links"
-	"neurox/internal/llm"
-	"neurox/internal/observation"
-	"neurox/internal/recall"
+	bench "github.com/joeldevz/neurox/internal/benchmark"
+	"github.com/joeldevz/neurox/internal/consolidate"
+	"github.com/joeldevz/neurox/internal/db"
+	"github.com/joeldevz/neurox/internal/decay"
+	"github.com/joeldevz/neurox/internal/embed"
+	"github.com/joeldevz/neurox/internal/facts"
+	"github.com/joeldevz/neurox/internal/links"
+	"github.com/joeldevz/neurox/internal/llm"
+	"github.com/joeldevz/neurox/internal/observation"
+	"github.com/joeldevz/neurox/internal/recall"
 )
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────

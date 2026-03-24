@@ -1,0 +1,11 @@
+{
+  "name": "neurox",
+  "version": "0.1.0",
+  "description": "Brain-inspired memory engine for AI coding agents",
+  "keywords": ["mcp", "memory", "ai-agents", "claude", "cursor", "skills"],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/joeldevz/neurox.git"
+  },
+  "license": "MIT"
+}

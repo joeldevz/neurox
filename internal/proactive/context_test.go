@@ -5,8 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"neurox/internal/db"
-	"neurox/internal/embed"
+	"github.com/joeldevz/neurox/internal/db"
+	"github.com/joeldevz/neurox/internal/embed"
 )
 
 func setupTest(t *testing.T) (*Engine, *db.TestDB) {

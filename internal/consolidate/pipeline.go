@@ -8,14 +8,14 @@ import (
 	"sync"
 	"time"
 
-	"neurox/internal/contradiction"
-	"neurox/internal/decay"
-	"neurox/internal/embed"
-	"neurox/internal/filelink"
-	"neurox/internal/links"
-	"neurox/internal/llm"
-	reflectpkg "neurox/internal/reflect"
-	"neurox/internal/temporal"
+	"github.com/joeldevz/neurox/internal/contradiction"
+	"github.com/joeldevz/neurox/internal/decay"
+	"github.com/joeldevz/neurox/internal/embed"
+	"github.com/joeldevz/neurox/internal/filelink"
+	"github.com/joeldevz/neurox/internal/links"
+	"github.com/joeldevz/neurox/internal/llm"
+	reflectpkg "github.com/joeldevz/neurox/internal/reflect"
+	"github.com/joeldevz/neurox/internal/temporal"
 )
 
 const (

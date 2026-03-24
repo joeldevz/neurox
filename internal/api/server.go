@@ -9,11 +9,11 @@ import (
 	"net/http"
 	"time"
 
-	"neurox/internal/embed"
-	"neurox/internal/links"
-	"neurox/internal/observation"
-	"neurox/internal/recall"
-	"neurox/internal/telemetry"
+	"github.com/joeldevz/neurox/internal/embed"
+	"github.com/joeldevz/neurox/internal/links"
+	"github.com/joeldevz/neurox/internal/observation"
+	"github.com/joeldevz/neurox/internal/recall"
+	"github.com/joeldevz/neurox/internal/telemetry"
 )
 
 type Config struct {

@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"time"
 
-	"neurox/internal/observation"
-	"neurox/internal/recall"
-	"neurox/internal/temporal"
+	"github.com/joeldevz/neurox/internal/observation"
+	"github.com/joeldevz/neurox/internal/recall"
+	"github.com/joeldevz/neurox/internal/temporal"
 )
 
 // CogTemporal benchmarks the brain's temporal reasoning and decay correctness:

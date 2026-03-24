@@ -9,7 +9,7 @@ import (
 
 	_ "github.com/mattn/go-sqlite3"
 
-	"neurox/internal/db"
+	"github.com/joeldevz/neurox/internal/db"
 )
 
 func newTestStore(t *testing.T) (*Store, *sql.DB) {

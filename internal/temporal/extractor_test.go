@@ -5,8 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"neurox/internal/db"
-	"neurox/internal/observation"
+	"github.com/joeldevz/neurox/internal/db"
+	"github.com/joeldevz/neurox/internal/observation"
 )
 
 func TestExtractorParsesAndPersists(t *testing.T) {

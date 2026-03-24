@@ -4,7 +4,7 @@ import (
 	"regexp"
 	"strings"
 
-	"neurox/internal/observation"
+	"github.com/joeldevz/neurox/internal/observation"
 )
 
 // stepPattern matches common step/plan execution titles.

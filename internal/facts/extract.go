@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"neurox/internal/llm"
+	"github.com/joeldevz/neurox/internal/llm"
 )
 
 // temporalPredicates are predicates where the object is expected to be a date.

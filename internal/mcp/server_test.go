@@ -9,12 +9,12 @@ import (
 
 	mcpserver "github.com/mark3labs/mcp-go/server"
 
-	"neurox/internal/db"
-	"neurox/internal/embed"
-	"neurox/internal/links"
-	"neurox/internal/observation"
-	"neurox/internal/recall"
-	"neurox/internal/temporal"
+	"github.com/joeldevz/neurox/internal/db"
+	"github.com/joeldevz/neurox/internal/embed"
+	"github.com/joeldevz/neurox/internal/links"
+	"github.com/joeldevz/neurox/internal/observation"
+	"github.com/joeldevz/neurox/internal/recall"
+	"github.com/joeldevz/neurox/internal/temporal"
 )
 
 func newTestDeps(t *testing.T) *Deps {

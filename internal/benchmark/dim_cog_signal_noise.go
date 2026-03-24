@@ -4,9 +4,9 @@ import (
 	"context"
 	"fmt"
 
-	"neurox/internal/classify"
-	"neurox/internal/observation"
-	"neurox/internal/recall"
+	"github.com/joeldevz/neurox/internal/classify"
+	"github.com/joeldevz/neurox/internal/observation"
+	"github.com/joeldevz/neurox/internal/recall"
 )
 
 // CogSignalNoise benchmarks the brain's ability to distinguish high-value

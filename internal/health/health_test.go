@@ -6,8 +6,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"neurox/internal/db"
-	"neurox/internal/telemetry"
+	"github.com/joeldevz/neurox/internal/db"
+	"github.com/joeldevz/neurox/internal/telemetry"
 )
 
 func TestCheckAllHealthy(t *testing.T) {

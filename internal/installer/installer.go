@@ -16,7 +16,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"gopkg.in/yaml.v3"
 
-	"neurox/internal/config"
+	"github.com/joeldevz/neurox/internal/config"
 )
 
 type Environment struct {
@@ -706,6 +706,9 @@ func (m model) renderInlineSummary() string {
 		if m.state.LLMProvider != "disabled" {
 			lines = append(lines, "  Gate: "+m.state.GateMode)
 		}
+		if items := m.shortIntegrations(); len(items) > 0 {
+			lines = append(lines, "  Integrations: "+strings.Join(items, ", "))
+		}
 	}
 	return strings.Join(lines, "\n")
 }
@@ -916,7 +919,7 @@ func (m model) shortProviderLabel(value string, embeddings bool) string {
 func (m model) shortIntegrations() []string {
 	var items []string
 	if m.state.ConfigureClaude {
-		items = append(items, "Claude Code")
+		items = append(items, "Claude Code (+ skill)")
 	}
 	if m.state.ConfigureOpenCode {
 		items = append(items, "OpenCode")
@@ -1126,6 +1129,11 @@ func executeInstall(s state, env Environment) installResult {
 		} else {
 			result.Updated = append(result.Updated, env.ClaudeConfigPath)
 		}
+		if err := installClaudeSkill(env.HomeDir); err != nil {
+			result.Warnings = append(result.Warnings, fmt.Sprintf("Claude Code skill: %v", err))
+		} else {
+			result.Updated = append(result.Updated, filepath.Join(env.HomeDir, ".claude", "skills", "neurox", "SKILL.md"))
+		}
 	}
 	if s.ConfigureOpenCode {
 		if err := upsertOpenCodeConfig(env.OpenCodeConfig, binaryPath); err != nil {
@@ -1204,6 +1212,18 @@ func embedProviderValue(value string) string {
 		return ""
 	}
 	return value
+}
+
+// installClaudeSkill writes the embedded SKILL.md to
+// ~/.claude/skills/neurox/SKILL.md so Claude Code loads it automatically.
+// The skill content is embedded at build time — no source directory needed.
+func installClaudeSkill(homeDir string) error {
+	destDir := filepath.Join(homeDir, ".claude", "skills", "neurox")
+	if err := os.MkdirAll(destDir, 0o755); err != nil {
+		return fmt.Errorf("create skills dir: %w", err)
+	}
+	dest := filepath.Join(destDir, "SKILL.md")
+	return os.WriteFile(dest, neuroxSkillContent, 0o644)
 }
 
 func copyFile(src string, dst string, mode os.FileMode) error {

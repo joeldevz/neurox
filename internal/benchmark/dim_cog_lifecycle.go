@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"strings"
 
-	"neurox/internal/facts"
-	"neurox/internal/observation"
-	"neurox/internal/recall"
+	"github.com/joeldevz/neurox/internal/facts"
+	"github.com/joeldevz/neurox/internal/observation"
+	"github.com/joeldevz/neurox/internal/recall"
 )
 
 // CogLifecycle benchmarks a complete 30-day brain simulation:

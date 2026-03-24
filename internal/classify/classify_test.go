@@ -3,7 +3,7 @@ package classify
 import (
 	"testing"
 
-	"neurox/internal/observation"
+	"github.com/joeldevz/neurox/internal/observation"
 )
 
 func TestInferRetention(t *testing.T) {

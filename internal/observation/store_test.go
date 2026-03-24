@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"neurox/internal/db"
+	"github.com/joeldevz/neurox/internal/db"
 )
 
 func TestSaveBasicObservation(t *testing.T) {

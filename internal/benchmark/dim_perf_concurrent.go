@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	"neurox/internal/observation"
+	"github.com/joeldevz/neurox/internal/observation"
 )
 
 // PerfConcurrent benchmarks concurrent write stress:

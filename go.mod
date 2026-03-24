@@ -1,4 +1,4 @@
-module neurox
+module github.com/joeldevz/neurox
 
 go 1.23.0
 

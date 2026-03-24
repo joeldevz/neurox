@@ -8,15 +8,15 @@ import (
 
 	mcpserver "github.com/mark3labs/mcp-go/server"
 
-	"neurox/internal/embed"
-	"neurox/internal/facts"
-	"neurox/internal/llm"
-	internalmcp "neurox/internal/mcp"
-	"neurox/internal/observation"
-	"neurox/internal/proactive"
-	reflectpkg "neurox/internal/reflect"
-	"neurox/internal/session"
-	"neurox/internal/telemetry"
+	"github.com/joeldevz/neurox/internal/embed"
+	"github.com/joeldevz/neurox/internal/facts"
+	"github.com/joeldevz/neurox/internal/llm"
+	internalmcp "github.com/joeldevz/neurox/internal/mcp"
+	"github.com/joeldevz/neurox/internal/observation"
+	"github.com/joeldevz/neurox/internal/proactive"
+	reflectpkg "github.com/joeldevz/neurox/internal/reflect"
+	"github.com/joeldevz/neurox/internal/session"
+	"github.com/joeldevz/neurox/internal/telemetry"
 )
 
 // MCPHarness wraps a fully-initialized MCP server for benchmark usage.

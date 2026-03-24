@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"strings"
 
-	"neurox/internal/classify"
-	"neurox/internal/observation"
+	"github.com/joeldevz/neurox/internal/classify"
+	"github.com/joeldevz/neurox/internal/observation"
 )
 
 // AgentParamImpact benchmarks how parameter richness correlates with recall

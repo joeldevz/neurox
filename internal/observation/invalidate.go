@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"strings"
 
-	"neurox/internal/links"
+	"github.com/joeldevz/neurox/internal/links"
 )
 
 type InvalidateInput struct {

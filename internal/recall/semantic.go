@@ -5,7 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 
-	"neurox/internal/embed"
+	"github.com/joeldevz/neurox/internal/embed"
 )
 
 const (

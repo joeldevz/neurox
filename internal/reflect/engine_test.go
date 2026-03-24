@@ -6,10 +6,10 @@ import (
 	"path/filepath"
 	"testing"
 
-	"neurox/internal/db"
-	"neurox/internal/links"
-	"neurox/internal/llm"
-	"neurox/internal/observation"
+	"github.com/joeldevz/neurox/internal/db"
+	"github.com/joeldevz/neurox/internal/links"
+	"github.com/joeldevz/neurox/internal/llm"
+	"github.com/joeldevz/neurox/internal/observation"
 )
 
 type mockLLM struct {

@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "neurox": {
+      "args": [
+        "mcp"
+      ],
+      "command": "/home/clasing/.local/bin/neurox"
+    }
+  }
+}

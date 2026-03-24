@@ -6,8 +6,8 @@ import (
 	"sort"
 	"time"
 
-	"neurox/internal/observation"
-	"neurox/internal/recall"
+	"github.com/joeldevz/neurox/internal/observation"
+	"github.com/joeldevz/neurox/internal/recall"
 )
 
 // PerfRecall benchmarks recall/search throughput:

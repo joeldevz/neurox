@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"neurox/internal/filelink"
+	"github.com/joeldevz/neurox/internal/filelink"
 )
 
 type Store struct {

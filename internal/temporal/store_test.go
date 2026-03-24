@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"neurox/internal/db"
-	"neurox/internal/observation"
+	"github.com/joeldevz/neurox/internal/db"
+	"github.com/joeldevz/neurox/internal/observation"
 )
 
 func setupTest(t *testing.T) *Store {

@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"time"
 
-	"neurox/internal/observation"
+	"github.com/joeldevz/neurox/internal/observation"
 )
 
 // ProjectDay groups a batch of observations that were "written" on the same

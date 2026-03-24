@@ -4,9 +4,9 @@ import (
 	"context"
 	"fmt"
 
-	"neurox/internal/links"
-	"neurox/internal/observation"
-	"neurox/internal/recall"
+	"github.com/joeldevz/neurox/internal/links"
+	"github.com/joeldevz/neurox/internal/observation"
+	"github.com/joeldevz/neurox/internal/recall"
 )
 
 // CogKnowledgeUpdate benchmarks the brain's ability to handle evolving knowledge:

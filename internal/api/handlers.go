@@ -10,11 +10,11 @@ import (
 
 	"time"
 
-	"neurox/internal/classify"
-	"neurox/internal/graph"
-	"neurox/internal/health"
-	"neurox/internal/observation"
-	"neurox/internal/recall"
+	"github.com/joeldevz/neurox/internal/classify"
+	"github.com/joeldevz/neurox/internal/graph"
+	"github.com/joeldevz/neurox/internal/health"
+	"github.com/joeldevz/neurox/internal/observation"
+	"github.com/joeldevz/neurox/internal/recall"
 )
 
 func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {

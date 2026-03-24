@@ -5,7 +5,7 @@ import (
 	"database/sql"
 	"testing"
 
-	"neurox/internal/links"
+	"github.com/joeldevz/neurox/internal/links"
 )
 
 func TestInvalidateWithoutReplacement(t *testing.T) {

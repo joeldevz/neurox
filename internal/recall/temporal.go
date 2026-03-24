@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"neurox/internal/temporal"
+	"github.com/joeldevz/neurox/internal/temporal"
 )
 
 // TemporalIntentKind classifies the temporal nature of a recall query.

@@ -7,9 +7,9 @@ import (
 	"log"
 	"strings"
 
-	"neurox/internal/filelink"
-	"neurox/internal/links"
-	"neurox/internal/llm"
+	"github.com/joeldevz/neurox/internal/filelink"
+	"github.com/joeldevz/neurox/internal/links"
+	"github.com/joeldevz/neurox/internal/llm"
 )
 
 const (

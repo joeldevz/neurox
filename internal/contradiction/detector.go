@@ -7,10 +7,10 @@ import (
 	"log"
 	"strings"
 
-	"neurox/internal/embed"
-	"neurox/internal/links"
-	"neurox/internal/llm"
-	"neurox/internal/temporal"
+	"github.com/joeldevz/neurox/internal/embed"
+	"github.com/joeldevz/neurox/internal/links"
+	"github.com/joeldevz/neurox/internal/llm"
+	"github.com/joeldevz/neurox/internal/temporal"
 )
 
 const (

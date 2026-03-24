@@ -9,10 +9,10 @@ import (
 	"path/filepath"
 	"testing"
 
-	"neurox/internal/db"
-	"neurox/internal/links"
-	"neurox/internal/observation"
-	"neurox/internal/recall"
+	"github.com/joeldevz/neurox/internal/db"
+	"github.com/joeldevz/neurox/internal/links"
+	"github.com/joeldevz/neurox/internal/observation"
+	"github.com/joeldevz/neurox/internal/recall"
 )
 
 func newTestServer(t *testing.T) *Server {
