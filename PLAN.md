@@ -148,7 +148,7 @@ Execute five strategic initiatives that together position Neurox as the category
   - Exported files open and render correctly in Obsidian
   - `neurox import --source=./out/` re-imports observations with same IDs and content
   - Round-trip: export then import produces identical observation count
-- **Status**: [ ] pending
+- **Status**: [x] done
 
 ### Step 5: Content strategy execution — own the vocabulary
 - **What**: This step is about publishing, not coding. It produces three artifacts:
@@ -179,7 +179,7 @@ Execute five strategic initiatives that together position Neurox as the category
   - README hero section explicitly targets coding agent users with concrete use cases
   - Blog post draft is ready to publish (can be a GitHub gist if no blog exists yet)
   - HN Show HN post title and first paragraph are written
-- **Status**: [ ] pending
+- **Status**: [x] done
 
 ---
 
