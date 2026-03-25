@@ -1029,13 +1029,17 @@ func performInstallCmd(s state, env Environment) tea.Cmd {
 func executeInstall(s state, env Environment) installResult {
 	result := installResult{}
 
-	// Use the running executable as the binary path for MCP configs.
-	// The binary is already installed — we only configure clients and skills.
-	binaryPath, err := os.Executable()
+	// Resolve the running executable path for MCP configs.
+	// EvalSymlinks gives the real path even when run via a symlink.
+	// Falls back to "neurox" (relies on PATH) if resolution fails.
+	self, err := os.Executable()
 	if err != nil {
-		result.Err = fmt.Errorf("locate current binary: %w", err)
-		return result
+		self = "neurox"
 	}
+	if resolved, err := filepath.EvalSymlinks(self); err == nil {
+		self = resolved
+	}
+	binaryPath := self
 	result.BinaryPath = binaryPath
 
 	configFile := filepath.Join(s.ConfigDir, "config.yaml")
