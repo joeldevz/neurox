@@ -38,22 +38,11 @@ Neurox gives your agent persistent, structured memory that works like a brain.
 
 ### 30-second install
 
-**Option A — Prebuilt binary (recommended, no Go required):**
 ```bash
 curl -fsSL https://raw.githubusercontent.com/joeldevz/neurox/main/install.sh | bash
 ```
 
-**Option B — Install via Go (requires Go + gcc):**
-```bash
-CGO_ENABLED=1 go install -tags fts5 github.com/joeldevz/neurox@latest
-```
-
-> **Note for Go users:** `go install` puts the binary in `~/go/bin/`. If you have another `neurox` elsewhere on your PATH (e.g. `~/.local/bin/`), it may shadow the new version. Run this to sync all locations:
-> ```bash
-> install -m 755 ~/go/bin/neurox $(which neurox)
-> ```
-
-Then run the setup wizard to configure your AI clients:
+Then configure your AI clients:
 ```bash
 neurox install
 ```
