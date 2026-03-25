@@ -3,10 +3,11 @@ set -euo pipefail
 
 # Neurox installer
 # Downloads the prebuilt binary for the current platform from GitHub Releases.
+# Alternatively, install via Go: CGO_ENABLED=1 go install -tags fts5 github.com/joeldevz/neurox@latest
 #
 # Usage:
 #   curl -fsSL https://raw.githubusercontent.com/joeldevz/neurox/main/install.sh | bash
-#   ./install.sh [--version v0.1.5] [--install-dir ~/.local/bin]
+#   ./install.sh [--version v0.1.9] [--install-dir ~/.local/bin]
 
 REPO="joeldevz/neurox"
 BINARY="neurox"
@@ -65,13 +66,25 @@ fi
 
 tar -xzf "$TMPDIR/$TARBALL" -C "$TMPDIR"
 
-# The binary inside the tarball is named neurox_<os>_<arch>
 EXTRACTED="$(find "$TMPDIR" -maxdepth 1 -type f -not -name "*.tar.gz" | head -1)"
 [[ -z "$EXTRACTED" ]] && { printf "Could not find binary in tarball.\n" >&2; exit 1; }
 
-# ── Install ───────────────────────────────────────────────────────────────────
+# ── Install to target dir ─────────────────────────────────────────────────────
 mkdir -p "$DEFAULT_INSTALL_DIR"
 install -m 755 "$EXTRACTED" "$DEFAULT_INSTALL_DIR/$BINARY"
+
+# ── Sync to any other neurox locations already in PATH ───────────────────────
+# Prevents stale binaries in ~/go/bin, /usr/local/bin, etc. from shadowing
+# the newly installed version.
+OTHER_LOCATIONS="$(which -a "$BINARY" 2>/dev/null | grep -v "^$DEFAULT_INSTALL_DIR/$BINARY$" || true)"
+if [[ -n "$OTHER_LOCATIONS" ]]; then
+  while IFS= read -r loc; do
+    [[ -z "$loc" ]] && continue
+    if install -m 755 "$EXTRACTED" "$loc" 2>/dev/null; then
+      printf "  Also updated %s\n" "$loc"
+    fi
+  done <<< "$OTHER_LOCATIONS"
+fi
 
 # ── Ensure install dir is in PATH ─────────────────────────────────────────────
 if [[ ":$PATH:" != *":$DEFAULT_INSTALL_DIR:"* ]]; then
@@ -82,7 +95,7 @@ if [[ ":$PATH:" != *":$DEFAULT_INSTALL_DIR:"* ]]; then
   fi
   if [[ -n "$SHELL_RC" ]]; then
     printf '\nexport PATH="%s:$PATH"\n' "$DEFAULT_INSTALL_DIR" >> "$SHELL_RC"
-    printf "Added %s to PATH in %s\nRun: source %s\n" \
+    printf "Added %s to PATH in %s — run: source %s\n" \
       "$DEFAULT_INSTALL_DIR" "$SHELL_RC" "$SHELL_RC"
   fi
 fi
