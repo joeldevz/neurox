@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+	"time"
 
 	mcpserver "github.com/mark3labs/mcp-go/server"
 
@@ -428,12 +429,12 @@ func runCurate(ctx context.Context, database *sql.DB, cfg config.Config) {
 			"  NEUROX_CURATOR_REMOTE_MODEL=gemini-2.5-flash")
 	}
 
-	// Create curator provider
-	curatorProvider := llm.NewRemote(llm.RemoteConfig{
+	// Create curator provider with extended timeout for large namespaces
+	curatorProvider := llm.NewRemoteWithTimeout(llm.RemoteConfig{
 		URL:    cfg.Curator.RemoteURL,
 		APIKey: cfg.Curator.RemoteAPIKey,
 		Model:  cfg.Curator.RemoteModel,
-	})
+	}, 5*time.Minute)
 
 	// Load priorities
 	priorities, err := curate.LoadPriorities(cfg.Curator.PrioritiesFile)
@@ -669,11 +670,11 @@ func initDeps(ctx context.Context, database *sql.DB, cfg config.Config) *deps {
 	// Build curator provider when configured; used for reflections and curation.
 	var curatorProvider llm.Provider
 	if cfg.Curator.Provider == "remote" && cfg.Curator.RemoteURL != "" && cfg.Curator.RemoteModel != "" {
-		curatorProvider = llm.NewRemote(llm.RemoteConfig{
+		curatorProvider = llm.NewRemoteWithTimeout(llm.RemoteConfig{
 			URL:    cfg.Curator.RemoteURL,
 			APIKey: cfg.Curator.RemoteAPIKey,
 			Model:  cfg.Curator.RemoteModel,
-		})
+		}, 5*time.Minute)
 		log.Printf("using curator provider: %s", curatorProvider.Name())
 	}
 

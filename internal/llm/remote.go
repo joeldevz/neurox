@@ -34,6 +34,18 @@ func NewRemote(cfg RemoteConfig) *RemoteProvider {
 	}
 }
 
+// NewRemoteWithTimeout creates a RemoteProvider with a custom HTTP timeout.
+// Use this for long-running operations like curation where the default 60s
+// is insufficient for large prompts.
+func NewRemoteWithTimeout(cfg RemoteConfig, timeout time.Duration) *RemoteProvider {
+	return &RemoteProvider{
+		url:    cfg.URL,
+		apiKey: cfg.APIKey,
+		model:  cfg.Model,
+		client: &http.Client{Timeout: timeout},
+	}
+}
+
 func (r *RemoteProvider) Complete(ctx context.Context, prompt string) (string, error) {
 	if prompt == "" {
 		return "", ErrEmptyPrompt
