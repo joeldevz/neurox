@@ -22,7 +22,6 @@ import (
 type Environment struct {
 	SourceDir         string
 	HomeDir           string
-	DefaultInstallDir string
 	DefaultConfigDir  string
 	PreferredShellRC  string
 	GitRoot           string
@@ -36,9 +35,7 @@ type Environment struct {
 }
 
 type state struct {
-	InstallDir           string
 	ConfigDir            string
-	AddToPath            bool
 	EmbedProvider        string
 	EmbedRemoteURL       string
 	EmbedRemoteKey       string
@@ -59,7 +56,6 @@ type stepKind int
 
 const (
 	stepWelcome stepKind = iota
-	stepPaths
 	stepProviders
 	stepIntegrations
 	stepReview
@@ -165,7 +161,6 @@ func detectEnvironment(sourceDir string) (Environment, error) {
 	env := Environment{
 		SourceDir:         sourceDir,
 		HomeDir:           homeDir,
-		DefaultInstallDir: filepath.Join(homeDir, ".local", "bin"),
 		DefaultConfigDir:  filepath.Join(configDir, "neurox"),
 		PreferredShellRC:  preferredShellRC(homeDir),
 		ClaudeConfigPath:  filepath.Join(homeDir, ".claude", "settings.json"),
@@ -241,11 +236,8 @@ func preferredShellRC(homeDir string) string {
 }
 
 func newModel(env Environment) model {
-	addToPath := !pathContains(env.DefaultInstallDir)
 	state := state{
-		InstallDir:           env.DefaultInstallDir,
 		ConfigDir:            env.DefaultConfigDir,
-		AddToPath:            addToPath,
 		EmbedProvider:        defaultProvider(env.OllamaEmbedModel),
 		LLMProvider:          defaultProvider(env.OllamaLLMModel),
 		GateMode:             "auto",
@@ -429,21 +421,13 @@ func (m *model) activateCurrent() (tea.Model, tea.Cmd) {
 func (m *model) handleAction(key string) (tea.Model, tea.Cmd) {
 	switch key {
 	case "start":
-		m.step = stepPaths
-		m.cursor = 0
-		m.status = "Choose where Neurox should live"
-	case "welcome_quit", "cancel":
-		return *m, tea.Quit
-	case "paths_next":
-		if strings.TrimSpace(m.state.InstallDir) == "" || strings.TrimSpace(m.state.ConfigDir) == "" {
-			m.status = "Install and config directories are required"
-			return *m, nil
-		}
 		m.step = stepProviders
 		m.cursor = 0
 		m.status = "Pick your providers"
+	case "welcome_quit", "cancel":
+		return *m, tea.Quit
 	case "providers_back":
-		m.step = stepPaths
+		m.step = stepWelcome
 		m.cursor = 0
 	case "providers_next":
 		if err := m.validateProviders(); err != nil {
@@ -510,8 +494,6 @@ func (m *model) toggleCurrent() {
 	}
 	current := fields[m.cursor]
 	switch current.Key {
-	case "add_to_path":
-		m.state.AddToPath = !m.state.AddToPath
 	case "claude":
 		m.state.ConfigureClaude = !m.state.ConfigureClaude
 	case "opencode":
@@ -534,19 +516,6 @@ func (m model) currentFields() []field {
 			{Type: fieldAction, Key: "start", Label: "Start setup"},
 			{Type: fieldAction, Key: "welcome_quit", Label: "Quit", Danger: true},
 		}
-	case stepPaths:
-		fields := []field{
-			{Type: fieldText, Key: "install_dir", Label: "Install directory", Description: "Where the `neurox` binary will be copied"},
-			{Type: fieldText, Key: "config_dir", Label: "Config directory", Description: "Config file and database live here"},
-		}
-		if m.env.PreferredShellRC != "" && strings.TrimSpace(m.state.InstallDir) != strings.TrimSpace(m.env.DefaultInstallDir) {
-			fields = append(fields, field{Type: fieldToggle, Key: "add_to_path", Label: "Add install dir to PATH", Description: m.env.PreferredShellRC})
-		}
-		fields = append(fields,
-			field{Type: fieldAction, Key: "paths_next", Label: "Continue"},
-			field{Type: fieldAction, Key: "cancel", Label: "Quit", Danger: true},
-		)
-		return fields
 	case stepProviders:
 		fields := []field{{Type: fieldSelect, Key: "embed_provider", Label: "Embeddings provider", Description: "FTS5 only, local Ollama, or remote API"}}
 		if m.state.EmbedProvider == "remote" {
@@ -617,7 +586,7 @@ func (m model) View() string {
 }
 
 func (m model) renderHeader() string {
-	steps := []string{"Welcome", "Paths", "Providers", "Integrations", "Review"}
+	steps := []string{"Welcome", "Providers", "Integrations", "Review"}
 	index := 0
 	if m.step > stepWelcome && m.step <= stepReview {
 		index = int(m.step)
@@ -641,15 +610,16 @@ func (m model) renderWelcome() string {
 		"██  ██ ██ ██      ██    ██ ██   ██ ██    ██  ██ ██ ",
 		"██   ████ ███████  ██████  ██   ██  ██████  ██   ██",
 	}, "\n"))
-	badge := lipgloss.NewStyle().Foreground(lipgloss.Color("16")).Background(lipgloss.Color("45")).Padding(0, 1).Bold(true).Render(" installer ")
+	badge := lipgloss.NewStyle().Foreground(lipgloss.Color("16")).Background(lipgloss.Color("45")).Padding(0, 1).Bold(true).Render(" setup ")
 	hero := lipgloss.JoinVertical(lipgloss.Left,
 		badge,
 		"",
 		brand,
 		"",
-		m.subtleStyle.Render("Set up Neurox in a few guided steps."),
+		m.subtleStyle.Render("Configure your AI clients and providers."),
+		m.subtleStyle.Render("Neurox is already installed — this wizard writes your MCP configs"),
+		m.subtleStyle.Render("and installs the skill so your agent uses memory automatically."),
 		"",
-		m.okStyle.Render("◇ Install path"),
 		m.okStyle.Render("◇ Providers"),
 		m.okStyle.Render("◇ Integrations"),
 		m.accentStyle.Render("● Review before writing files"),
@@ -698,7 +668,6 @@ func (m model) renderInlineSummary() string {
 	case stepReview:
 		lines = append(lines,
 			m.headingStyle.Render("Summary"),
-			"  Binary: "+filepath.Join(m.state.InstallDir, "neurox"),
 			"  Config: "+filepath.Join(m.state.ConfigDir, "config.yaml"),
 			"  Embeddings: "+m.shortProviderLabel(m.state.EmbedProvider, true),
 			"  LLM: "+m.shortProviderLabel(m.state.LLMProvider, false),
@@ -778,14 +747,12 @@ func (m model) renderValue(f field, selected bool) string {
 
 func (m model) stepTitle() string {
 	switch m.step {
-	case stepPaths:
-		return "Step 1 — Choose install paths"
 	case stepProviders:
-		return "Step 2 — Configure providers"
+		return "Step 1 — Configure providers"
 	case stepIntegrations:
-		return "Step 3 — Wire integrations"
+		return "Step 2 — Wire integrations"
 	case stepReview:
-		return "Step 4 — Review before install"
+		return "Step 3 — Review before applying"
 	default:
 		return ""
 	}
@@ -793,12 +760,10 @@ func (m model) stepTitle() string {
 
 func (m model) stepDescription() string {
 	switch m.step {
-	case stepPaths:
-		return "Decide where Neurox should install its binary and keep its config/database."
 	case stepProviders:
 		return "Choose whether you want local Ollama, remote APIs, or a lightweight FTS5-only setup."
 	case stepIntegrations:
-		return "Pick the editors and repo integrations the installer should configure for you."
+		return "Pick the editors and repo integrations the wizard should configure for you."
 	case stepReview:
 		return "Final check before files are written. You can still go back and tweak anything."
 	default:
@@ -938,8 +903,6 @@ func (m model) shortIntegrations() []string {
 
 func (m model) textFieldValue(key string) string {
 	switch key {
-	case "install_dir":
-		return m.state.InstallDir
 	case "config_dir":
 		return m.state.ConfigDir
 	case "embed_url":
@@ -961,8 +924,6 @@ func (m model) textFieldValue(key string) string {
 
 func (m *model) setTextFieldValue(key string, value string) {
 	switch key {
-	case "install_dir":
-		m.state.InstallDir = value
 	case "config_dir":
 		m.state.ConfigDir = value
 	case "embed_url":
@@ -982,8 +943,6 @@ func (m *model) setTextFieldValue(key string, value string) {
 
 func (m model) toggleValue(key string) bool {
 	switch key {
-	case "add_to_path":
-		return m.state.AddToPath
 	case "claude":
 		return m.state.ConfigureClaude
 	case "opencode":
@@ -1057,9 +1016,6 @@ func (m model) validateProviders() error {
 }
 
 func (m model) validate() error {
-	if strings.TrimSpace(m.state.InstallDir) == "" {
-		return errors.New("install directory is required")
-	}
 	if strings.TrimSpace(m.state.ConfigDir) == "" {
 		return errors.New("config directory is required")
 	}
@@ -1072,47 +1028,20 @@ func performInstallCmd(s state, env Environment) tea.Cmd {
 
 func executeInstall(s state, env Environment) installResult {
 	result := installResult{}
-	binaryPath := filepath.Join(s.InstallDir, "neurox")
-	configFile := filepath.Join(s.ConfigDir, "config.yaml")
-	databasePath := filepath.Join(s.ConfigDir, "neurox.db")
-	result.BinaryPath = binaryPath
-	result.ConfigFile = configFile
-	result.Database = databasePath
 
-	tempDir, err := os.MkdirTemp("", "neurox-install-*")
-	if err != nil {
-		result.Err = fmt.Errorf("create temp dir: %w", err)
-		return result
-	}
-	defer os.RemoveAll(tempDir)
-
-	// Use the running executable directly — no need to recompile.
-	// This works whether neurox was installed via go install, install.sh,
-	// or built from source.
-	selfPath, err := os.Executable()
+	// Use the running executable as the binary path for MCP configs.
+	// The binary is already installed — we only configure clients and skills.
+	binaryPath, err := os.Executable()
 	if err != nil {
 		result.Err = fmt.Errorf("locate current binary: %w", err)
 		return result
 	}
-	builtBinary := selfPath
+	result.BinaryPath = binaryPath
 
-	if err := os.MkdirAll(s.InstallDir, 0o755); err != nil {
-		result.Err = fmt.Errorf("create install dir: %w", err)
-		return result
-	}
-	if err := copyFile(builtBinary, binaryPath, 0o755); err != nil {
-		result.Err = fmt.Errorf("install binary: %w", err)
-		return result
-	}
-	result.Updated = append(result.Updated, binaryPath)
-
-	if s.AddToPath && env.PreferredShellRC != "" && !pathContains(s.InstallDir) {
-		if err := ensurePathLine(env.PreferredShellRC, s.InstallDir); err != nil {
-			result.Warnings = append(result.Warnings, fmt.Sprintf("Could not update PATH in %s: %v", env.PreferredShellRC, err))
-		} else {
-			result.Updated = append(result.Updated, env.PreferredShellRC)
-		}
-	}
+	configFile := filepath.Join(s.ConfigDir, "config.yaml")
+	databasePath := filepath.Join(s.ConfigDir, "neurox.db")
+	result.ConfigFile = configFile
+	result.Database = databasePath
 
 	if err := os.MkdirAll(s.ConfigDir, 0o755); err != nil {
 		result.Err = fmt.Errorf("create config dir: %w", err)
@@ -1227,45 +1156,6 @@ func installClaudeSkill(homeDir string) error {
 	return os.WriteFile(dest, neuroxSkillContent, 0o644)
 }
 
-func copyFile(src string, dst string, mode os.FileMode) error {
-	data, err := os.ReadFile(src)
-	if err != nil {
-		return err
-	}
-	tempPath := dst + ".tmp"
-	if err := os.WriteFile(tempPath, data, mode); err != nil {
-		return err
-	}
-	if err := os.Rename(tempPath, dst); err != nil {
-		_ = os.Remove(tempPath)
-		return err
-	}
-	return nil
-}
-
-func ensurePathLine(shellRC string, installDir string) error {
-	var existing string
-	if data, err := os.ReadFile(shellRC); err == nil {
-		existing = string(data)
-	}
-	line := fmt.Sprintf("export PATH=\"%s:${PATH}\"", installDir)
-	if strings.Contains(existing, installDir) {
-		return nil
-	}
-	f, err := os.OpenFile(shellRC, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-	if existing != "" && !strings.HasSuffix(existing, "\n") {
-		if _, err := f.WriteString("\n"); err != nil {
-			return err
-		}
-	}
-	_, err = fmt.Fprintf(f, "\n# Neurox\n%s\n", line)
-	return err
-}
-
 func upsertClaudeConfig(path string, binaryPath string) error {
 	var cfg map[string]any
 	if err := readJSONFile(path, &cfg); err != nil {
@@ -1353,15 +1243,6 @@ func ensureObject(parent map[string]any, key string) map[string]any {
 	child := map[string]any{}
 	parent[key] = child
 	return child
-}
-
-func pathContains(dir string) bool {
-	for _, path := range filepath.SplitList(os.Getenv("PATH")) {
-		if filepath.Clean(path) == filepath.Clean(dir) {
-			return true
-		}
-	}
-	return false
 }
 
 func fallback(value string, alt string) string {
