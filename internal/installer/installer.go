@@ -1086,14 +1086,15 @@ func executeInstall(s state, env Environment) installResult {
 	}
 	defer os.RemoveAll(tempDir)
 
-	builtBinary := filepath.Join(tempDir, "neurox")
-	cmd := exec.Command("go", "build", "-tags", "fts5", "-o", builtBinary, ".")
-	cmd.Dir = env.SourceDir
-	cmd.Env = append(os.Environ(), "CGO_ENABLED=1")
-	if out, err := cmd.CombinedOutput(); err != nil {
-		result.Err = fmt.Errorf("build binary: %w\n%s", err, strings.TrimSpace(string(out)))
+	// Use the running executable directly — no need to recompile.
+	// This works whether neurox was installed via go install, install.sh,
+	// or built from source.
+	selfPath, err := os.Executable()
+	if err != nil {
+		result.Err = fmt.Errorf("locate current binary: %w", err)
 		return result
 	}
+	builtBinary := selfPath
 
 	if err := os.MkdirAll(s.InstallDir, 0o755); err != nil {
 		result.Err = fmt.Errorf("create install dir: %w", err)
