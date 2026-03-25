@@ -19,7 +19,7 @@ type Config struct {
 }
 
 type LLMConfig struct {
-	Provider string `yaml:"provider"` // "ollama", "remote", "disabled"
+	Provider string `yaml:"provider"`  // "ollama", "remote", "disabled"
 	GateMode string `yaml:"gate_mode"` // "auto", "full", "off"
 
 	// Ollama settings
@@ -33,11 +33,11 @@ type LLMConfig struct {
 }
 
 type EmbeddingsConfig struct {
-	Provider   string `yaml:"provider"`   // "ollama", "remote", "disabled", "" (auto)
-	RemoteURL  string `yaml:"remote_url"` // OpenAI-compatible embeddings endpoint base URL
-	RemoteKey  string `yaml:"remote_api_key"`
+	Provider    string `yaml:"provider"`   // "ollama", "remote", "disabled", "" (auto)
+	RemoteURL   string `yaml:"remote_url"` // OpenAI-compatible embeddings endpoint base URL
+	RemoteKey   string `yaml:"remote_api_key"`
 	RemoteModel string `yaml:"remote_model"`
-	Dimensions int    `yaml:"dimensions"`
+	Dimensions  int    `yaml:"dimensions"`
 }
 
 type DatabaseConfig struct {
@@ -85,9 +85,16 @@ func resolveConfigDir() (string, error) {
 		return filepath.Clean(override), nil
 	}
 
-	baseDir, err := os.UserConfigDir()
+	// Use XDG_CONFIG_HOME if set, otherwise ~/.config.
+	// os.UserConfigDir() returns ~/Library/Application Support on macOS
+	// which is wrong for CLI tools.
+	homeDir, err := os.UserHomeDir()
 	if err != nil {
-		return "", fmt.Errorf("resolve user config dir: %w", err)
+		return "", fmt.Errorf("resolve home dir: %w", err)
+	}
+	baseDir := os.Getenv("XDG_CONFIG_HOME")
+	if baseDir == "" {
+		baseDir = filepath.Join(homeDir, ".config")
 	}
 
 	return filepath.Join(baseDir, "neurox"), nil

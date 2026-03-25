@@ -154,17 +154,21 @@ func detectEnvironment(sourceDir string) (Environment, error) {
 	if err != nil {
 		return Environment{}, fmt.Errorf("resolve home dir: %w", err)
 	}
-	configDir, err := os.UserConfigDir()
-	if err != nil {
-		return Environment{}, fmt.Errorf("resolve config dir: %w", err)
+	// Always use ~/.config for neurox — it's a CLI tool, not a GUI app.
+	// os.UserConfigDir() returns ~/Library/Application Support on macOS
+	// which is wrong for terminal tools. Use XDG_CONFIG_HOME if set,
+	// otherwise fall back to ~/.config.
+	xdgConfig := os.Getenv("XDG_CONFIG_HOME")
+	if xdgConfig == "" {
+		xdgConfig = filepath.Join(homeDir, ".config")
 	}
 	env := Environment{
 		SourceDir:         sourceDir,
 		HomeDir:           homeDir,
-		DefaultConfigDir:  filepath.Join(configDir, "neurox"),
+		DefaultConfigDir:  filepath.Join(xdgConfig, "neurox"),
 		PreferredShellRC:  preferredShellRC(homeDir),
 		ClaudeConfigPath:  filepath.Join(homeDir, ".claude.json"),
-		OpenCodeConfig:    filepath.Join(configDir, "opencode", "opencode.json"),
+		OpenCodeConfig:    filepath.Join(xdgConfig, "opencode", "opencode.json"),
 		CursorConfig:      filepath.Join(homeDir, ".cursor", "mcp.json"),
 		AntigravityConfig: filepath.Join(homeDir, ".gemini", "antigravity", "mcp_config.json"),
 	}
