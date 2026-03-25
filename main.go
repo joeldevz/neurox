@@ -20,6 +20,7 @@ import (
 	benchpkg "github.com/joeldevz/neurox/internal/benchmark"
 	"github.com/joeldevz/neurox/internal/config"
 	"github.com/joeldevz/neurox/internal/consolidate"
+	"github.com/joeldevz/neurox/internal/curate"
 	"github.com/joeldevz/neurox/internal/db"
 	"github.com/joeldevz/neurox/internal/decay"
 	"github.com/joeldevz/neurox/internal/embed"
@@ -64,6 +65,9 @@ func main() {
 		return
 	case "install-hook":
 		installHook()
+		return
+	case "update":
+		runUpdate()
 		return
 	case "version", "--version", "-v":
 		fmt.Printf("neurox v%s\n", version)
@@ -110,6 +114,8 @@ func main() {
 		runStatus(ctx, database, cfg)
 	case "consolidate":
 		runConsolidate(ctx, database, cfg)
+	case "curate":
+		runCurate(ctx, database, cfg)
 	case "export":
 		runExport(ctx, database)
 	case "import":
@@ -140,6 +146,7 @@ func printUsage() {
 	fmt.Println("  invalidate       Mark an observation as incorrect")
 	fmt.Println("  status           Show brain statistics")
 	fmt.Println("  consolidate      Force immediate consolidation (promote, dedup, reflect)")
+	fmt.Println("  curate           Deep curation: clean noise, recalibrate importance (--namespace ns --dry-run)")
 	fmt.Println()
 	fmt.Println("Visualization:")
 	fmt.Println("  graph            Generate interactive graph visualization")
@@ -154,6 +161,7 @@ func printUsage() {
 	fmt.Println("Setup commands:")
 	fmt.Println("  install          Launch interactive installer")
 	fmt.Println("  install-hook     Install git post-commit hook")
+	fmt.Println("  update           Update neurox to the latest version")
 	fmt.Println("  config           Show current configuration")
 	fmt.Println("  version          Show version")
 	fmt.Println()
@@ -404,6 +412,62 @@ func runConsolidate(ctx context.Context, database *sql.DB, cfg config.Config) {
 	})
 }
 
+func runCurate(ctx context.Context, database *sql.DB, cfg config.Config) {
+	fs := flag.NewFlagSet("curate", flag.ExitOnError)
+	namespace := fs.String("namespace", "", "Curate specific namespace (default: all)")
+	fs.StringVar(namespace, "n", "", "Curate specific namespace (shorthand)")
+	dryRun := fs.Bool("dry-run", false, "Preview changes without executing")
+	fs.Parse(os.Args[2:])
+
+	// Check curator provider is configured
+	if cfg.Curator.Provider != "remote" || cfg.Curator.RemoteURL == "" || cfg.Curator.RemoteModel == "" {
+		log.Fatalf("curator not configured. Set in config.yaml or via environment:\n" +
+			"  NEUROX_CURATOR_PROVIDER=remote\n" +
+			"  NEUROX_CURATOR_REMOTE_URL=https://generativelanguage.googleapis.com/v1beta/openai\n" +
+			"  NEUROX_CURATOR_REMOTE_API_KEY=your-api-key\n" +
+			"  NEUROX_CURATOR_REMOTE_MODEL=gemini-2.5-flash")
+	}
+
+	// Create curator provider
+	curatorProvider := llm.NewRemote(llm.RemoteConfig{
+		URL:    cfg.Curator.RemoteURL,
+		APIKey: cfg.Curator.RemoteAPIKey,
+		Model:  cfg.Curator.RemoteModel,
+	})
+
+	// Load priorities
+	priorities, err := curate.LoadPriorities(cfg.Curator.PrioritiesFile)
+	if err != nil {
+		log.Fatalf("load priorities: %v", err)
+	}
+
+	// Create engine and run curation
+	engine := curate.NewEngine(database, curatorProvider, priorities, cfg.Curator.RemoteModel)
+
+	if *namespace != "" {
+		fmt.Printf("Curating namespace %q%s...\n", *namespace, dryRunLabel(*dryRun))
+		report, err := engine.CurateNamespace(ctx, *namespace, *dryRun)
+		if err != nil {
+			log.Fatalf("curate: %v", err)
+		}
+		printJSON(report)
+	} else {
+		fmt.Printf("Curating all namespaces%s...\n", dryRunLabel(*dryRun))
+		report, err := engine.CurateAll(ctx, *dryRun)
+		if err != nil {
+			log.Fatalf("curate: %v", err)
+		}
+		printJSON(report)
+	}
+}
+
+func dryRunLabel(dryRun bool) string {
+	if dryRun {
+		return " (dry-run)"
+	}
+	return ""
+}
+
 func runExport(ctx context.Context, database *sql.DB) {
 	fs := flag.NewFlagSet("export", flag.ExitOnError)
 	format := fs.String("format", "markdown", "Export format: markdown")
@@ -504,6 +568,15 @@ func runMCP(ctx context.Context, database *sql.DB, cfg config.Config) {
 		defer d.embedQueue.Stop()
 	}
 
+	var curateEngine *curate.Engine
+	if llm.IsAvailable(d.curatorProvider) {
+		priorities, prErr := curate.LoadPriorities(cfg.Curator.PrioritiesFile)
+		if prErr != nil {
+			log.Printf("load priorities: %v (curation will work without priorities)", prErr)
+		}
+		curateEngine = curate.NewEngine(database, d.curatorProvider, priorities, cfg.Curator.RemoteModel)
+	}
+
 	mcpDeps := &neuroxmcp.Deps{
 		ObservationStore: d.obsStore,
 		RecallEngine:     d.recallEngine,
@@ -514,6 +587,7 @@ func runMCP(ctx context.Context, database *sql.DB, cfg config.Config) {
 		SessionManager:   d.sessionManager,
 		ProactiveEngine:  d.proactiveEngine,
 		Pipeline:         d.pipeline,
+		CurateEngine:     curateEngine,
 		DB:               database,
 		LLMProvider:      d.llmProvider,
 		LLMGate:          d.llmGate,
@@ -576,6 +650,7 @@ type deps struct {
 	embedQueue      *embed.Queue
 	pipeline        *consolidate.Pipeline
 	llmProvider     llm.Provider
+	curatorProvider llm.Provider
 	llmGate         *llm.Gate
 	tracker         *telemetry.Tracker
 }
@@ -591,13 +666,31 @@ func initDeps(ctx context.Context, database *sql.DB, cfg config.Config) *deps {
 	)
 	gate := llm.NewGate(llmProvider, llm.GateMode(cfg.LLM.GateMode))
 
+	// Build curator provider when configured; used for reflections and curation.
+	var curatorProvider llm.Provider
+	if cfg.Curator.Provider == "remote" && cfg.Curator.RemoteURL != "" && cfg.Curator.RemoteModel != "" {
+		curatorProvider = llm.NewRemote(llm.RemoteConfig{
+			URL:    cfg.Curator.RemoteURL,
+			APIKey: cfg.Curator.RemoteAPIKey,
+			Model:  cfg.Curator.RemoteModel,
+		})
+		log.Printf("using curator provider: %s", curatorProvider.Name())
+	}
+
 	idGen := observation.NewULIDGenerator()
 	obsStore := observation.NewStore(database, nil)
 	recallEngine := recall.NewEngine(database, recall.WithEmbedder(embedder))
 	linkStore := links.NewStore(database, idGen)
 	factStore := facts.NewStore(database, idGen)
 	factExtractor := facts.NewExtractor(llmProvider, factStore)
-	reflectEngine := reflectpkg.NewEngine(database, llmProvider, linkStore, idGen)
+
+	// Use curator provider for reflections when available; fall back to llmProvider.
+	reflectLLM := llmProvider
+	if llm.IsAvailable(curatorProvider) {
+		reflectLLM = curatorProvider
+	}
+	reflectEngine := reflectpkg.NewEngine(database, reflectLLM, linkStore, idGen)
+
 	sessionMgr := session.NewManager(database, llmProvider, idGen)
 	proactiveEng := proactive.NewEngine(database, embedder)
 
@@ -614,7 +707,7 @@ func initDeps(ctx context.Context, database *sql.DB, cfg config.Config) *deps {
 	}
 
 	decayEngine := decay.NewEngine(database)
-	pipeline := consolidate.NewPipeline(database, decayEngine, embedder, embedQueue, gate, linkStore, llmProvider, idGen, consolidate.Config{})
+	pipeline := consolidate.NewPipeline(database, decayEngine, embedder, embedQueue, gate, linkStore, llmProvider, curatorProvider, idGen, consolidate.Config{})
 
 	tracker := telemetry.NewTracker(database)
 
@@ -631,6 +724,7 @@ func initDeps(ctx context.Context, database *sql.DB, cfg config.Config) *deps {
 		embedQueue:      embedQueue,
 		pipeline:        pipeline,
 		llmProvider:     llmProvider,
+		curatorProvider: curatorProvider,
 		llmGate:         gate,
 		tracker:         tracker,
 	}
@@ -726,4 +820,15 @@ curl -s -X POST "http://localhost:${NEUROX_PORT}/api/v1/hooks/git" \
 	}
 
 	fmt.Printf("installed post-commit hook at %s\n", hookPath)
+}
+
+func runUpdate() {
+	fs := flag.NewFlagSet("update", flag.ExitOnError)
+	yes := fs.Bool("yes", false, "skip confirmation prompt")
+	fs.BoolVar(yes, "y", false, "skip confirmation prompt (shorthand)")
+	_ = fs.Parse(os.Args[2:])
+	// Step 2 will add internal/installer/updater.go; Step 3 will replace this with:
+	// installer.RunUpdate(version, *yes)
+	fmt.Fprintln(os.Stderr, "neurox update: not yet implemented (coming in next step)")
+	os.Exit(1)
 }

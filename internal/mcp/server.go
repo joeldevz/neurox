@@ -40,4 +40,5 @@ func register(s *server.MCPServer, deps *Deps) {
 	add(reflectTool(), deps.handleReflect)
 	add(consolidateTool(), deps.handleConsolidate)
 	add(healthCheckTool(), deps.handleHealthCheck)
+	add(curateTool(), deps.handleCurate)
 }

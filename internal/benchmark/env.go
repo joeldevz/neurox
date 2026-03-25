@@ -118,6 +118,7 @@ func NewBenchEnv(ctx context.Context, scale ScaleConfig) (*BenchEnv, error) {
 		gate,
 		linkStore,
 		disabledLLM,
+		nil, // no curator provider
 		idGen,
 		consolidate.Config{}, // zero value: pipeline won't auto-start
 	)

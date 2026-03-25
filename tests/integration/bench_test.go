@@ -169,7 +169,7 @@ func BenchmarkConsolidation_5K(b *testing.B) {
 
 	pipeline := consolidate.NewPipeline(
 		tdb.DB, decayEngine, embedder, embedQueue,
-		gate, linkStore, llm.Disabled{}, idGen,
+		gate, linkStore, llm.Disabled{}, llm.Disabled{}, idGen,
 		consolidate.Config{},
 	)
 

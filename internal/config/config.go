@@ -15,7 +15,16 @@ type Config struct {
 	Database   DatabaseConfig   `yaml:"database"`
 	LLM        LLMConfig        `yaml:"llm"`
 	Embeddings EmbeddingsConfig `yaml:"embeddings"`
+	Curator    CuratorConfig    `yaml:"curator"`
 	Meta       MetaConfig       `yaml:"-"`
+}
+
+type CuratorConfig struct {
+	Provider       string `yaml:"provider"` // "remote", "disabled"
+	RemoteURL      string `yaml:"remote_url"`
+	RemoteAPIKey   string `yaml:"remote_api_key"`
+	RemoteModel    string `yaml:"remote_model"`
+	PrioritiesFile string `yaml:"priorities_file"` // path to priorities.yaml
 }
 
 type LLMConfig struct {
@@ -178,6 +187,27 @@ func applyEnvOverrides(cfg *Config, configPath string, configDir string) {
 		cfg.Embeddings.RemoteModel = value
 		cfg.Meta.Source = "env"
 	}
+
+	if value := strings.TrimSpace(os.Getenv(envPrefix + "CURATOR_PROVIDER")); value != "" {
+		cfg.Curator.Provider = value
+		cfg.Meta.Source = "env"
+	}
+	if value := strings.TrimSpace(os.Getenv(envPrefix + "CURATOR_REMOTE_URL")); value != "" {
+		cfg.Curator.RemoteURL = value
+		cfg.Meta.Source = "env"
+	}
+	if value := strings.TrimSpace(os.Getenv(envPrefix + "CURATOR_REMOTE_API_KEY")); value != "" {
+		cfg.Curator.RemoteAPIKey = value
+		cfg.Meta.Source = "env"
+	}
+	if value := strings.TrimSpace(os.Getenv(envPrefix + "CURATOR_REMOTE_MODEL")); value != "" {
+		cfg.Curator.RemoteModel = value
+		cfg.Meta.Source = "env"
+	}
+	if value := strings.TrimSpace(os.Getenv(envPrefix + "CURATOR_PRIORITIES_FILE")); value != "" {
+		cfg.Curator.PrioritiesFile = value
+		cfg.Meta.Source = "env"
+	}
 }
 
 func applyDerivedDefaults(cfg *Config, configPath string, configDir string) {
@@ -203,4 +233,8 @@ func applyDerivedDefaults(cfg *Config, configPath string, configDir string) {
 		cfg.Meta.LoadedFrom = cfg.Meta.Source
 	}
 	cfg.Database.Path = filepath.Clean(cfg.Database.Path)
+
+	if cfg.Curator.PrioritiesFile == "" {
+		cfg.Curator.PrioritiesFile = filepath.Join(cfg.Meta.ConfigDir, "priorities.yaml")
+	}
 }

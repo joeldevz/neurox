@@ -259,7 +259,7 @@ func TestToolsList(t *testing.T) {
 	expectedTools := []string{
 		"save", "recall", "context", "update", "forget",
 		"invalidate", "status", "session_start", "session_end",
-		"git_hook", "reflect", "consolidate", "health_check",
+		"git_hook", "reflect", "consolidate", "health_check", "curate",
 	}
 
 	toolNames := make(map[string]bool)

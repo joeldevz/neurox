@@ -48,10 +48,19 @@ type Pipeline struct {
 	wg                    sync.WaitGroup
 }
 
-func NewPipeline(db *sql.DB, decayEngine *decay.Engine, embedder embed.Provider, embedQueue *embed.Queue, gate *llm.Gate, linkStore *links.Store, llmProvider llm.Provider, idGen filelink.IDGenerator, cfg Config) *Pipeline {
+func NewPipeline(db *sql.DB, decayEngine *decay.Engine, embedder embed.Provider, embedQueue *embed.Queue, gate *llm.Gate, linkStore *links.Store, llmProvider llm.Provider, curatorProvider llm.Provider, idGen filelink.IDGenerator, cfg Config) *Pipeline {
 	if cfg.Interval == 0 {
 		cfg.Interval = defaultInterval
 	}
+
+	// Use curatorProvider for reflections when available; fall back to llmProvider.
+	reflectProvider := llmProvider
+	if curatorProvider != nil {
+		if _, ok := curatorProvider.(llm.Disabled); !ok {
+			reflectProvider = curatorProvider
+		}
+	}
+
 	return &Pipeline{
 		db:                    db,
 		decay:                 decayEngine,
@@ -59,7 +68,7 @@ func NewPipeline(db *sql.DB, decayEngine *decay.Engine, embedder embed.Provider,
 		embedQueue:            embedQueue,
 		gate:                  gate,
 		contradictionDetector: contradiction.NewDetector(db, embedder, llmProvider, linkStore),
-		reflectEngine:         reflectpkg.NewEngine(db, llmProvider, linkStore, idGen),
+		reflectEngine:         reflectpkg.NewEngine(db, reflectProvider, linkStore, idGen),
 		cfg:                   cfg,
 		stop:                  make(chan struct{}),
 	}

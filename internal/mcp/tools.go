@@ -237,3 +237,11 @@ func healthCheckTool() mcp.Tool {
 		),
 	)
 }
+
+func curateTool() mcp.Tool {
+	return mcp.NewTool("curate",
+		mcp.WithDescription("Deep memory curation: review a namespace with a large model to delete noise, recalibrate importance weights, and improve memory quality. Uses the curator LLM provider (e.g. Gemini Flash)."),
+		mcp.WithString("namespace", mcp.Description("Namespace to curate (default: all)")),
+		mcp.WithBoolean("dry_run", mcp.Description("Preview changes without executing (default: false)")),
+	)
+}

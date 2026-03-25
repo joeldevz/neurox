@@ -12,7 +12,7 @@ import (
 
 const (
 	defaultOllamaURL   = "http://localhost:11434"
-	defaultOllamaModel = "qwen2.5:3b"
+	defaultOllamaModel = "qwen3:8b"
 )
 
 // OllamaConfig configures the Ollama LLM provider.

@@ -13,6 +13,7 @@ import (
 
 	"github.com/joeldevz/neurox/internal/classify"
 	"github.com/joeldevz/neurox/internal/consolidate"
+	curatepkg "github.com/joeldevz/neurox/internal/curate"
 	"github.com/joeldevz/neurox/internal/embed"
 	"github.com/joeldevz/neurox/internal/facts"
 	"github.com/joeldevz/neurox/internal/health"
@@ -36,6 +37,7 @@ type Deps struct {
 	SessionManager   *session.Manager
 	ProactiveEngine  *proactive.Engine
 	Pipeline         *consolidate.Pipeline
+	CurateEngine     *curatepkg.Engine
 	DB               *sql.DB
 	LLMProvider      llm.Provider
 	LLMGate          *llm.Gate
@@ -765,6 +767,49 @@ func (d *Deps) handleConsolidate(ctx context.Context, req mcp.CallToolRequest) (
 		"working": working,
 		"core":    core,
 	})
+}
+
+func (d *Deps) handleCurate(ctx context.Context, req mcp.CallToolRequest) (result *mcp.CallToolResult, err error) {
+	start := time.Now()
+	defer func() {
+		if d.Tracker != nil {
+			d.Tracker.Record(telemetry.CallRecord{
+				ToolName:   "curate",
+				Namespace:  req.GetString("namespace", ""),
+				ParamsUsed: nonEmptyParams(req, "namespace", "dry_run"),
+				Success:    err == nil && (result == nil || !result.IsError),
+				DurationMs: time.Since(start).Milliseconds(),
+			})
+		}
+	}()
+
+	if d.CurateEngine == nil {
+		return mcp.NewToolResultError("curator not configured. Set curator.provider, curator.remote_url, curator.remote_api_key, and curator.remote_model in config.yaml"), nil
+	}
+
+	namespace := req.GetString("namespace", "")
+	dryRun := false
+	if args := req.GetArguments(); args != nil {
+		if v, ok := args["dry_run"]; ok {
+			if b, ok := v.(bool); ok {
+				dryRun = b
+			}
+		}
+	}
+
+	if namespace != "" {
+		report, curateErr := d.CurateEngine.CurateNamespace(ctx, namespace, dryRun)
+		if curateErr != nil {
+			return mcp.NewToolResultError(fmt.Sprintf("curate namespace %q: %v", namespace, curateErr)), nil
+		}
+		return toolResultJSON(report)
+	}
+
+	report, curateErr := d.CurateEngine.CurateAll(ctx, dryRun)
+	if curateErr != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("curate all: %v", curateErr)), nil
+	}
+	return toolResultJSON(report)
 }
 
 func (d *Deps) handleHealthCheck(ctx context.Context, req mcp.CallToolRequest) (result *mcp.CallToolResult, err error) {
