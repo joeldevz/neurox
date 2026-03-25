@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -20,36 +21,38 @@ import (
 )
 
 type Environment struct {
-	SourceDir         string
-	HomeDir           string
-	DefaultConfigDir  string
-	PreferredShellRC  string
-	GitRoot           string
-	ClaudeConfigPath  string
-	OpenCodeConfig    string
-	CursorConfig      string
-	AntigravityConfig string
-	OllamaAvailable   bool
-	OllamaEmbedModel  string
-	OllamaLLMModel    string
+	SourceDir           string
+	HomeDir             string
+	DefaultConfigDir    string
+	PreferredShellRC    string
+	GitRoot             string
+	ClaudeConfigPath    string
+	ClaudeDesktopConfig string
+	OpenCodeConfig      string
+	CursorConfig        string
+	AntigravityConfig   string
+	OllamaAvailable     bool
+	OllamaEmbedModel    string
+	OllamaLLMModel      string
 }
 
 type state struct {
-	ConfigDir            string
-	EmbedProvider        string
-	EmbedRemoteURL       string
-	EmbedRemoteKey       string
-	EmbedRemoteModel     string
-	LLMProvider          string
-	LLMRemoteURL         string
-	LLMRemoteKey         string
-	LLMRemoteModel       string
-	GateMode             string
-	ConfigureClaude      bool
-	ConfigureOpenCode    bool
-	ConfigureCursor      bool
-	ConfigureAntigravity bool
-	InstallHook          bool
+	ConfigDir              string
+	EmbedProvider          string
+	EmbedRemoteURL         string
+	EmbedRemoteKey         string
+	EmbedRemoteModel       string
+	LLMProvider            string
+	LLMRemoteURL           string
+	LLMRemoteKey           string
+	LLMRemoteModel         string
+	GateMode               string
+	ConfigureClaude        bool
+	ConfigureClaudeDesktop bool
+	ConfigureOpenCode      bool
+	ConfigureCursor        bool
+	ConfigureAntigravity   bool
+	InstallHook            bool
 }
 
 type stepKind int
@@ -163,14 +166,15 @@ func detectEnvironment(sourceDir string) (Environment, error) {
 		xdgConfig = filepath.Join(homeDir, ".config")
 	}
 	env := Environment{
-		SourceDir:         sourceDir,
-		HomeDir:           homeDir,
-		DefaultConfigDir:  filepath.Join(xdgConfig, "neurox"),
-		PreferredShellRC:  preferredShellRC(homeDir),
-		ClaudeConfigPath:  filepath.Join(homeDir, ".claude.json"),
-		OpenCodeConfig:    filepath.Join(xdgConfig, "opencode", "opencode.json"),
-		CursorConfig:      filepath.Join(homeDir, ".cursor", "mcp.json"),
-		AntigravityConfig: filepath.Join(homeDir, ".gemini", "antigravity", "mcp_config.json"),
+		SourceDir:           sourceDir,
+		HomeDir:             homeDir,
+		DefaultConfigDir:    filepath.Join(xdgConfig, "neurox"),
+		PreferredShellRC:    preferredShellRC(homeDir),
+		ClaudeConfigPath:    filepath.Join(homeDir, ".claude.json"),
+		ClaudeDesktopConfig: claudeDesktopConfigPath(homeDir),
+		OpenCodeConfig:      filepath.Join(xdgConfig, "opencode", "opencode.json"),
+		CursorConfig:        filepath.Join(homeDir, ".cursor", "mcp.json"),
+		AntigravityConfig:   filepath.Join(homeDir, ".gemini", "antigravity", "mcp_config.json"),
 	}
 	if out, gitErr := exec.Command("git", "rev-parse", "--show-toplevel").Output(); gitErr == nil {
 		env.GitRoot = strings.TrimSpace(string(out))
@@ -239,17 +243,34 @@ func preferredShellRC(homeDir string) string {
 	return ""
 }
 
+func claudeDesktopConfigPath(homeDir string) string {
+	switch runtime.GOOS {
+	case "darwin":
+		return filepath.Join(homeDir, "Library", "Application Support", "Claude", "claude_desktop_config.json")
+	case "windows":
+		appData := os.Getenv("APPDATA")
+		if appData == "" {
+			return ""
+		}
+		return filepath.Join(appData, "Claude", "claude_desktop_config.json")
+	default:
+		// Linux and others: Claude Desktop does not officially exist
+		return ""
+	}
+}
+
 func newModel(env Environment) model {
 	state := state{
-		ConfigDir:            env.DefaultConfigDir,
-		EmbedProvider:        defaultProvider(env.OllamaEmbedModel),
-		LLMProvider:          defaultProvider(env.OllamaLLMModel),
-		GateMode:             "auto",
-		ConfigureClaude:      false,
-		ConfigureOpenCode:    true,
-		ConfigureCursor:      false,
-		ConfigureAntigravity: false,
-		InstallHook:          env.GitRoot != "",
+		ConfigDir:              env.DefaultConfigDir,
+		EmbedProvider:          defaultProvider(env.OllamaEmbedModel),
+		LLMProvider:            defaultProvider(env.OllamaLLMModel),
+		GateMode:               "auto",
+		ConfigureClaude:        false,
+		ConfigureClaudeDesktop: false,
+		ConfigureOpenCode:      true,
+		ConfigureCursor:        false,
+		ConfigureAntigravity:   false,
+		InstallHook:            env.GitRoot != "",
 	}
 	return model{
 		env:         env,
@@ -500,6 +521,8 @@ func (m *model) toggleCurrent() {
 	switch current.Key {
 	case "claude":
 		m.state.ConfigureClaude = !m.state.ConfigureClaude
+	case "claude_desktop":
+		m.state.ConfigureClaudeDesktop = !m.state.ConfigureClaudeDesktop
 	case "opencode":
 		m.state.ConfigureOpenCode = !m.state.ConfigureOpenCode
 	case "cursor":
@@ -548,10 +571,15 @@ func (m model) currentFields() []field {
 	case stepIntegrations:
 		fields := []field{
 			{Type: fieldToggle, Key: "claude", Label: "Claude Code"},
-			{Type: fieldToggle, Key: "opencode", Label: "OpenCode"},
-			{Type: fieldToggle, Key: "cursor", Label: "Cursor"},
-			{Type: fieldToggle, Key: "antigravity", Label: "Antigravity", Description: m.env.AntigravityConfig},
 		}
+		if m.env.ClaudeDesktopConfig != "" {
+			fields = append(fields, field{Type: fieldToggle, Key: "claude_desktop", Label: "Claude Desktop", Description: m.env.ClaudeDesktopConfig})
+		}
+		fields = append(fields,
+			field{Type: fieldToggle, Key: "opencode", Label: "OpenCode"},
+			field{Type: fieldToggle, Key: "cursor", Label: "Cursor"},
+			field{Type: fieldToggle, Key: "antigravity", Label: "Antigravity", Description: m.env.AntigravityConfig},
+		)
 		if m.env.GitRoot != "" {
 			fields = append(fields, field{Type: fieldToggle, Key: "install_hook", Label: "Git hook"})
 		}
@@ -890,6 +918,9 @@ func (m model) shortIntegrations() []string {
 	if m.state.ConfigureClaude {
 		items = append(items, "Claude Code (+ skill)")
 	}
+	if m.state.ConfigureClaudeDesktop {
+		items = append(items, "Claude Desktop")
+	}
 	if m.state.ConfigureOpenCode {
 		items = append(items, "OpenCode")
 	}
@@ -949,6 +980,8 @@ func (m model) toggleValue(key string) bool {
 	switch key {
 	case "claude":
 		return m.state.ConfigureClaude
+	case "claude_desktop":
+		return m.state.ConfigureClaudeDesktop
 	case "opencode":
 		return m.state.ConfigureOpenCode
 	case "cursor":
@@ -1073,6 +1106,13 @@ func executeInstall(s state, env Environment) installResult {
 			result.Updated = append(result.Updated, filepath.Join(env.HomeDir, ".claude", "skills", "neurox", "SKILL.md"))
 		}
 	}
+	if s.ConfigureClaudeDesktop {
+		if err := upsertClaudeDesktopConfig(env.ClaudeDesktopConfig, binaryPath); err != nil {
+			result.Warnings = append(result.Warnings, fmt.Sprintf("Claude Desktop config: %v", err))
+		} else {
+			result.Updated = append(result.Updated, env.ClaudeDesktopConfig)
+		}
+	}
 	if s.ConfigureOpenCode {
 		if err := upsertOpenCodeConfig(env.OpenCodeConfig, binaryPath); err != nil {
 			result.Warnings = append(result.Warnings, fmt.Sprintf("OpenCode config: %v", err))
@@ -1176,6 +1216,23 @@ func upsertClaudeConfig(path string, binaryPath string) error {
 	// Use the binary name only (not absolute path) so the config works
 	// regardless of where neurox is installed, as long as it is on PATH.
 	servers["neurox"] = map[string]any{"type": "stdio", "command": "neurox", "args": []string{"mcp"}}
+	return writeJSONFile(path, cfg)
+}
+
+func upsertClaudeDesktopConfig(path string, binaryPath string) error {
+	var cfg map[string]any
+	if err := readJSONFile(path, &cfg); err != nil {
+		return err
+	}
+	if cfg == nil {
+		cfg = map[string]any{}
+	}
+	servers := ensureObject(cfg, "mcpServers")
+	// Claude Desktop does NOT use "type": "stdio" — only command + args
+	servers["neurox"] = map[string]any{
+		"command": "neurox",
+		"args":    []string{"mcp"},
+	}
 	return writeJSONFile(path, cfg)
 }
 
