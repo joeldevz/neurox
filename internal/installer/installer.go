@@ -163,7 +163,7 @@ func detectEnvironment(sourceDir string) (Environment, error) {
 		HomeDir:           homeDir,
 		DefaultConfigDir:  filepath.Join(configDir, "neurox"),
 		PreferredShellRC:  preferredShellRC(homeDir),
-		ClaudeConfigPath:  filepath.Join(homeDir, ".claude", "settings.json"),
+		ClaudeConfigPath:  filepath.Join(homeDir, ".claude.json"),
 		OpenCodeConfig:    filepath.Join(configDir, "opencode", "opencode.json"),
 		CursorConfig:      filepath.Join(homeDir, ".cursor", "mcp.json"),
 		AntigravityConfig: filepath.Join(homeDir, ".gemini", "antigravity", "mcp_config.json"),
@@ -1169,7 +1169,9 @@ func upsertClaudeConfig(path string, binaryPath string) error {
 		cfg = map[string]any{}
 	}
 	servers := ensureObject(cfg, "mcpServers")
-	servers["neurox"] = map[string]any{"command": binaryPath, "args": []string{"mcp"}}
+	// Use the binary name only (not absolute path) so the config works
+	// regardless of where neurox is installed, as long as it is on PATH.
+	servers["neurox"] = map[string]any{"type": "stdio", "command": "neurox", "args": []string{"mcp"}}
 	return writeJSONFile(path, cfg)
 }
 
@@ -1182,7 +1184,7 @@ func upsertOpenCodeConfig(path string, binaryPath string) error {
 		cfg = map[string]any{}
 	}
 	mcp := ensureObject(cfg, "mcp")
-	mcp["neurox"] = map[string]any{"type": "local", "command": []string{binaryPath, "mcp"}, "enabled": true}
+	mcp["neurox"] = map[string]any{"type": "local", "command": []string{"neurox", "mcp"}, "enabled": true}
 	return writeJSONFile(path, cfg)
 }
 
@@ -1195,7 +1197,7 @@ func upsertCursorConfig(path string, binaryPath string) error {
 		cfg = map[string]any{}
 	}
 	servers := ensureObject(cfg, "mcpServers")
-	servers["neurox"] = map[string]any{"command": binaryPath, "args": []string{"mcp"}}
+	servers["neurox"] = map[string]any{"command": "neurox", "args": []string{"mcp"}}
 	return writeJSONFile(path, cfg)
 }
 
@@ -1208,7 +1210,7 @@ func upsertAntigravityConfig(path string, binaryPath string) error {
 		cfg = map[string]any{}
 	}
 	servers := ensureObject(cfg, "mcpServers")
-	servers["neurox"] = map[string]any{"command": binaryPath, "args": []string{"mcp"}}
+	servers["neurox"] = map[string]any{"command": "neurox", "args": []string{"mcp"}}
 	return writeJSONFile(path, cfg)
 }
 
