@@ -286,7 +286,11 @@ func (e *Engine) applyDecisions(ctx context.Context, decisions []Decision) error
 		case "KEEP":
 			if _, err = tx.ExecContext(ctx, `
 				UPDATE observations
-				SET importance = ?, updated_at = datetime('now')
+				SET importance = ?,
+				    staleness = 'fresh',
+				    valid_until = NULL,
+				    invalidated_by = NULL,
+				    updated_at = datetime('now')
 				WHERE id = ?
 			`, d.NewImportance, d.ID); err != nil {
 				return fmt.Errorf("update importance for observation %s: %w", d.ID, err)

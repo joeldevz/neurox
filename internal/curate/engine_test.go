@@ -192,6 +192,62 @@ func TestCurateNamespace_KEEP_updates_importance(t *testing.T) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// TestCurateNamespace_KEEP_resets_staleness
+// ─────────────────────────────────────────────────────────────────────────────
+
+func TestCurateNamespace_KEEP_resets_staleness(t *testing.T) {
+	database := newTestDB(t)
+	insertObs(t, database, "OBS001", "test", 0.5)
+	insertObs(t, database, "OBS002", "test", 0.5) // the "superseding" observation
+
+	// Mark OBS001 as expired by OBS002 (simulates contradiction detector)
+	res, execErr := database.ExecContext(context.Background(), `
+		UPDATE observations
+		SET staleness = 'expired', valid_until = datetime('now'), invalidated_by = ?
+		WHERE id = ?
+	`, "OBS002", "OBS001")
+	if execErr != nil {
+		t.Fatalf("mark expired: %v", execErr)
+	}
+	if n, _ := res.RowsAffected(); n != 1 {
+		t.Fatalf("mark expired: rows affected = %d, want 1", n)
+	}
+
+	// Verify it's expired before curation
+	var staleness string
+	database.QueryRowContext(context.Background(),
+		"SELECT staleness FROM observations WHERE id = 'OBS001'").Scan(&staleness)
+	if staleness != "expired" {
+		t.Fatalf("precondition: staleness = %q, want 'expired'", staleness)
+	}
+
+	resp := `[{"id":"OBS001","action":"KEEP","new_importance":0.85,"reason":"still valid"},{"id":"OBS002","action":"KEEP","new_importance":0.5,"reason":"ok"}]`
+	engine := newTestEngine(database, mockProvider{response: resp})
+
+	_, err := engine.CurateNamespace(context.Background(), "test", false)
+	if err != nil {
+		t.Fatalf("CurateNamespace: %v", err)
+	}
+
+	// After curation, staleness must be 'fresh', valid_until and invalidated_by must be NULL
+	var postStaleness string
+	var validUntil, invalidatedBy sql.NullString
+	database.QueryRowContext(context.Background(),
+		"SELECT staleness, valid_until, invalidated_by FROM observations WHERE id = 'OBS001'").
+		Scan(&postStaleness, &validUntil, &invalidatedBy)
+
+	if postStaleness != "fresh" {
+		t.Errorf("staleness = %q, want 'fresh'", postStaleness)
+	}
+	if validUntil.Valid {
+		t.Errorf("valid_until = %q, want NULL", validUntil.String)
+	}
+	if invalidatedBy.Valid {
+		t.Errorf("invalidated_by = %q, want NULL", invalidatedBy.String)
+	}
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // TestCurateNamespace_DryRun
 // ─────────────────────────────────────────────────────────────────────────────
 
