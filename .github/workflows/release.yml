@@ -80,3 +80,33 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: dist/*.tar.gz
+
+  release-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.23"
+
+      - name: Build windows/amd64
+        shell: bash
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          CGO_ENABLED=1 GOARCH=amd64 GOOS=windows \
+            go build -tags fts5 -ldflags "-s -w -X main.version=$VERSION" \
+            -o dist/neurox.exe .
+
+      - name: Package as zip
+        shell: pwsh
+        run: |
+          $version = "${{ github.ref_name }}".TrimStart("v")
+          Compress-Archive -Path dist/neurox.exe -DestinationPath "dist/neurox_${version}_windows_amd64.zip"
+
+      - name: Upload windows artifact to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.zip

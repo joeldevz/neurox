@@ -215,8 +215,14 @@ Evaluado en [LongMemEval](https://github.com/xiaowu0162/LongMemEval) (ICLR 2025)
 
 ### Instalador interactivo
 
+**Linux / macOS:**
 ```bash
 ./install.sh
+```
+
+**Windows (PowerShell):**
+```powershell
+irm https://raw.githubusercontent.com/joeldevz/neurox/main/install.ps1 | iex
 ```
 
 El instalador abre una TUI hecha con Bubble Tea donde puedes elegir el directorio del binario, el directorio de configuracion de Neurox, providers locales o remotos, integraciones de editor y si quieres instalar el git hook en el repo actual.

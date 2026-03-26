@@ -38,8 +38,14 @@ Neurox gives your agent persistent, structured memory that works like a brain.
 
 ### 30-second install
 
+**Linux / macOS:**
 ```bash
 curl -fsSL https://raw.githubusercontent.com/joeldevz/neurox/main/install.sh | bash
+```
+
+**Windows (PowerShell):**
+```powershell
+irm https://raw.githubusercontent.com/joeldevz/neurox/main/install.ps1 | iex
 ```
 
 Then configure your AI clients:
