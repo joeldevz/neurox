@@ -42,7 +42,7 @@ import (
 )
 
 const (
-	version         = "0.1.12"
+	version         = "0.1.13"
 	defaultHTTPPort = 7438
 )
 
@@ -117,6 +117,8 @@ func main() {
 		runConsolidate(ctx, database, cfg)
 	case "curate":
 		runCurate(ctx, database, cfg)
+	case "reembed":
+		runReembed(ctx, database, cfg)
 	case "export":
 		runExport(ctx, database)
 	case "import":
@@ -148,6 +150,7 @@ func printUsage() {
 	fmt.Println("  status           Show brain statistics")
 	fmt.Println("  consolidate      Force immediate consolidation (promote, dedup, reflect)")
 	fmt.Println("  curate           Deep curation: clean noise, recalibrate importance (--namespace ns --dry-run)")
+	fmt.Println("  reembed          Force re-embedding of all observations (useful after model change)")
 	fmt.Println()
 	fmt.Println("Visualization:")
 	fmt.Println("  graph            Generate interactive graph visualization")
@@ -250,7 +253,7 @@ func runRecall(ctx context.Context, database *sql.DB, cfg config.Config) {
 	}
 	query := fs.Arg(0)
 
-	embedder := embed.AutoDetect(ctx, embed.OllamaConfig{}, embed.RemoteConfig{
+	embedder := embed.AutoDetect(ctx, embed.OllamaConfig{URL: cfg.Embeddings.OllamaURL, Model: cfg.Embeddings.OllamaModel}, embed.RemoteConfig{
 		URL: cfg.Embeddings.RemoteURL, APIKey: cfg.Embeddings.RemoteKey,
 		Model: cfg.Embeddings.RemoteModel, Dimensions: cfg.Embeddings.Dimensions,
 	})
@@ -287,7 +290,7 @@ func runContext(ctx context.Context, database *sql.DB, cfg config.Config) {
 	limit := fs.Int("limit", 20, "Max results")
 	fs.Parse(os.Args[2:])
 
-	embedder := embed.AutoDetect(ctx, embed.OllamaConfig{}, embed.RemoteConfig{
+	embedder := embed.AutoDetect(ctx, embed.OllamaConfig{URL: cfg.Embeddings.OllamaURL, Model: cfg.Embeddings.OllamaModel}, embed.RemoteConfig{
 		URL: cfg.Embeddings.RemoteURL, APIKey: cfg.Embeddings.RemoteKey,
 		Model: cfg.Embeddings.RemoteModel, Dimensions: cfg.Embeddings.Dimensions,
 	})
@@ -467,6 +470,40 @@ func dryRunLabel(dryRun bool) string {
 		return " (dry-run)"
 	}
 	return ""
+}
+
+func runReembed(ctx context.Context, database *sql.DB, cfg config.Config) {
+	embedder := embed.AutoDetect(ctx, embed.OllamaConfig{URL: cfg.Embeddings.OllamaURL, Model: cfg.Embeddings.OllamaModel}, embed.RemoteConfig{
+		URL: cfg.Embeddings.RemoteURL, APIKey: cfg.Embeddings.RemoteKey,
+		Model: cfg.Embeddings.RemoteModel, Dimensions: cfg.Embeddings.Dimensions,
+	})
+
+	if !embed.IsAvailable(embedder) {
+		log.Fatalf("no embedding provider available")
+	}
+
+	queue := embed.NewQueue(embedder, database)
+	queue.Start(ctx)
+
+	fmt.Println("Clearing all embeddings and re-embedding all observations...")
+	if err := queue.ReembedAll(ctx); err != nil {
+		queue.Stop()
+		log.Fatalf("reembed failed: %v", err)
+	}
+
+	// Wait for queue to process
+	fmt.Println("Waiting for embedding queue to process...")
+	time.Sleep(2 * time.Second)
+	queue.Stop()
+
+	// Count embeddings
+	var count int
+	database.QueryRowContext(ctx, "SELECT COUNT(*) FROM observations WHERE embedding IS NOT NULL AND deleted_at IS NULL").Scan(&count)
+
+	printJSON(map[string]any{
+		"message":    "re-embed completed",
+		"embeddings": count,
+	})
 }
 
 func runExport(ctx context.Context, database *sql.DB) {
@@ -657,7 +694,7 @@ type deps struct {
 }
 
 func initDeps(ctx context.Context, database *sql.DB, cfg config.Config) *deps {
-	embedder := embed.AutoDetect(ctx, embed.OllamaConfig{}, embed.RemoteConfig{
+	embedder := embed.AutoDetect(ctx, embed.OllamaConfig{URL: cfg.Embeddings.OllamaURL, Model: cfg.Embeddings.OllamaModel}, embed.RemoteConfig{
 		URL: cfg.Embeddings.RemoteURL, APIKey: cfg.Embeddings.RemoteKey,
 		Model: cfg.Embeddings.RemoteModel, Dimensions: cfg.Embeddings.Dimensions,
 	})
@@ -708,7 +745,21 @@ func initDeps(ctx context.Context, database *sql.DB, cfg config.Config) *deps {
 	}
 
 	decayEngine := decay.NewEngine(database)
-	pipeline := consolidate.NewPipeline(database, decayEngine, embedder, embedQueue, gate, linkStore, llmProvider, curatorProvider, idGen, consolidate.Config{})
+	pipelineCfg := consolidate.Config{
+		Interval:         30 * time.Minute,
+		DedupThreshold:   cfg.Consolidation.DedupThreshold,
+		ContradictionMin: cfg.Consolidation.ContradictionMin,
+		ContradictionMax: cfg.Consolidation.ContradictionMax,
+	}
+	pipeline := consolidate.NewPipeline(database, decayEngine, embedder, embedQueue, gate, linkStore, llmProvider, curatorProvider, idGen, pipelineCfg)
+
+	// Wire ModelTracker for auto-reembedding on model change
+	if embed.IsAvailable(embedder) && embedQueue != nil {
+		modelTracker := embed.NewModelTracker(database, embedQueue)
+		if err := modelTracker.CheckAndMigrate(ctx, embedder); err != nil {
+			log.Printf("model tracker check: %v", err)
+		}
+	}
 
 	tracker := telemetry.NewTracker(database)
 
@@ -733,7 +784,7 @@ func initDeps(ctx context.Context, database *sql.DB, cfg config.Config) *deps {
 
 // initDepsLight creates minimal deps for CLI commands that don't need background workers.
 func initDepsLight(ctx context.Context, database *sql.DB, cfg config.Config) *deps {
-	embedder := embed.AutoDetect(ctx, embed.OllamaConfig{}, embed.RemoteConfig{
+	embedder := embed.AutoDetect(ctx, embed.OllamaConfig{URL: cfg.Embeddings.OllamaURL, Model: cfg.Embeddings.OllamaModel}, embed.RemoteConfig{
 		URL: cfg.Embeddings.RemoteURL, APIKey: cfg.Embeddings.RemoteKey,
 		Model: cfg.Embeddings.RemoteModel, Dimensions: cfg.Embeddings.Dimensions,
 	})

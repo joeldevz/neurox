@@ -18,6 +18,8 @@ import (
 //go:embed 004_retention_policy.sql
 //go:embed 005_backfill_retention.sql
 //go:embed 006_curation.sql
+//go:embed 007_rescue_expired.sql
+//go:embed 008_db_settings.sql
 var schemaFS embed.FS
 
 type migration struct {
@@ -56,6 +58,16 @@ var migrations = []migration{
 		version: 6,
 		name:    "curation",
 		path:    "006_curation.sql",
+	},
+	{
+		version: 7,
+		name:    "rescue_expired",
+		path:    "007_rescue_expired.sql",
+	},
+	{
+		version: 8,
+		name:    "db_settings",
+		path:    "008_db_settings.sql",
 	},
 }
 

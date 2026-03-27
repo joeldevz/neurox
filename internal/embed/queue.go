@@ -3,8 +3,11 @@ package embed
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"log"
+	"net/http"
+	"strings"
 	"sync"
 	"time"
 )
@@ -15,6 +18,17 @@ const (
 	defaultMaxRetries   = 3
 	defaultRetryBackoff = time.Second
 )
+
+// Preference ranking for embedding models (highest priority first)
+var embedModelRanking = []string{
+	"qwen3-embedding",
+	"mxbai-embed-large",
+	"bge-m3",
+	"bge-large",
+	"nomic-embed-text",
+	"snowflake-arctic-embed",
+	"all-minilm",
+}
 
 // Queue processes embedding requests asynchronously in batches.
 type Queue struct {
@@ -161,6 +175,16 @@ func (q *Queue) flush(ctx context.Context, ids []string) {
 // AutoDetect tries Ollama first, then Remote, then returns Disabled.
 func AutoDetect(ctx context.Context, ollamaCfg OllamaConfig, remoteCfg ...RemoteConfig) Provider {
 	// Try Ollama first
+	// If no model is configured, auto-detect the best available embedding model
+	if ollamaCfg.Model == "" {
+		detected := pickBestEmbedModel(ctx, ollamaCfg.URL)
+		if detected == "" {
+			log.Printf("no embedding model found; run: ollama pull qwen3-embedding:0.6b")
+			return Disabled{}
+		}
+		ollamaCfg.Model = detected
+	}
+
 	ollama := NewOllama(ollamaCfg)
 	pingCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
@@ -203,6 +227,19 @@ func IsAvailable(p Provider) bool {
 	return !disabled
 }
 
+// ReembedAll sets all embeddings to NULL and triggers a backfill.
+// This is used when the embedding model changes.
+func (q *Queue) ReembedAll(ctx context.Context) error {
+	_, err := q.db.ExecContext(ctx, `
+		UPDATE observations SET embedding = NULL WHERE deleted_at IS NULL
+	`)
+	if err != nil {
+		return fmt.Errorf("clear embeddings: %w", err)
+	}
+	q.BackfillPending(ctx)
+	return nil
+}
+
 // BackfillPending queries all observations without embeddings and enqueues them.
 // Best-effort: logs errors but never returns them.
 func (q *Queue) BackfillPending(ctx context.Context) {
@@ -236,4 +273,47 @@ func PendingCount(ctx context.Context, db *sql.DB) (int, error) {
 		return 0, fmt.Errorf("count pending embeddings: %w", err)
 	}
 	return count, nil
+}
+
+// pickBestEmbedModel queries Ollama for available models and returns the
+// highest-ranked embedding model from embedModelRanking, or "" if none found.
+func pickBestEmbedModel(ctx context.Context, baseURL string) string {
+	if baseURL == "" {
+		baseURL = "http://localhost:11434"
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+"/api/tags", nil)
+	if err != nil {
+		return ""
+	}
+
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return ""
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return ""
+	}
+
+	var result struct {
+		Models []struct {
+			Name string `json:"name"`
+		} `json:"models"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return ""
+	}
+
+	// For each ranked model, check if any available model contains it
+	for _, ranked := range embedModelRanking {
+		for _, m := range result.Models {
+			if strings.Contains(m.Name, ranked) {
+				return ranked
+			}
+		}
+	}
+	return ""
 }

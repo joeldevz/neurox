@@ -12,11 +12,18 @@ import (
 const envPrefix = "NEUROX_"
 
 type Config struct {
-	Database   DatabaseConfig   `yaml:"database"`
-	LLM        LLMConfig        `yaml:"llm"`
-	Embeddings EmbeddingsConfig `yaml:"embeddings"`
-	Curator    CuratorConfig    `yaml:"curator"`
-	Meta       MetaConfig       `yaml:"-"`
+	Database      DatabaseConfig      `yaml:"database"`
+	LLM           LLMConfig           `yaml:"llm"`
+	Embeddings    EmbeddingsConfig    `yaml:"embeddings"`
+	Curator       CuratorConfig       `yaml:"curator"`
+	Consolidation ConsolidationConfig `yaml:"consolidation"`
+	Meta          MetaConfig          `yaml:"-"`
+}
+
+type ConsolidationConfig struct {
+	DedupThreshold   float64 `yaml:"dedup_threshold"`
+	ContradictionMin float64 `yaml:"contradiction_min"`
+	ContradictionMax float64 `yaml:"contradiction_max"`
 }
 
 type CuratorConfig struct {
@@ -47,6 +54,10 @@ type EmbeddingsConfig struct {
 	RemoteKey   string `yaml:"remote_api_key"`
 	RemoteModel string `yaml:"remote_model"`
 	Dimensions  int    `yaml:"dimensions"`
+
+	// Ollama settings
+	OllamaURL   string `yaml:"ollama_url"`
+	OllamaModel string `yaml:"ollama_model"`
 }
 
 type DatabaseConfig struct {
@@ -187,6 +198,14 @@ func applyEnvOverrides(cfg *Config, configPath string, configDir string) {
 		cfg.Embeddings.RemoteModel = value
 		cfg.Meta.Source = "env"
 	}
+	if value := strings.TrimSpace(os.Getenv(envPrefix + "EMBED_OLLAMA_URL")); value != "" {
+		cfg.Embeddings.OllamaURL = value
+		cfg.Meta.Source = "env"
+	}
+	if value := strings.TrimSpace(os.Getenv(envPrefix + "EMBED_OLLAMA_MODEL")); value != "" {
+		cfg.Embeddings.OllamaModel = value
+		cfg.Meta.Source = "env"
+	}
 
 	if value := strings.TrimSpace(os.Getenv(envPrefix + "CURATOR_PROVIDER")); value != "" {
 		cfg.Curator.Provider = value
@@ -236,5 +255,15 @@ func applyDerivedDefaults(cfg *Config, configPath string, configDir string) {
 
 	if cfg.Curator.PrioritiesFile == "" {
 		cfg.Curator.PrioritiesFile = filepath.Join(cfg.Meta.ConfigDir, "priorities.yaml")
+	}
+
+	if cfg.Consolidation.DedupThreshold == 0 {
+		cfg.Consolidation.DedupThreshold = 0.85
+	}
+	if cfg.Consolidation.ContradictionMin == 0 {
+		cfg.Consolidation.ContradictionMin = 0.65
+	}
+	if cfg.Consolidation.ContradictionMax == 0 {
+		cfg.Consolidation.ContradictionMax = 0.85
 	}
 }

@@ -224,7 +224,7 @@ func detectOllamaModels() ollamaInfo {
 }
 
 func looksLikeEmbeddingModel(name string) bool {
-	patterns := []string{"nomic-embed-text", "mxbai-embed", "all-minilm", "bge-", "snowflake-arctic-embed"}
+	patterns := []string{"qwen3-embedding", "nomic-embed-text", "mxbai-embed", "all-minilm", "bge-", "snowflake-arctic-embed"}
 	for _, pattern := range patterns {
 		if strings.Contains(name, pattern) {
 			return true

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"strings"
+	"time"
 
 	"github.com/joeldevz/neurox/internal/filelink"
 	"github.com/joeldevz/neurox/internal/links"
@@ -19,6 +20,9 @@ const (
 
 	// MaxSourceObservations is the max observations to feed into a reflection prompt.
 	MaxSourceObservations = 30
+
+	// ForceReflectCooldown is the minimum time between ForceReflect calls for the same namespace.
+	ForceReflectCooldown = 2 * time.Hour
 )
 
 // Engine generates reflections — high-level insights synthesized from
@@ -112,6 +116,15 @@ func (e *Engine) ForceReflect(ctx context.Context, namespace string) (ReflectRes
 
 	if namespace == "" {
 		namespace = "default"
+	}
+
+	// Check cooldown: skip if a reflection was created recently
+	lastReflection, exists, err := e.lastReflectionAt(ctx, namespace)
+	if err != nil {
+		return ReflectResult{}, fmt.Errorf("check cooldown: %w", err)
+	}
+	if exists && time.Since(lastReflection) < ForceReflectCooldown {
+		return ReflectResult{ReflectionsCreated: 0}, nil
 	}
 
 	sources, err := e.getRecentSources(ctx, namespace, MaxSourceObservations)
@@ -222,9 +235,51 @@ Rules:
 - Be specific and actionable
 - Format: numbered list, each insight as a single concise paragraph
 
-Output exactly 3 insights:`, len(sources), namespace, sb.String())
+Output format:
+TITLE: <concise descriptive title for the synthesis>
+
+**Insight 1:** ...
+**Insight 2:** ...
+**Insight 3:** ...`, len(sources), namespace, sb.String())
 
 	return e.llm.Complete(ctx, prompt)
+}
+
+// extractTitle parses LLM output to extract a TITLE: prefix.
+// If found, returns the trimmed title and the remaining body (after stripping the title line
+// and any immediately following blank line).
+// If not found, returns the fallback title and the full content unchanged.
+func extractTitle(content string, namespace string) (title, body string) {
+	lines := strings.Split(content, "\n")
+	if len(lines) == 0 {
+		return "Synthesis: " + namespace, content
+	}
+
+	firstLine := strings.TrimSpace(lines[0])
+	const titlePrefix = "TITLE:"
+
+	if strings.HasPrefix(firstLine, titlePrefix) {
+		// Extract title text after prefix
+		title = strings.TrimSpace(strings.TrimPrefix(firstLine, titlePrefix))
+
+		// Find the start of the body: skip the title line and any immediately following blank lines
+		bodyStart := 1
+		for bodyStart < len(lines) && strings.TrimSpace(lines[bodyStart]) == "" {
+			bodyStart++
+		}
+
+		// Join remaining lines as body
+		if bodyStart < len(lines) {
+			body = strings.Join(lines[bodyStart:], "\n")
+		} else {
+			body = ""
+		}
+
+		return title, body
+	}
+
+	// No TITLE: prefix found, use fallback
+	return "Synthesis: " + namespace, content
 }
 
 func (e *Engine) saveReflection(ctx context.Context, content string, sources []sourceObs, namespace string) error {
@@ -235,11 +290,14 @@ func (e *Engine) saveReflection(ctx context.Context, content string, sources []s
 	}
 	sourceIDsStr := strings.Join(sourceIDs, ",")
 
+	// Extract title from content or use fallback
+	title, body := extractTitle(content, namespace)
+
 	// Insert into reflections table
 	_, err := e.db.ExecContext(ctx, `
 		INSERT INTO reflections(id, content, source_observation_ids, namespace)
 		VALUES(?, ?, ?, ?)
-	`, reflectionID, content, sourceIDsStr, namespace)
+	`, reflectionID, body, sourceIDsStr, namespace)
 	if err != nil {
 		return fmt.Errorf("insert reflection: %w", err)
 	}
@@ -249,7 +307,7 @@ func (e *Engine) saveReflection(ctx context.Context, content string, sources []s
 	_, err = e.db.ExecContext(ctx, `
 		INSERT INTO observations(id, title, content, observation_type, layer, confidence, importance, kind, namespace, source, retention)
 		VALUES(?, ?, ?, 'pattern', 2, 0.9, 0.9, 'semantic', ?, 'reflection', 'durable')
-	`, obsID, "Reflection: "+namespace, content, namespace)
+	`, obsID, title, body, namespace)
 	if err != nil {
 		return fmt.Errorf("insert reflection observation: %w", err)
 	}
@@ -302,4 +360,28 @@ func (e *Engine) ListReflections(ctx context.Context, namespace string, limit in
 		reflections = append(reflections, r)
 	}
 	return reflections, rows.Err()
+}
+
+// lastReflectionAt returns the timestamp of the most recent reflection for a namespace.
+// Returns (time.Time{}, false, nil) if no reflection exists.
+func (e *Engine) lastReflectionAt(ctx context.Context, namespace string) (time.Time, bool, error) {
+	var maxCreatedAt sql.NullString
+	err := e.db.QueryRowContext(ctx, `
+		SELECT MAX(created_at) FROM reflections WHERE namespace = ?
+	`, namespace).Scan(&maxCreatedAt)
+	if err != nil {
+		return time.Time{}, false, fmt.Errorf("query last reflection: %w", err)
+	}
+	if !maxCreatedAt.Valid {
+		return time.Time{}, false, nil
+	}
+	t, err := time.Parse(time.RFC3339, maxCreatedAt.String)
+	if err != nil {
+		// Try SQLite datetime format (2006-01-02 15:04:05)
+		t, err = time.Parse("2006-01-02 15:04:05", maxCreatedAt.String)
+		if err != nil {
+			return time.Time{}, false, fmt.Errorf("parse reflection timestamp: %w", err)
+		}
+	}
+	return t, true, nil
 }

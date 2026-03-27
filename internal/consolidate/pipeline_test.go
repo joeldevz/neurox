@@ -273,6 +273,69 @@ func TestRetentionLifecycleIntegration(t *testing.T) {
 	}
 }
 
+func TestCleanupStaleSessions(t *testing.T) {
+	p, tdb := newTestPipeline(t)
+	ctx := context.Background()
+
+	// Insert a stale session (> 24 hours old, still active)
+	tdb.Exec(t, `INSERT INTO sessions(id, title, namespace, status, started_at)
+		VALUES('STALE1', 'Old Session', 'default', 'active', datetime('now', '-25 hours'))`)
+
+	// Insert a recent session (< 24 hours old, active - should NOT be cleaned)
+	tdb.Exec(t, `INSERT INTO sessions(id, title, namespace, status, started_at)
+		VALUES('RECENT1', 'Recent Session', 'default', 'active', datetime('now', '-1 hours'))`)
+
+	// Insert a completed session (should NOT be touched)
+	tdb.Exec(t, `INSERT INTO sessions(id, title, namespace, status, started_at, ended_at)
+		VALUES('COMPLETED1', 'Completed Session', 'default', 'completed', datetime('now', '-48 hours'), datetime('now', '-47 hours'))`)
+
+	// Run consolidation
+	err := p.Run(ctx)
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+
+	// Verify stale session is now abandoned
+	var staleStatus string
+	err = tdb.DB.QueryRowContext(ctx, "SELECT status FROM sessions WHERE id = 'STALE1'").Scan(&staleStatus)
+	if err != nil {
+		t.Fatalf("get stale session status: %v", err)
+	}
+	if staleStatus != "abandoned" {
+		t.Errorf("STALE1: expected status 'abandoned', got '%s'", staleStatus)
+	}
+
+	// Verify recent session is still active
+	var recentStatus string
+	err = tdb.DB.QueryRowContext(ctx, "SELECT status FROM sessions WHERE id = 'RECENT1'").Scan(&recentStatus)
+	if err != nil {
+		t.Fatalf("get recent session status: %v", err)
+	}
+	if recentStatus != "active" {
+		t.Errorf("RECENT1: expected status 'active', got '%s'", recentStatus)
+	}
+
+	// Verify completed session is still completed
+	var completedStatus string
+	err = tdb.DB.QueryRowContext(ctx, "SELECT status FROM sessions WHERE id = 'COMPLETED1'").Scan(&completedStatus)
+	if err != nil {
+		t.Fatalf("get completed session status: %v", err)
+	}
+	if completedStatus != "completed" {
+		t.Errorf("COMPLETED1: expected status 'completed', got '%s'", completedStatus)
+	}
+
+	// Verify ended_at was set for the stale session
+	var endedAt sql.NullString
+	err = tdb.DB.QueryRowContext(ctx, "SELECT ended_at FROM sessions WHERE id = 'STALE1'").Scan(&endedAt)
+	if err != nil {
+		t.Fatalf("get stale session ended_at: %v", err)
+	}
+	if !endedAt.Valid {
+		t.Error("STALE1: expected ended_at to be set")
+	}
+}
+
 func TestHasDistinctTemporalWindows(t *testing.T) {
 	march := time.Date(2026, 3, 6, 0, 0, 0, 0, time.UTC)
 	jan := time.Date(2026, 1, 15, 0, 0, 0, 0, time.UTC)
@@ -359,4 +422,43 @@ func intToStr(i int) string {
 		i /= 10
 	}
 	return digits
+}
+
+func TestConsolidationThresholdsFromConfig(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "neurox.db")
+	database, err := db.Open(context.Background(), dbPath)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer database.Close()
+
+	decayEngine := decay.NewEngine(database)
+	gate := llm.NewGate(llm.Disabled{}, llm.GateModeOff)
+	idGen := observation.NewULIDGenerator()
+	linkStore := links.NewStore(database, idGen)
+
+	// Create pipeline with custom thresholds
+	cfg := Config{
+		Interval:         30 * time.Minute,
+		DedupThreshold:   0.92, // Custom high threshold
+		ContradictionMin: 0.70,
+		ContradictionMax: 0.88,
+	}
+	p := NewPipeline(database, decayEngine, embed.Disabled{}, nil, gate, linkStore, llm.Disabled{}, nil, idGen, cfg)
+
+	// Verify the config was applied
+	if p.cfg.DedupThreshold != 0.92 {
+		t.Errorf("DedupThreshold = %f, want 0.92", p.cfg.DedupThreshold)
+	}
+	if p.cfg.ContradictionMin != 0.70 {
+		t.Errorf("ContradictionMin = %f, want 0.70", p.cfg.ContradictionMin)
+	}
+	if p.cfg.ContradictionMax != 0.88 {
+		t.Errorf("ContradictionMax = %f, want 0.88", p.cfg.ContradictionMax)
+	}
+
+	// Verify the detector received the thresholds
+	if p.contradictionDetector == nil {
+		t.Fatal("contradictionDetector is nil")
+	}
 }

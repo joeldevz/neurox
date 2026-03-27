@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/joeldevz/neurox/internal/db"
@@ -278,6 +279,159 @@ func TestReflectionSavedWithDurableRetention(t *testing.T) {
 	}
 }
 
+func TestForceReflectCooldown(t *testing.T) {
+	e, tdb := setupTest(t)
+	ctx := context.Background()
+
+	// Insert enough observations for ForceReflect
+	for i := 0; i < 5; i++ {
+		tdb.Exec(t, `INSERT INTO observations(id, title, content, observation_type, layer, confidence, importance, kind, namespace)
+			VALUES(?, 'obs', 'content', 'decision', 1, 0.9, 0.8, 'semantic', 'cooldownns')`, fmt.Sprintf("COOL%04d", i))
+	}
+
+	// First call: should create a reflection
+	result1, err := e.ForceReflect(ctx, "cooldownns")
+	if err != nil {
+		t.Fatalf("first force reflect: %v", err)
+	}
+	if result1.ReflectionsCreated != 1 {
+		t.Fatalf("first call: expected 1 reflection, got %d", result1.ReflectionsCreated)
+	}
+
+	// Second call immediately: should return 0 due to cooldown
+	result2, err := e.ForceReflect(ctx, "cooldownns")
+	if err != nil {
+		t.Fatalf("second force reflect: %v", err)
+	}
+	if result2.ReflectionsCreated != 0 {
+		t.Errorf("second call (cooldown): expected 0 reflections, got %d", result2.ReflectionsCreated)
+	}
+
+	// Verify only 1 reflection exists in DB
+	var count int
+	tdb.DB.QueryRowContext(ctx, "SELECT COUNT(*) FROM reflections WHERE namespace = 'cooldownns'").Scan(&count)
+	if count != 1 {
+		t.Errorf("reflections in DB = %d, want 1", count)
+	}
+}
+
 func idFromInt(i int) string {
 	return fmt.Sprintf("OBS%04d", i)
+}
+
+func TestExtractTitleWithPrefix(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "neurox.db")
+	database, err := db.Open(context.Background(), dbPath)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	t.Cleanup(func() { database.Close() })
+
+	idGen := observation.NewULIDGenerator()
+	linkStore := links.NewStore(database, idGen)
+
+	// Mock LLM that includes TITLE: prefix
+	mockResponse := `TITLE: Pattern: Temporal Context Improves Memory Recall
+
+**Insight 1:** First insight about patterns.
+**Insight 2:** Second insight about architecture.
+**Insight 3:** Third insight about testing.`
+	mock := &mockLLM{response: mockResponse}
+	engine := NewEngine(database, mock, linkStore, idGen)
+
+	ctx := context.Background()
+
+	// Insert enough observations for ForceReflect
+	for i := 0; i < 5; i++ {
+		database.ExecContext(ctx, `INSERT INTO observations(id, title, content, observation_type, layer, confidence, importance, kind, namespace)
+			VALUES(?, 'obs', 'content', 'decision', 1, 0.9, 0.8, 'semantic', 'titletest')`, fmt.Sprintf("TTL%04d", i))
+	}
+
+	result, err := engine.ForceReflect(ctx, "titletest")
+	if err != nil {
+		t.Fatalf("force reflect: %v", err)
+	}
+	if result.ReflectionsCreated != 1 {
+		t.Fatalf("expected 1 reflection, got %d", result.ReflectionsCreated)
+	}
+
+	// Verify the extracted title was saved
+	var title string
+	err = database.QueryRowContext(ctx, `SELECT title FROM observations WHERE source = 'reflection' AND namespace = 'titletest' AND deleted_at IS NULL`).Scan(&title)
+	if err != nil {
+		t.Fatalf("query title: %v", err)
+	}
+	wantTitle := "Pattern: Temporal Context Improves Memory Recall"
+	if title != wantTitle {
+		t.Errorf("title = %q, want %q", title, wantTitle)
+	}
+
+	// Verify the body does NOT contain the TITLE: line
+	var content string
+	err = database.QueryRowContext(ctx, `SELECT content FROM observations WHERE source = 'reflection' AND namespace = 'titletest' AND deleted_at IS NULL`).Scan(&content)
+	if err != nil {
+		t.Fatalf("query content: %v", err)
+	}
+	if strings.Contains(content, "TITLE:") {
+		t.Errorf("content should not contain TITLE: prefix, got: %s", content)
+	}
+	if !strings.HasPrefix(content, "**Insight 1:**") {
+		t.Errorf("content should start with **Insight 1:**, got: %s", content)
+	}
+}
+
+func TestExtractTitleFallback(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "neurox.db")
+	database, err := db.Open(context.Background(), dbPath)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	t.Cleanup(func() { database.Close() })
+
+	idGen := observation.NewULIDGenerator()
+	linkStore := links.NewStore(database, idGen)
+
+	// Mock LLM that omits TITLE: prefix (old format)
+	mockResponse := `1. Insight one: patterns emerge from codebase analysis.
+2. Insight two: architecture follows clean design.
+3. Insight three: testing covers all critical paths.`
+	mock := &mockLLM{response: mockResponse}
+	engine := NewEngine(database, mock, linkStore, idGen)
+
+	ctx := context.Background()
+
+	// Insert enough observations for ForceReflect
+	for i := 0; i < 5; i++ {
+		database.ExecContext(ctx, `INSERT INTO observations(id, title, content, observation_type, layer, confidence, importance, kind, namespace)
+			VALUES(?, 'obs', 'content', 'decision', 1, 0.9, 0.8, 'semantic', 'fallbackns')`, fmt.Sprintf("FBL%04d", i))
+	}
+
+	result, err := engine.ForceReflect(ctx, "fallbackns")
+	if err != nil {
+		t.Fatalf("force reflect: %v", err)
+	}
+	if result.ReflectionsCreated != 1 {
+		t.Fatalf("expected 1 reflection, got %d", result.ReflectionsCreated)
+	}
+
+	// Verify the fallback title was saved
+	var title string
+	err = database.QueryRowContext(ctx, `SELECT title FROM observations WHERE source = 'reflection' AND namespace = 'fallbackns' AND deleted_at IS NULL`).Scan(&title)
+	if err != nil {
+		t.Fatalf("query title: %v", err)
+	}
+	wantTitle := "Synthesis: fallbackns"
+	if title != wantTitle {
+		t.Errorf("title = %q, want %q", title, wantTitle)
+	}
+
+	// Verify the full content was preserved as body
+	var content string
+	err = database.QueryRowContext(ctx, `SELECT content FROM observations WHERE source = 'reflection' AND namespace = 'fallbackns' AND deleted_at IS NULL`).Scan(&content)
+	if err != nil {
+		t.Fatalf("query content: %v", err)
+	}
+	if content != mockResponse {
+		t.Errorf("content should be full original content when no TITLE: prefix\ngot: %s\nwant: %s", content, mockResponse)
+	}
 }

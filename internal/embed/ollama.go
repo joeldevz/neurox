@@ -7,14 +7,11 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sync/atomic"
 	"time"
 )
 
-const (
-	defaultOllamaURL   = "http://localhost:11434"
-	defaultOllamaModel = "nomic-embed-text"
-	ollamaDimensions   = 768
-)
+const defaultOllamaURL = "http://localhost:11434"
 
 type OllamaConfig struct {
 	URL   string
@@ -25,6 +22,7 @@ type Ollama struct {
 	url    string
 	model  string
 	client *http.Client
+	dims   atomic.Int32 // populated on first successful EmbedBatch
 }
 
 func NewOllama(cfg OllamaConfig) *Ollama {
@@ -32,13 +30,9 @@ func NewOllama(cfg OllamaConfig) *Ollama {
 	if url == "" {
 		url = defaultOllamaURL
 	}
-	model := cfg.Model
-	if model == "" {
-		model = defaultOllamaModel
-	}
 	return &Ollama{
 		url:   url,
-		model: model,
+		model: cfg.Model,
 		client: &http.Client{
 			Timeout: 30 * time.Second,
 		},
@@ -91,10 +85,15 @@ func (o *Ollama) EmbedBatch(ctx context.Context, texts []string) ([][]float32, e
 		return nil, fmt.Errorf("decode ollama response: %w", err)
 	}
 
+	// Populate dims on first successful batch
+	if len(result.Embeddings) > 0 {
+		o.dims.CompareAndSwap(0, int32(len(result.Embeddings[0])))
+	}
+
 	return result.Embeddings, nil
 }
 
-func (o *Ollama) Dimensions() int { return ollamaDimensions }
+func (o *Ollama) Dimensions() int { return int(o.dims.Load()) }
 func (o *Ollama) Name() string    { return "ollama/" + o.model }
 
 // Ping checks if Ollama is reachable and the model is available.

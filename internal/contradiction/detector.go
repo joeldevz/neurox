@@ -14,10 +14,10 @@ import (
 )
 
 const (
-	// Similarity range for potential contradictions: close enough to be about
+	// Default similarity range for potential contradictions: close enough to be about
 	// the same topic, but not so close that they're duplicates.
-	minContradictionSimilarity = 0.50
-	maxContradictionSimilarity = 0.85
+	defaultMinContradictionSimilarity = 0.65
+	defaultMaxContradictionSimilarity = 0.85
 
 	// Max candidates to evaluate per run
 	maxCandidatesPerRun = 20
@@ -29,15 +29,27 @@ type Detector struct {
 	embedder  embed.Provider
 	llm       llm.Provider
 	linkStore *links.Store
+	minSim    float64
+	maxSim    float64
 }
 
-// NewDetector creates a contradiction detector.
-func NewDetector(db *sql.DB, embedder embed.Provider, llmProvider llm.Provider, linkStore *links.Store) *Detector {
+// NewDetector creates a contradiction detector with configurable thresholds.
+// minSim and maxSim define the similarity range for contradiction candidates.
+// Use 0 for both to use defaults (0.65, 0.85).
+func NewDetector(db *sql.DB, embedder embed.Provider, llmProvider llm.Provider, linkStore *links.Store, minSim, maxSim float64) *Detector {
+	if minSim == 0 {
+		minSim = defaultMinContradictionSimilarity
+	}
+	if maxSim == 0 {
+		maxSim = defaultMaxContradictionSimilarity
+	}
 	return &Detector{
 		db:        db,
 		embedder:  embedder,
 		llm:       llmProvider,
 		linkStore: linkStore,
+		minSim:    minSim,
+		maxSim:    maxSim,
 	}
 }
 
@@ -184,7 +196,7 @@ func (d *Detector) findCandidates(ctx context.Context) ([]candidate, error) {
 			checked[pairKey] = true
 
 			sim := embed.CosineSimilarity(observations[i].embedding, observations[j].embedding)
-			if sim >= minContradictionSimilarity && sim <= maxContradictionSimilarity {
+			if sim >= d.minSim && sim <= d.maxSim {
 				// Check if there's already a link between them
 				existing, _ := d.linkStore.GetBySource(ctx, observations[i].id)
 				alreadyLinked := false

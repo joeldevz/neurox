@@ -205,7 +205,7 @@ func checkEmbeddingsCoverage(ctx context.Context, db *sql.DB) Dimension {
 	default:
 		dim.Status = "disabled"
 	}
-	dim.Recommendation = "Ensure Ollama is running with nomic-embed-text. Embeddings enable semantic search and dedup."
+	dim.Recommendation = "Ensure Ollama is running with an embedding model. Run: ollama pull qwen3-embedding:0.6b"
 	return dim
 }
 
@@ -242,7 +242,7 @@ func checkEmbedProvider(deps Deps) Dimension {
 		dim.Score = 0
 		dim.Status = "disabled"
 		dim.Detail = "No embedding provider configured"
-		dim.Recommendation = "Ensure Ollama is running with nomic-embed-text for semantic search."
+		dim.Recommendation = "Ensure Ollama is running with an embedding model for semantic search."
 	}
 	return dim
 }

@@ -26,13 +26,13 @@ const (
 	bufferToWorkingScore    = 0.3 // importance threshold for Buffer→Working
 	workingToCoreAccessMin  = 5   // min access_count for Working→Core
 	workingToCoreAgeMinDays = 7   // min age in days for Working→Core
-
-	// Dedup
-	dedupCosineThreshold = 0.85
 )
 
 type Config struct {
-	Interval time.Duration
+	Interval         time.Duration
+	DedupThreshold   float64
+	ContradictionMin float64
+	ContradictionMax float64
 }
 
 type Pipeline struct {
@@ -62,15 +62,16 @@ func NewPipeline(db *sql.DB, decayEngine *decay.Engine, embedder embed.Provider,
 	}
 
 	return &Pipeline{
-		db:                    db,
-		decay:                 decayEngine,
-		embedder:              embedder,
-		embedQueue:            embedQueue,
-		gate:                  gate,
-		contradictionDetector: contradiction.NewDetector(db, embedder, llmProvider, linkStore),
-		reflectEngine:         reflectpkg.NewEngine(db, reflectProvider, linkStore, idGen),
-		cfg:                   cfg,
-		stop:                  make(chan struct{}),
+		db:         db,
+		decay:      decayEngine,
+		embedder:   embedder,
+		embedQueue: embedQueue,
+		gate:       gate,
+		contradictionDetector: contradiction.NewDetector(db, embedder, llmProvider, linkStore,
+			cfg.ContradictionMin, cfg.ContradictionMax),
+		reflectEngine: reflectpkg.NewEngine(db, reflectProvider, linkStore, idGen),
+		cfg:           cfg,
+		stop:          make(chan struct{}),
 	}
 }
 
@@ -118,6 +119,7 @@ type RunResult struct {
 	ReflectionsCreated  int
 	Evicted             int64
 	GarbageCollected    int64
+	SessionsCleaned     int64
 }
 
 // ForceRun executes consolidation ignoring all thresholds — promotes everything
@@ -137,6 +139,14 @@ func (p *Pipeline) ForceRun(ctx context.Context) error {
 
 	var result RunResult
 	result.Epoch = epoch
+
+	// 0. Cleanup stale sessions
+	result.SessionsCleaned, err = p.cleanupStaleSessions(ctx)
+	if err != nil {
+		log.Printf("cleanup stale sessions warning: %v", err)
+	} else if result.SessionsCleaned > 0 {
+		log.Printf("cleaned up %d stale sessions", result.SessionsCleaned)
+	}
 
 	// 1. Decay
 	result.Decayed, err = p.decay.ApplyDecay(ctx)
@@ -216,10 +226,10 @@ func (p *Pipeline) ForceRun(ctx context.Context) error {
 
 	p.completeRun(ctx, runID, result)
 	duration := time.Since(start)
-	log.Printf("forced consolidation epoch %d: decayed=%d promoted_working=%d promoted_core=%d deduped=%d contradictions=%d/%d reflections=%d gc=%d (%v)",
+	log.Printf("forced consolidation epoch %d: decayed=%d promoted_working=%d promoted_core=%d deduped=%d contradictions=%d/%d reflections=%d gc=%d sessions_cleaned=%d (%v)",
 		epoch, result.Decayed, result.PromotedToWorking, result.PromotedToCore,
 		result.Deduped, result.ContradictionsFixed, result.ContradictionsFound,
-		result.ReflectionsCreated, result.GarbageCollected, duration)
+		result.ReflectionsCreated, result.GarbageCollected, result.SessionsCleaned, duration)
 
 	return nil
 }
@@ -242,6 +252,14 @@ func (p *Pipeline) Run(ctx context.Context) error {
 
 	var result RunResult
 	result.Epoch = epoch
+
+	// 0. Cleanup stale sessions
+	result.SessionsCleaned, err = p.cleanupStaleSessions(ctx)
+	if err != nil {
+		log.Printf("cleanup stale sessions warning: %v", err)
+	} else if result.SessionsCleaned > 0 {
+		log.Printf("cleaned up %d stale sessions", result.SessionsCleaned)
+	}
 
 	// 1. Decay
 	result.Decayed, err = p.decay.ApplyDecay(ctx)
@@ -328,10 +346,10 @@ func (p *Pipeline) Run(ctx context.Context) error {
 	// Complete run
 	p.completeRun(ctx, runID, result)
 	duration := time.Since(start)
-	log.Printf("consolidation epoch %d: decayed=%d promoted_working=%d promoted_core=%d deduped=%d contradictions=%d/%d reflections=%d evicted=%d gc=%d gate=%s (%v)",
+	log.Printf("consolidation epoch %d: decayed=%d promoted_working=%d promoted_core=%d deduped=%d contradictions=%d/%d reflections=%d evicted=%d gc=%d sessions_cleaned=%d gate=%s (%v)",
 		epoch, result.Decayed, result.PromotedToWorking, result.PromotedToCore,
 		result.Deduped, result.ContradictionsFixed, result.ContradictionsFound,
-		result.ReflectionsCreated, result.Evicted, result.GarbageCollected, p.gate.Mode(), duration)
+		result.ReflectionsCreated, result.Evicted, result.GarbageCollected, result.SessionsCleaned, p.gate.Mode(), duration)
 
 	return nil
 }
@@ -635,7 +653,7 @@ func (p *Pipeline) dedup(ctx context.Context) (int64, error) {
 				continue
 			}
 			sim := embed.CosineSimilarity(items[i].embedding, items[j].embedding)
-			if sim >= dedupCosineThreshold {
+			if sim >= p.cfg.DedupThreshold {
 				// Skip dedup if observations have distinct temporal windows
 				if hasDistinctTemporalWindows(temporalMap[items[i].id], temporalMap[items[j].id]) {
 					continue
@@ -697,4 +715,19 @@ func (p *Pipeline) activeNamespaces(ctx context.Context) ([]string, error) {
 		namespaces = append(namespaces, ns)
 	}
 	return namespaces, rows.Err()
+}
+
+// cleanupStaleSessions marks sessions that have been active for more than 24 hours
+// as 'abandoned'. This prevents zombie sessions from accumulating across namespaces.
+func (p *Pipeline) cleanupStaleSessions(ctx context.Context) (int64, error) {
+	res, err := p.db.ExecContext(ctx, `
+		UPDATE sessions
+		SET status = 'abandoned', ended_at = datetime('now')
+		WHERE status = 'active'
+		  AND started_at < datetime('now', '-24 hours')
+	`)
+	if err != nil {
+		return 0, fmt.Errorf("cleanup stale sessions: %w", err)
+	}
+	return res.RowsAffected()
 }

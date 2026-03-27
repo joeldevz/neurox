@@ -62,3 +62,67 @@ func TestLoadReadsYAMLAndAppliesEnvOverrides(t *testing.T) {
 		t.Fatalf("Source = %q, want env", cfg.Meta.Source)
 	}
 }
+
+func TestEmbeddingsOllamaConfigWired(t *testing.T) {
+	root := t.TempDir()
+	configDir := filepath.Join(root, "cfg")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll returned error: %v", err)
+	}
+
+	configPath := filepath.Join(configDir, "config.yaml")
+	content := []byte(`embeddings:
+  ollama_url: http://custom:11434
+  ollama_model: custom-model
+`)
+	if err := os.WriteFile(configPath, content, 0o644); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+
+	cfg, err := Load(configPath)
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+
+	if cfg.Embeddings.OllamaURL != "http://custom:11434" {
+		t.Errorf("Embeddings.OllamaURL = %q, want http://custom:11434", cfg.Embeddings.OllamaURL)
+	}
+	if cfg.Embeddings.OllamaModel != "custom-model" {
+		t.Errorf("Embeddings.OllamaModel = %q, want custom-model", cfg.Embeddings.OllamaModel)
+	}
+}
+
+func TestEmbeddingsOllamaEnvOverrides(t *testing.T) {
+	root := t.TempDir()
+	configDir := filepath.Join(root, "cfg")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll returned error: %v", err)
+	}
+
+	configPath := filepath.Join(configDir, "config.yaml")
+	content := []byte(`embeddings:
+  ollama_url: http://yaml:11434
+  ollama_model: yaml-model
+`)
+	if err := os.WriteFile(configPath, content, 0o644); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+
+	t.Setenv(envPrefix+"EMBED_OLLAMA_URL", "http://env:11434")
+	t.Setenv(envPrefix+"EMBED_OLLAMA_MODEL", "env-model")
+
+	cfg, err := Load(configPath)
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+
+	if cfg.Embeddings.OllamaURL != "http://env:11434" {
+		t.Errorf("Embeddings.OllamaURL = %q, want http://env:11434", cfg.Embeddings.OllamaURL)
+	}
+	if cfg.Embeddings.OllamaModel != "env-model" {
+		t.Errorf("Embeddings.OllamaModel = %q, want env-model", cfg.Embeddings.OllamaModel)
+	}
+	if cfg.Meta.Source != "env" {
+		t.Errorf("Meta.Source = %q, want env", cfg.Meta.Source)
+	}
+}
