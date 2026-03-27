@@ -21,6 +21,9 @@ const (
 
 	// Max candidates to evaluate per run
 	maxCandidatesPerRun = 20
+
+	// Max contradictions to process per run (limits LLM calls)
+	maxContradictionsPerRun = 5
 )
 
 // Detector finds and resolves contradicting observations.
@@ -84,6 +87,11 @@ func (d *Detector) Run(ctx context.Context) (DetectResult, error) {
 	candidates, err := d.findCandidates(ctx)
 	if err != nil {
 		return DetectResult{}, fmt.Errorf("find contradiction candidates: %w", err)
+	}
+
+	// Limit contradictions per run to prevent excessive LLM calls
+	if len(candidates) > maxContradictionsPerRun {
+		candidates = candidates[:maxContradictionsPerRun]
 	}
 
 	// Load temporal mentions for all candidate observations

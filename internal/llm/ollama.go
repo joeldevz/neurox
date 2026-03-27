@@ -41,7 +41,7 @@ func NewOllama(cfg OllamaConfig) *OllamaProvider {
 		url:   url,
 		model: model,
 		client: &http.Client{
-			Timeout: 60 * time.Second,
+			Timeout: 180 * time.Second,
 		},
 	}
 }

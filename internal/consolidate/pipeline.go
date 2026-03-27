@@ -669,6 +669,117 @@ func (p *Pipeline) dedup(ctx context.Context) (int64, error) {
 		}
 	}
 
+	// Second pass: deduplicate reflections (layer = 2, source = 'reflection')
+	dedupedReflections, err := p.dedupReflections(ctx)
+	if err != nil {
+		log.Printf("dedup reflections warning: %v", err)
+	}
+
+	return deduped + dedupedReflections, nil
+}
+
+// dedupReflections finds and removes duplicate reflections in the Core layer.
+// Reflections are saved directly to layer = 2 and need separate deduplication.
+// Only compares reflections within the same namespace, keeping the older one.
+func (p *Pipeline) dedupReflections(ctx context.Context) (int64, error) {
+	// Get all namespaces that have reflections
+	nsRows, err := p.db.QueryContext(ctx, `
+		SELECT DISTINCT namespace FROM observations
+		WHERE deleted_at IS NULL AND layer = 2 AND source = 'reflection'
+	`)
+	if err != nil {
+		return 0, fmt.Errorf("query reflection namespaces: %w", err)
+	}
+	defer nsRows.Close()
+
+	var namespaces []string
+	for nsRows.Next() {
+		var ns string
+		if err := nsRows.Scan(&ns); err != nil {
+			continue
+		}
+		namespaces = append(namespaces, ns)
+	}
+
+	if len(namespaces) == 0 {
+		return 0, nil
+	}
+
+	var totalDeduped int64
+
+	// Process each namespace separately
+	for _, ns := range namespaces {
+		deduped, err := p.dedupReflectionsForNamespace(ctx, ns)
+		if err != nil {
+			log.Printf("dedup reflections for namespace %s warning: %v", ns, err)
+			continue
+		}
+		totalDeduped += deduped
+	}
+
+	return totalDeduped, nil
+}
+
+// dedupReflectionsForNamespace deduplicates reflections within a single namespace.
+// Keeps the older reflection (lower ULID = created first) and soft-deletes the newer duplicate.
+func (p *Pipeline) dedupReflectionsForNamespace(ctx context.Context, namespace string) (int64, error) {
+	rows, err := p.db.QueryContext(ctx, `
+		SELECT id, embedding FROM observations
+		WHERE deleted_at IS NULL AND layer = 2 AND source = 'reflection' AND namespace = ?
+		ORDER BY created_at ASC
+	`, namespace)
+	if err != nil {
+		return 0, fmt.Errorf("query reflections: %w", err)
+	}
+	defer rows.Close()
+
+	type item struct {
+		id        string
+		embedding []float32
+	}
+	var items []item
+	for rows.Next() {
+		var id string
+		var blob []byte
+		if err := rows.Scan(&id, &blob); err != nil {
+			continue
+		}
+		vec := embed.DeserializeF32(blob)
+		if vec != nil {
+			items = append(items, item{id: id, embedding: vec})
+		}
+	}
+
+	if len(items) < 2 {
+		return 0, nil
+	}
+
+	// Find duplicates (O(n^2) but reflection count per namespace should be small)
+	deleted := make(map[string]bool)
+	var deduped int64
+
+	for i := 0; i < len(items); i++ {
+		if deleted[items[i].id] {
+			continue
+		}
+		for j := i + 1; j < len(items); j++ {
+			if deleted[items[j].id] {
+				continue
+			}
+			sim := embed.CosineSimilarity(items[i].embedding, items[j].embedding)
+			if sim >= p.cfg.DedupThreshold {
+				// Keep items[i] (older, since we ordered by created_at ASC),
+				// soft-delete items[j] (newer)
+				p.db.ExecContext(ctx, `
+					UPDATE observations SET deleted_at = datetime('now'), updated_at = datetime('now')
+					WHERE id = ? AND deleted_at IS NULL
+				`, items[j].id)
+				deleted[items[j].id] = true
+				deduped++
+			}
+		}
+	}
+
 	return deduped, nil
 }
 
