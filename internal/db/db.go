@@ -20,6 +20,7 @@ import (
 //go:embed 006_curation.sql
 //go:embed 007_rescue_expired.sql
 //go:embed 008_db_settings.sql
+//go:embed 009_reconcile_active_reflections.sql
 var schemaFS embed.FS
 
 type migration struct {
@@ -68,6 +69,11 @@ var migrations = []migration{
 		version: 8,
 		name:    "db_settings",
 		path:    "008_db_settings.sql",
+	},
+	{
+		version: 9,
+		name:    "reconcile_active_reflections",
+		path:    "009_reconcile_active_reflections.sql",
 	},
 }
 

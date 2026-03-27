@@ -24,6 +24,8 @@ type ConsolidationConfig struct {
 	DedupThreshold   float64 `yaml:"dedup_threshold"`
 	ContradictionMin float64 `yaml:"contradiction_min"`
 	ContradictionMax float64 `yaml:"contradiction_max"`
+	RelatedMin       float64 `yaml:"related_min"`
+	RelatedMax       float64 `yaml:"related_max"`
 }
 
 type CuratorConfig struct {
@@ -265,5 +267,11 @@ func applyDerivedDefaults(cfg *Config, configPath string, configDir string) {
 	}
 	if cfg.Consolidation.ContradictionMax == 0 {
 		cfg.Consolidation.ContradictionMax = 0.85
+	}
+	if cfg.Consolidation.RelatedMin == 0 {
+		cfg.Consolidation.RelatedMin = 0.65
+	}
+	if cfg.Consolidation.RelatedMax == 0 {
+		cfg.Consolidation.RelatedMax = cfg.Consolidation.DedupThreshold
 	}
 }

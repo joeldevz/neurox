@@ -126,3 +126,71 @@ func TestEmbeddingsOllamaEnvOverrides(t *testing.T) {
 		t.Errorf("Meta.Source = %q, want env", cfg.Meta.Source)
 	}
 }
+
+func TestConsolidationDefaults(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv(envPrefix+"CONFIG_DIR", "")
+	t.Setenv(envPrefix+"CONFIG_PATH", "")
+
+	cfg, err := Load("")
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+
+	if cfg.Consolidation.DedupThreshold != 0.85 {
+		t.Errorf("DedupThreshold = %f, want 0.85", cfg.Consolidation.DedupThreshold)
+	}
+	if cfg.Consolidation.ContradictionMin != 0.65 {
+		t.Errorf("ContradictionMin = %f, want 0.65", cfg.Consolidation.ContradictionMin)
+	}
+	if cfg.Consolidation.ContradictionMax != 0.85 {
+		t.Errorf("ContradictionMax = %f, want 0.85", cfg.Consolidation.ContradictionMax)
+	}
+	if cfg.Consolidation.RelatedMin != 0.65 {
+		t.Errorf("RelatedMin = %f, want 0.65", cfg.Consolidation.RelatedMin)
+	}
+	if cfg.Consolidation.RelatedMax != 0.85 {
+		t.Errorf("RelatedMax = %f, want 0.85 (DedupThreshold)", cfg.Consolidation.RelatedMax)
+	}
+}
+
+func TestConsolidationConfigParsing(t *testing.T) {
+	root := t.TempDir()
+	configDir := filepath.Join(root, "cfg")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll returned error: %v", err)
+	}
+
+	configPath := filepath.Join(configDir, "config.yaml")
+	content := []byte(`consolidation:
+  dedup_threshold: 0.90
+  contradiction_min: 0.60
+  contradiction_max: 0.95
+  related_min: 0.55
+  related_max: 0.80
+`)
+	if err := os.WriteFile(configPath, content, 0o644); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+
+	cfg, err := Load(configPath)
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+
+	if cfg.Consolidation.DedupThreshold != 0.90 {
+		t.Errorf("DedupThreshold = %f, want 0.90", cfg.Consolidation.DedupThreshold)
+	}
+	if cfg.Consolidation.ContradictionMin != 0.60 {
+		t.Errorf("ContradictionMin = %f, want 0.60", cfg.Consolidation.ContradictionMin)
+	}
+	if cfg.Consolidation.ContradictionMax != 0.95 {
+		t.Errorf("ContradictionMax = %f, want 0.95", cfg.Consolidation.ContradictionMax)
+	}
+	if cfg.Consolidation.RelatedMin != 0.55 {
+		t.Errorf("RelatedMin = %f, want 0.55", cfg.Consolidation.RelatedMin)
+	}
+	if cfg.Consolidation.RelatedMax != 0.80 {
+		t.Errorf("RelatedMax = %f, want 0.80", cfg.Consolidation.RelatedMax)
+	}
+}

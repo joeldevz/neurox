@@ -33,6 +33,8 @@ type Config struct {
 	DedupThreshold   float64
 	ContradictionMin float64
 	ContradictionMax float64
+	RelatedMin       float64
+	RelatedMax       float64
 }
 
 type Pipeline struct {
@@ -43,6 +45,7 @@ type Pipeline struct {
 	gate                  *llm.Gate
 	contradictionDetector *contradiction.Detector
 	reflectEngine         *reflectpkg.Engine
+	idGen                 filelink.IDGenerator
 	cfg                   Config
 	stop                  chan struct{}
 	wg                    sync.WaitGroup
@@ -70,6 +73,7 @@ func NewPipeline(db *sql.DB, decayEngine *decay.Engine, embedder embed.Provider,
 		contradictionDetector: contradiction.NewDetector(db, embedder, llmProvider, linkStore,
 			cfg.ContradictionMin, cfg.ContradictionMax),
 		reflectEngine: reflectpkg.NewEngine(db, reflectProvider, linkStore, idGen),
+		idGen:         idGen,
 		cfg:           cfg,
 		stop:          make(chan struct{}),
 	}
@@ -117,6 +121,7 @@ type RunResult struct {
 	ContradictionsFound int
 	ContradictionsFixed int
 	ReflectionsCreated  int
+	RelatesToLinks      int64
 	Evicted             int64
 	GarbageCollected    int64
 	SessionsCleaned     int64
@@ -218,7 +223,20 @@ func (p *Pipeline) ForceRun(ctx context.Context) error {
 		}
 	}
 
-	// 7. GC
+	// 7. Cross-namespace relates_to links (spreading activation)
+	if embed.IsAvailable(p.embedder) {
+		relatesToCount, rtErr := p.createCrossNamespaceRelatesTo(ctx)
+		if rtErr != nil {
+			log.Printf("cross-namespace relates_to warning: %v", rtErr)
+		} else {
+			result.RelatesToLinks = relatesToCount
+			if relatesToCount > 0 {
+				log.Printf("created %d cross-namespace relates_to links", relatesToCount)
+			}
+		}
+	}
+
+	// 8. GC
 	result.GarbageCollected, err = p.decay.GarbageCollect(ctx)
 	if err != nil {
 		log.Printf("gc warning: %v", err)
@@ -226,10 +244,10 @@ func (p *Pipeline) ForceRun(ctx context.Context) error {
 
 	p.completeRun(ctx, runID, result)
 	duration := time.Since(start)
-	log.Printf("forced consolidation epoch %d: decayed=%d promoted_working=%d promoted_core=%d deduped=%d contradictions=%d/%d reflections=%d gc=%d sessions_cleaned=%d (%v)",
+	log.Printf("forced consolidation epoch %d: decayed=%d promoted_working=%d promoted_core=%d deduped=%d contradictions=%d/%d reflections=%d relates_to=%d gc=%d sessions_cleaned=%d (%v)",
 		epoch, result.Decayed, result.PromotedToWorking, result.PromotedToCore,
 		result.Deduped, result.ContradictionsFixed, result.ContradictionsFound,
-		result.ReflectionsCreated, result.GarbageCollected, result.SessionsCleaned, duration)
+		result.ReflectionsCreated, result.RelatesToLinks, result.GarbageCollected, result.SessionsCleaned, duration)
 
 	return nil
 }
@@ -330,7 +348,20 @@ func (p *Pipeline) Run(ctx context.Context) error {
 		}
 	}
 
-	// 8. Evict buffer overflow
+	// 8. Cross-namespace relates_to links (spreading activation)
+	if embed.IsAvailable(p.embedder) {
+		relatesToCount, rtErr := p.createCrossNamespaceRelatesTo(ctx)
+		if rtErr != nil {
+			log.Printf("cross-namespace relates_to warning: %v", rtErr)
+		} else {
+			result.RelatesToLinks = relatesToCount
+			if relatesToCount > 0 {
+				log.Printf("created %d cross-namespace relates_to links", relatesToCount)
+			}
+		}
+	}
+
+	// 9. Evict buffer overflow
 	result.Evicted, err = p.evictBuffer(ctx)
 	if err != nil {
 		p.failRun(ctx, runID, err)
@@ -346,10 +377,10 @@ func (p *Pipeline) Run(ctx context.Context) error {
 	// Complete run
 	p.completeRun(ctx, runID, result)
 	duration := time.Since(start)
-	log.Printf("consolidation epoch %d: decayed=%d promoted_working=%d promoted_core=%d deduped=%d contradictions=%d/%d reflections=%d evicted=%d gc=%d sessions_cleaned=%d gate=%s (%v)",
+	log.Printf("consolidation epoch %d: decayed=%d promoted_working=%d promoted_core=%d deduped=%d contradictions=%d/%d reflections=%d relates_to=%d evicted=%d gc=%d sessions_cleaned=%d gate=%s (%v)",
 		epoch, result.Decayed, result.PromotedToWorking, result.PromotedToCore,
 		result.Deduped, result.ContradictionsFixed, result.ContradictionsFound,
-		result.ReflectionsCreated, result.Evicted, result.GarbageCollected, result.SessionsCleaned, p.gate.Mode(), duration)
+		result.ReflectionsCreated, result.RelatesToLinks, result.Evicted, result.GarbageCollected, result.SessionsCleaned, p.gate.Mode(), duration)
 
 	return nil
 }
@@ -841,4 +872,162 @@ func (p *Pipeline) cleanupStaleSessions(ctx context.Context) (int64, error) {
 		return 0, fmt.Errorf("cleanup stale sessions: %w", err)
 	}
 	return res.RowsAffected()
+}
+
+// createCrossNamespaceRelatesTo evaluates observations with embeddings across
+// different namespaces and creates relates_to links when similarity falls in
+// the window [RelatedMin, RelatedMax).
+// It limits cardinality per observation (top-N) to control link explosion.
+func (p *Pipeline) createCrossNamespaceRelatesTo(ctx context.Context) (int64, error) {
+	// Get all active observations with embeddings from Working and Core layers
+	rows, err := p.db.QueryContext(ctx, `
+		SELECT id, namespace, embedding FROM observations
+		WHERE deleted_at IS NULL
+		  AND layer >= 1
+		  AND embedding IS NOT NULL
+		ORDER BY namespace, importance DESC, created_at DESC
+	`)
+	if err != nil {
+		return 0, fmt.Errorf("query observations for relates_to: %w", err)
+	}
+	defer rows.Close()
+
+	type obsItem struct {
+		id        string
+		namespace string
+		embedding []float32
+	}
+
+	var items []obsItem
+	for rows.Next() {
+		var id, ns string
+		var blob []byte
+		if err := rows.Scan(&id, &ns, &blob); err != nil {
+			continue
+		}
+		vec := embed.DeserializeF32(blob)
+		if vec != nil {
+			items = append(items, obsItem{id: id, namespace: ns, embedding: vec})
+		}
+	}
+
+	if len(items) < 2 {
+		return 0, nil
+	}
+
+	// Load existing links to avoid duplicates
+	existingLinks, err := p.loadExistingRelatesToLinks(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("load existing links: %w", err)
+	}
+
+	// Track created links to avoid duplicates within this run
+	createdLinks := make(map[string]bool)
+	var createdCount int64
+
+	const maxLinksPerObservation = 5 // top-N limit to control link explosion
+
+	// Compare observations across namespaces
+	for i := 0; i < len(items); i++ {
+		// Collect top candidates for items[i]
+		type candidate struct {
+			id         string
+			similarity float64
+		}
+		var candidates []candidate
+
+		for j := 0; j < len(items); j++ {
+			if i == j {
+				continue
+			}
+			// Skip same namespace
+			if items[i].namespace == items[j].namespace {
+				continue
+			}
+
+			// Check if link already exists (in either direction)
+			pairKey := p.makePairKey(items[i].id, items[j].id)
+			if existingLinks[pairKey] || createdLinks[pairKey] {
+				continue
+			}
+
+			sim := embed.CosineSimilarity(items[i].embedding, items[j].embedding)
+
+			// Check if similarity is in the window [RelatedMin, RelatedMax)
+			if sim >= p.cfg.RelatedMin && sim < p.cfg.RelatedMax {
+				candidates = append(candidates, candidate{id: items[j].id, similarity: sim})
+			}
+		}
+
+		// Sort by similarity descending and take top-N
+		if len(candidates) > 0 {
+			// Simple bubble sort for small candidate lists
+			for a := 0; a < len(candidates)-1; a++ {
+				for b := a + 1; b < len(candidates); b++ {
+					if candidates[b].similarity > candidates[a].similarity {
+						candidates[a], candidates[b] = candidates[b], candidates[a]
+					}
+				}
+			}
+
+			// Create links for top candidates
+			limit := maxLinksPerObservation
+			if len(candidates) < limit {
+				limit = len(candidates)
+			}
+
+			for k := 0; k < limit; k++ {
+				pairKey := p.makePairKey(items[i].id, candidates[k].id)
+				if createdLinks[pairKey] {
+					continue
+				}
+
+				_, err := p.db.ExecContext(ctx, `
+					INSERT INTO observation_links(id, source_id, target_id, relation_type, confidence, created_by)
+					VALUES(?, ?, ?, ?, ?, ?)
+				`, p.idGen.New(), items[i].id, candidates[k].id, links.RelationRelatesTo, candidates[k].similarity, links.CreatedByConsolidator)
+				if err != nil {
+					log.Printf("failed to create relates_to link %s -> %s: %v", items[i].id, candidates[k].id, err)
+					continue
+				}
+
+				createdLinks[pairKey] = true
+				createdCount++
+			}
+		}
+	}
+
+	return createdCount, nil
+}
+
+// loadExistingRelatesToLinks loads all existing relates_to links into a map
+// for quick duplicate checking. The map key is a normalized pair key.
+func (p *Pipeline) loadExistingRelatesToLinks(ctx context.Context) (map[string]bool, error) {
+	rows, err := p.db.QueryContext(ctx, `
+		SELECT source_id, target_id FROM observation_links
+		WHERE relation_type = ?
+	`, links.RelationRelatesTo)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	links := make(map[string]bool)
+	for rows.Next() {
+		var sourceID, targetID string
+		if err := rows.Scan(&sourceID, &targetID); err != nil {
+			continue
+		}
+		links[p.makePairKey(sourceID, targetID)] = true
+	}
+	return links, rows.Err()
+}
+
+// makePairKey creates a normalized key for an unordered pair of observation IDs.
+// This ensures that (A,B) and (B,A) produce the same key.
+func (p *Pipeline) makePairKey(id1, id2 string) string {
+	if id1 < id2 {
+		return id1 + "|" + id2
+	}
+	return id2 + "|" + id1
 }

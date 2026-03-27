@@ -1,363 +1,207 @@
-# Plan: Memory Quality, Tracking & Embedding Improvements
+# Plan: Reconsolidación de reflections + spreading activation entre namespaces
 
 ## Goal
 
-Corregir 4 bugs identificados en el health-check, mejorar la calidad del pipeline de consolidación, y hacer el modelo de embedding completamente configurable con auto-migración al cambiar.
+Hacer que Neurox mantenga una única reflection activa por namespace en `observations`, preservando historial mediante `supersedes` y soft-delete del nodo anterior, y añadir links semánticos `relates_to` entre namespaces como base de spreading activation en el grafo.
 
-**Meta**: brain score 76/100 → ≥ 90/100.
-
----
+Esta primera versión **no** cambia el motor de recall para atravesar links cross-namespace. El objetivo de spreading activation aquí es enriquecer el grafo y dejar la base lista para una futura integración en recall, sin prometer comportamiento que el código actual todavía no implementa.
 
 ## Business Context
 
-- **Usuarios**: Agentes de IA (Claude Code, Cursor, etc.) que usan neurox como memoria persistente
-- **Problemas encontrados**:
-  1. **50% del cerebro invisible**: ~400/974 observaciones marcadas `expired` por falsos positivos del detector de contradicciones (`minContradictionSimilarity = 0.50` demasiado bajo para `nomic-embed-text`)
-  2. **Reflections duplicadas**: `ForceRun` → `ForceReflect` → `getRecentSources` no verifica si las observaciones ya fueron reflejadas; se generaron 4 reflections casi idénticas en el mismo minuto
-  3. **5 sesiones zombie activas**: `session_start` solo cierra sesiones del mismo namespace; el pipeline de consolidación no hace limpieza global
-  4. **Reflections no buscables**: todas llevan título `"Reflection: {namespace}"` — imposible diferenciarlas en recall
-  5. **Modelo de embedding hardcodeado**: `defaultOllamaModel = "nomic-embed-text"` y `OllamaConfig{}` vacío en `main.go` — el usuario no puede cambiarlo sin modificar el binario; al cambiarlo el DB queda en estado corrupto silencioso
-- **Expected outcome**: Recall restituido para ~400 obs, Core memory sin ruido, cualquier modelo de embedding configurable con migración automática, brain score ≥ 90
-
----
+- **Problema 1 — reflections acumuladas**: hoy cada ciclo de reflect crea un nuevo observation `source='reflection'` y un nuevo row en `reflections`, por lo que un namespace activo acumula múltiples síntesis activas difíciles de distinguir y mantener.
+- **Problema 2 — namespaces aislados en el grafo**: observaciones de namespaces distintos pueden compartir patrones, pero hoy no se enlazan automáticamente salvo por relaciones explícitas ya existentes.
+- **Resultado esperado**:
+  - En `observations`, debe existir **solo una reflection activa por namespace**.
+  - Las reflections previas deben mantenerse accesibles como historial lógico mediante `supersedes` + soft-delete.
+  - La tabla `reflections` debe quedar **append-only** como historial de síntesis; esta iteración no requiere cleanup ni mutación retroactiva allí.
+  - El pipeline puede crear links `relates_to` entre namespaces cuando haya similitud semántica suficiente, pero **sin cambiar todavía recall cross-namespace**.
+- **Restricciones**:
+  - Usar el enum real de `relation_type`; el valor válido es `relates_to`.
+  - Evitar scope extra de schema salvo la migración necesaria para cleanup legado de reflections activas en `observations`.
+  - Mantener compatibilidad con el wiring actual de configuración y migraciones.
 
 ## Technical Context
 
-### Bug 1 — Reflections duplicadas
-
-`pipeline.ForceRun()` llama `reflectEngine.ForceReflect()` → `getRecentSources()`, que devuelve el top-30 por importancia **sin verificar** si ya fueron reflejadas. En cambio, `pipeline.Run()` llama `reflectEngine.Run()` → `getUnreflectedSources()`, que excluye observaciones con enlace `derived_from`. Cada llamada al MCP tool `consolidate` activa `ForceRun` → reflection duplicada. La tabla `reflections` tiene `created_at` (confirmado en `schema.sql:166`), lo que permite hacer el guard de cooldown.
-
-### Bug 2 — Contradiction threshold agresivo
-
-`minContradictionSimilarity = 0.50` en `internal/contradiction/detector.go:19`. Con `nomic-embed-text` en corpus domain-specific, observaciones relacionadas pero no contradictorias alcanzan similarity > 0.50. El LLM las confirma como contradicciones → `staleness = 'expired'` → invisibles en `recall` y `proactive context`. No existe test `TestFindCandidates` en `detector_test.go` — hay que crearlo.
-
-### Bug 3 — Sesiones zombie
-
-`session.Manager.Start()` abandona sesiones del **mismo namespace** al crear una nueva, pero sesiones de otros proyectos quedan `active` indefinidamente. La consolidation pipeline no tiene paso de limpieza global. La tabla `sessions` tiene `started_at` y `status` con CHECK `('active','completed','abandoned')` — confirmado en `schema.sql:116`.
-
-### Mejora 4 — Títulos genéricos en reflections
-
-`saveReflection()` usa `"Reflection: " + namespace` como título (línea 252 de `engine.go`). Con 7+ reflections en Core con el mismo título, el recall no las diferencia. El LLM genera el contenido, puede también generar el título.
-
-### Problema 5 — Modelo de embedding no configurable
-
-`EmbeddingsConfig` (en `config.go:44-50`) tiene campos para Remote pero **no tiene `OllamaURL` ni `OllamaModel`**. En `main.go`, `embed.AutoDetect` se llama con `embed.OllamaConfig{}` vacío en 4 lugares:
-- `runRecall` (línea 253)
-- `runContext` (línea 290)
-- `initDeps` (línea 660)
-- `initDepsLight` (línea 736)
-
-`NewOllama(cfg OllamaConfig) *Ollama` **no tiene `context.Context`**, por lo que el auto-detect de modelo NO puede vivir en `NewOllama`. La lógica correcta es moverla a `AutoDetect`, que ya tiene `ctx`. Al cambiar el modelo sin re-embeber, `CosineSimilarity` devuelve `0.0` para pares de distinta dimensión o produce scores sin sentido para misma dimensión pero distinto espacio vectorial.
-
----
+- `internal/reflect/engine.go` hoy tiene `Run()`, `ForceReflect()`, `synthesize()`, `saveReflection()` y `lastReflectionAt()`. Ambos paths siempre generan una reflection nueva.
+- `saveReflection()` inserta tanto en la tabla `reflections` como en `observations`, y además crea links `derived_from` hacia las observaciones fuente.
+- `internal/consolidate/pipeline.go` ya tiene:
+  - `dedup()` para layer 1
+  - `dedupReflections()` para `observations` en layer 2 con `source='reflection'`
+- `internal/links/link.go` y `internal/db/schema.sql` definen `relation_type` como enum cerrado con `supersedes`, `contradicts`, `relates_to`, `derived_from`, `validates`, `refines`.
+- `internal/recall/engine.go` no consulta `observation_links` ni hace traversal, por lo que links cross-namespace **no** alteran el resultado de `Search()` por sí solos.
+- `internal/config/config.go` y `main.go` hoy solo exponen `DedupThreshold`, `ContradictionMin` y `ContradictionMax` para consolidación.
+- `internal/db/db.go` embebe migraciones hasta `008_db_settings.sql`; `009` todavía no existe.
+- Los tests existentes en `internal/reflect/engine_test.go`, `internal/consolidate/pipeline_test.go`, `internal/config/config_test.go` y `internal/recall/engine_test.go` marcan el patrón esperado para ampliar cobertura.
 
 ## Implementation Steps
 
-### Step 1: Cooldown en ForceReflect para evitar reflections duplicadas
-- **What**: Agregar guard de cooldown por namespace en `ForceReflect`. Nuevo método privado `lastReflectionAt(ctx, namespace) (time.Time, bool, error)` que ejecuta `SELECT MAX(created_at) FROM reflections WHERE namespace = ?`. Si existe una reflection creada en las últimas 2 horas, retornar `ReflectionsCreated: 0` sin generar nada. Constante `ForceReflectCooldown = 2 * time.Hour`.
-- **Why**: `ForceReflect` no tiene ninguna guarda contra llamadas repetidas. La llamada al MCP tool `consolidate` dispara `ForceRun` → `ForceReflect` con los mismos top-30 sources → reflection casi idéntica cada vez.
-- **Where**: `internal/reflect/engine.go`
-  - Nuevo método privado `lastReflectionAt(ctx, namespace) (time.Time, bool, error)`
-  - Guard al inicio de `ForceReflect()` antes de `getRecentSources`, usando `ForceReflectCooldown`
-- **Acceptance**:
-  - Llamar `ForceReflect` dos veces en < 2h mismo namespace → segunda vez `ReflectionsCreated: 0`
-  - Llamar con intervalo > 2h → genera reflection normalmente
-  - Nuevo test `TestForceReflectCooldown` en `internal/reflect/engine_test.go`
-  - `go test ./internal/reflect/...` verde
-- **Status**: [x] done
+### Step 1: Detectar la reflection activa e incorporar reconsolidación al prompt
 
-### Step 2: Subir umbral mínimo de detección de contradicciones
-- **What**: Cambiar `minContradictionSimilarity` de `0.50` a `0.65` en `internal/contradiction/detector.go`.
-- **Why**: Con `nomic-embed-text`, la zona 0.50–0.65 captura observaciones relacionadas pero no contradictorias. El umbral 0.65 filtra ese ruido. Nota: este threshold deberá recalibrarse en Step 7 si se cambia el modelo de embedding, ya que cada modelo tiene su propia distribución de cosine similarity.
-- **Where**: `internal/contradiction/detector.go` — constante `minContradictionSimilarity`
-- **Acceptance**:
-  - `minContradictionSimilarity == 0.65`
-  - Nuevo test `TestFindCandidates` creado en `internal/contradiction/detector_test.go` que verifica que pares con similarity en [0.65, 0.85) son candidatos y pares en [0.50, 0.65) no lo son. **No existe este test actualmente — crearlo desde cero.**
-  - `go test ./internal/contradiction/...` verde
-- **Status**: [x] done
-
-### Step 3: Migration — rescatar observaciones expired incorrectamente
-- **What**: Nueva migration `internal/db/007_rescue_expired.sql` que resetea `staleness = 'fresh'` para las observaciones que tienen `staleness = 'expired'` pero **no tienen** un enlace `supersedes` apuntando a ellas (es decir, no fueron supersedidas legítimamente):
-  ```sql
-  UPDATE observations
-  SET staleness = 'fresh',
-      valid_until = NULL,
-      invalidated_by = NULL,
-      updated_at = datetime('now')
-  WHERE deleted_at IS NULL
-    AND staleness = 'expired'
-    AND id NOT IN (
-        SELECT target_id FROM observation_links
-        WHERE relation_type = 'supersedes'
-    );
-  ```
-  Registrar en `internal/db/db.go` como migration versión 7: agregar `//go:embed 007_rescue_expired.sql` y el entry en el slice `migrations`.
-- **Why**: ~400 observaciones fueron marcadas `expired` por el threshold agresivo del Step 2. Sin enlace `supersedes` real, fueron víctimas de un falso positivo. Esta migration las devuelve al recall.
-- **Where**: `internal/db/007_rescue_expired.sql` (nuevo) + `internal/db/db.go` (embed directive + migrations slice)
-- **Acceptance**:
-  - Post-migration: `SELECT COUNT(*) FROM observations WHERE staleness='expired' AND id NOT IN (SELECT target_id FROM observation_links WHERE relation_type='supersedes')` → 0
-  - `neurox status` muestra `expired` ≤ 50
-  - `go test ./internal/db/...` verde
-- **Status**: [x] done
-
-### Step 4: Limpieza de sesiones zombie en la pipeline de consolidación
-- **What**: Nuevo método privado `cleanupStaleSessions(ctx) (int64, error)` en `pipeline.go` que abandona sesiones con `status = 'active'` y `started_at < datetime('now', '-24 hours')`:
-  ```sql
-  UPDATE sessions
-  SET status = 'abandoned', ended_at = datetime('now')
-  WHERE status = 'active'
-    AND started_at < datetime('now', '-24 hours')
-  ```
-  Llamarlo al inicio de `Run()` y `ForceRun()`, antes del decay. Agregar campo `SessionsCleaned int64` a `RunResult` y loggearlo en los mensajes de log de ambos métodos.
-- **Why**: `session_start` solo cierra sesiones del namespace actual. Las de otros proyectos/namespaces quedan activas para siempre. La consolidation (cada 30 min) es el lugar correcto para limpieza global.
-- **Where**: `internal/consolidate/pipeline.go` — nuevo método + campo en `RunResult`
-- **Acceptance**:
-  - Sesiones con `started_at < now - 24h` y `status = 'active'` → `abandoned` en el próximo ciclo
-  - Las 5 sesiones activas actuales se resuelven en el próximo `consolidate`
-  - Nuevo test `TestCleanupStaleSessions`: insertar sesión con timestamp viejo → `Run()` → status `abandoned`
-  - `go test ./internal/consolidate/...` verde
-- **Status**: [x] done
-
-### Step 5: Títulos semánticos para reflections
-- **What**: Actualizar el prompt de `synthesize()` para que el LLM incluya `TITLE: <título>` en la primera línea antes de los insights. Nuevo helper privado `extractTitle(content string) (title, body string)` en `saveReflection()` que parsea esa primera línea. Fallback a `"Synthesis: {namespace}"` si el LLM no incluye el prefijo `TITLE:`.
-- **Why**: 7+ reflections en Core con el mismo título `"Reflection: neurox"` son inútiles para búsqueda y diferenciación. Un título generado por el LLM sobre el contenido sintetizado es buscable y significativo.
-- **Where**: `internal/reflect/engine.go` — `synthesize()` (prompt) y `saveReflection()` (extracción + fallback)
-- **Acceptance**:
-  - Nuevas reflections: título como `"Pattern: Temporal Context Improves Memory Recall"` en lugar de `"Reflection: neurox"`
-  - Si LLM omite `TITLE:` → fallback `"Synthesis: neurox"`
-  - Test con mock LLM que incluye `TITLE:` → extracción correcta del título y cuerpo por separado
-  - Test con mock LLM que omite `TITLE:` → fallback aplicado
-  - `go test ./internal/reflect/...` verde
-- **Status**: [x] done
-
-### Step 6: Modelo de embedding completamente configurable
-- **What**: Conectar la config de Ollama embeddings (que hoy llega vacía) y eliminar el modelo hardcodeado. Cinco cambios interdependientes:
-
-  **6a. `EmbeddingsConfig` — campos Ollama faltantes** (`internal/config/config.go`)
-  Agregar `OllamaURL string yaml:"ollama_url"` y `OllamaModel string yaml:"ollama_model"` a `EmbeddingsConfig`. Agregar env vars en `applyEnvOverrides`:
-  - `NEUROX_EMBED_OLLAMA_URL` → `cfg.Embeddings.OllamaURL`
-  - `NEUROX_EMBED_OLLAMA_MODEL` → `cfg.Embeddings.OllamaModel`
-
-  Ahora cualquier usuario puede poner en `~/.config/neurox/config.yaml`:
-  ```yaml
-  embeddings:
-    provider: ollama
-    ollama_model: mxbai-embed-large
-  ```
-
-  **6b. Wiring en `main.go`** — reemplazar `embed.OllamaConfig{}` por `embed.OllamaConfig{URL: cfg.Embeddings.OllamaURL, Model: cfg.Embeddings.OllamaModel}` en los 4 puntos: `runRecall` (l.253), `runContext` (l.290), `initDeps` (l.660), `initDepsLight` (l.736).
-
-  **6c. Auto-detect de modelo en `AutoDetect`** (`internal/embed/queue.go`)
-  **IMPORTANTE**: `NewOllama` no tiene `context.Context` y no puede hacer llamadas de red — la lógica de ranking debe vivir en `AutoDetect`, que ya tiene `ctx`.
-  
-  Nuevo helper privado `pickBestEmbedModel(ctx context.Context, baseURL string) string` que llama `GET /api/tags`, parsea la lista de modelos disponibles, y retorna el primero que aparezca en la lista de preferencia:
-  ```go
-  var embedModelRanking = []string{
-      "qwen3-embedding",
-      "mxbai-embed-large",
-      "bge-m3",
-      "bge-large",
-      "nomic-embed-text",
-      "snowflake-arctic-embed",
-      "all-minilm",
-  }
-  ```
-  En `AutoDetect`: cuando `ollamaCfg.Model == ""`, llamar `pickBestEmbedModel` ANTES de `NewOllama` para determinar el modelo. Si ningún modelo de la lista está disponible → log `"no embedding model found; run: ollama pull qwen3-embedding:0.6b"` y retornar `Disabled{}`. Si el modelo está configurado explícitamente en `ollamaCfg.Model`, usarlo directamente sin consultar la lista.
-
-  Eliminar la constante `defaultOllamaModel = "nomic-embed-text"` de `ollama.go` — ya no se necesita.
-
-  **6d. Dimensiones dinámicas** (`internal/embed/ollama.go`)
-  Eliminar `ollamaDimensions = 768`. La struct `Ollama` detecta las dimensiones reales del primer `EmbedBatch` exitoso y las almacena con `atomic.Int32` para ser goroutine-safe (el worker de `Queue` llama `EmbedBatch` en background):
-  ```go
-  type Ollama struct {
-      url    string
-      model  string
-      client *http.Client
-      dims   atomic.Int32  // populated on first successful EmbedBatch
-  }
-  ```
-  `EmbedBatch` hace `o.dims.CompareAndSwap(0, int32(len(embeddings[0])))` tras el primer batch exitoso. `Dimensions()` retorna `int(o.dims.Load())`, o `0` si aún no se detectó. Si `cfg.Embeddings.Dimensions > 0`, ese valor tiene prioridad (útil para Remote APIs).
-
-  **6e. Agregar `"qwen3-embedding"` a `looksLikeEmbeddingModel`** (`internal/installer/installer.go:227`) — el wizard detectará automáticamente `qwen3-embedding` al buscar modelos disponibles en Ollama.
-
-  **Nota sobre installer**: `writeConfigFile` en `installer.go` intencionalmente NO escribe `ollama_model` cuando el provider es ollama — el auto-detect de Step 6c elige el mejor modelo instalado en runtime. Esto es comportamiento correcto, no un olvido.
-
-  **6f. `health.go` agnóstico al modelo** — reemplazar los dos strings hardcodeados que mencionan `"nomic-embed-text"` (líneas 208 y 245) por referencias al modelo activo:
-  - `checkEmbeddingsCoverage`: `"Ensure Ollama is running with an embedding model. Run: ollama pull qwen3-embedding:0.6b"`
-  - `checkEmbedProvider`: `"Ensure Ollama is running with an embedding model for semantic search."`
-
-- **Why**: El modelo de embedding es una decisión del usuario. Hoy es imposible cambiarlo sin modificar el binario. La lista de preferencia en auto-detect no es un default hardcodeado — es un ranking que se usa solo cuando el usuario no configuró nada, y puede ignorarse completamente con una línea en `config.yaml`.
+- **What**:
+  - Añadir en `internal/reflect/engine.go` un helper privado para obtener la reflection activa de un namespace desde `observations` (`source='reflection'` y `deleted_at IS NULL`).
+  - Actualizar `synthesize()` para aceptar opcionalmente el contenido de la reflection activa previa y usarlo como contexto de reconsolidación en el prompt.
+  - Mantener el comportamiento actual cuando no exista reflection previa.
+- **Why**:
+  - La reconsolidación necesita que el LLM vea el “schema” previo antes de sintetizar la nueva versión enriquecida.
 - **Where**:
-  - `internal/config/config.go` — campos + env vars
-  - `internal/embed/ollama.go` — eliminar constantes hardcodeadas + `atomic.Int32` para dims
-  - `internal/embed/queue.go` — `pickBestEmbedModel` + lógica en `AutoDetect`
-  - `internal/installer/installer.go` — agregar `"qwen3-embedding"` a `looksLikeEmbeddingModel`
-  - `internal/health/health.go` — strings agnósticos al modelo
-  - `main.go` — wiring en 4 funciones
+  - `internal/reflect/engine.go`
+  - `internal/reflect/engine_test.go`
 - **Acceptance**:
-  - `config.yaml` con `embeddings.ollama_model: mxbai-embed-large` → el sistema usa ese modelo
-  - `NEUROX_EMBED_OLLAMA_MODEL=bge-m3` → override por env var funciona
-  - Sin configuración: auto-detect elige el mejor modelo instalado en Ollama
-  - Si Ollama no tiene ningún modelo de embedding → `Disabled` con mensaje de ayuda claro
-  - `Ollama.Dimensions()` retorna 0 hasta el primer batch, luego el valor real (ej: 768 para nomic)
-  - `neurox install` detecta `qwen3-embedding` como modelo válido
-  - Test `TestEmbeddingsOllamaConfigWired` — config con `ollama_model: "custom"` → llega al `OllamaConfig`
-  - Test `TestPickBestEmbedModel` — mock HTTP con varios modelos → elige el de mayor ranking
-  - Test `TestPickBestEmbedModelNoneAvailable` → retorna `""`; `AutoDetect` retorna `Disabled`
-  - Test `TestOllamaDynamicDimensions` — primer `EmbedBatch` retorna 768-dim → `Dimensions()` = 768; goroutine-safe (no data race)
-  - `go test ./internal/embed/...` verde
-  - `go test ./internal/config/...` verde
+  - Si no existe reflection activa en el namespace, el helper retorna `nil` sin error.
+  - Si existe una reflection activa, retorna la más reciente no soft-deleted.
+  - `synthesize()` conserva el prompt actual cuando no hay reflection previa.
+  - `synthesize()` incluye explícitamente la reflection previa cuando sí existe.
+  - Hay tests que cubren ambos caminos.
+  - `CGO_ENABLED=1 go test -tags fts5 ./internal/reflect`
 - **Status**: [x] done
 
-### Step 7: Auto-migración al cambiar el modelo de embedding
-- **What**: Sistema que detecta automáticamente cuando el usuario cambia el modelo de embedding y re-embebe el corpus en background sin bloquear el startup.
+### Step 2: Guardar la nueva reflection de forma transaccional y dejar una sola activa
 
-  **7a. Migration 008 — tabla `db_settings`** (`internal/db/008_db_settings.sql`)
-  Tabla KV genérica para metadata del sistema:
-  ```sql
-  CREATE TABLE db_settings (
-      key        TEXT PRIMARY KEY,
-      value      TEXT NOT NULL,
-      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-  );
-  ```
-  Registrar en `internal/db/db.go` como migration versión 8: agregar `//go:embed 008_db_settings.sql` y el entry en el slice `migrations`.
-
-  **7b. `ReembedAll(ctx)` en `embed/queue.go`**
-  Nueva función pública que hace `UPDATE observations SET embedding = NULL WHERE deleted_at IS NULL` y luego llama `BackfillPending(ctx)`. También exponer como subcomando CLI `neurox reembed` en `main.go` para migración manual forzada.
-
-  **7c. `embed.ModelTracker`** (`internal/embed/tracker.go`)
-  ```go
-  type ModelTracker struct {
-      db    *sql.DB
-      queue *Queue
-  }
-
-  func NewModelTracker(db *sql.DB, queue *Queue) *ModelTracker
-
-  // CheckAndMigrate:
-  //   - db_settings vacío (primer arranque) → guarda modelo actual, no reembed
-  //   - modelo igual → no-op (< 1ms)
-  //   - modelo distinto → log + ReembedAll en goroutine background + actualiza db_settings al terminar
-  func (t *ModelTracker) CheckAndMigrate(ctx context.Context, provider Provider) error
-  ```
-  Llamado desde `main.go` después de `embed.Queue.Start()`, antes de iniciar el MCP server. No bloquea.
-  
-  El tracker guarda en `db_settings`:
-  - `embed_model` → nombre completo (`provider.Name()`, ej: `"ollama/nomic-embed-text"`)
-  - `embed_dims` → dimensiones como string (ej: `"768"`)
-
-  **7d. Thresholds configurables vía `config.yaml`**
-
-  El plan Step 2 cambia `minContradictionSimilarity` a 0.65 como constante. Step 7 lo hace configurable para que el usuario pueda recalibrar al cambiar de modelo sin recompilar.
-
-  **Mecanismo de threading** (explícito para evitar ambigüedad):
-  
-  1. Agregar `ConsolidationConfig` a `internal/config/config.go`:
-     ```go
-     type ConsolidationConfig struct {
-         DedupThreshold   float64 `yaml:"dedup_threshold"`
-         ContradictionMin float64 `yaml:"contradiction_min"`
-         ContradictionMax float64 `yaml:"contradiction_max"`
-     }
-     ```
-     Con defaults en `applyDerivedDefaults`: `DedupThreshold=0.85`, `ContradictionMin=0.65`, `ContradictionMax=0.85`. Agregar `Consolidation ConsolidationConfig yaml:"consolidation"` a `Config`.
-
-  2. Expandir `consolidate.Config` (`pipeline.go`):
-     ```go
-     type Config struct {
-         Interval         time.Duration
-         DedupThreshold   float64
-         ContradictionMin float64
-         ContradictionMax float64
-     }
-     ```
-
-  3. Expandir `contradiction.NewDetector` para aceptar thresholds:
-     ```go
-     func NewDetector(db *sql.DB, embedder embed.Provider, llmProvider llm.Provider,
-         linkStore *links.Store, minSim, maxSim float64) *Detector
-     ```
-     `Detector` almacena `minSim float64` y `maxSim float64` como campos, reemplazando las constantes de paquete. `findCandidates` usa `d.minSim` y `d.maxSim`.
-
-  4. En `NewPipeline` (`pipeline.go`): pasar `cfg.ContradictionMin` y `cfg.ContradictionMax` a `contradiction.NewDetector`. Usar `cfg.DedupThreshold` en `dedup()` en lugar de la constante `dedupCosineThreshold`.
-
-  5. En `main.go`: poblar `consolidate.Config` desde `cfg.Consolidation` al instanciar el pipeline.
-
-  Valores de referencia por modelo:
-  - `nomic-embed-text` (768d): dedup ≥ 0.85, contradiction [0.65, 0.85)
-  - `qwen3-embedding` (1024–2560d): dedup ≥ 0.88, contradiction [0.70, 0.88)
-  - `bge-m3` (1024d): dedup ≥ 0.87, contradiction [0.68, 0.87)
-
-- **Why**: Sin este sistema, cambiar el modelo en config deja el DB en estado corrupto. El auto-reembed en background garantiza que el corpus converge al nuevo espacio vectorial sin interrumpir el servicio. Los thresholds configurables permiten recalibrar sin recompilar al cambiar de modelo.
+- **What**:
+  - Reestructurar `Run()` y `ForceReflect()` para:
+    1. cargar la reflection activa del namespace,
+    2. sintetizar la nueva reflection con o sin contexto previo,
+    3. guardar todo en una transacción.
+  - Actualizar `saveReflection()` para que la operación sea atómica:
+    - insertar un nuevo row en `reflections` (historial append-only),
+    - insertar el nuevo observation `source='reflection'`,
+    - crear links `derived_from` a las fuentes,
+    - si había reflection activa previa, crear link `supersedes` del nuevo observation al anterior,
+    - soft-delete del observation anterior.
+  - Mantener `lastReflectionAt()` basado en la tabla `reflections`, ya que sigue siendo el historial cronológico completo.
+- **Why**:
+  - La regla de negocio central es “una sola reflection activa por namespace”, sin perder trazabilidad histórica.
+  - La transacción evita estados inconsistentes entre `reflections`, `observations` y `observation_links`.
 - **Where**:
-  - `internal/db/008_db_settings.sql` (nuevo)
-  - `internal/db/db.go` — embed directive + migration 8
-  - `internal/embed/queue.go` — `ReembedAll(ctx)`
-  - `internal/embed/tracker.go` (nuevo) — `ModelTracker`
-  - `internal/config/config.go` — nueva sección `ConsolidationConfig` con defaults en `applyDerivedDefaults`
-  - `internal/consolidate/pipeline.go` — expandir `Config` + usar thresholds desde campos
-  - `internal/contradiction/detector.go` — expandir `NewDetector` + campos en `Detector` en lugar de constantes
-  - `main.go` — instanciar `ModelTracker` + subcomando `neurox reembed` + poblar `consolidate.Config`
+  - `internal/reflect/engine.go`
+  - `internal/reflect/engine_test.go`
 - **Acceptance**:
-  - Primer arranque (DB nueva) → guarda modelo en `db_settings`, sin reembed
-  - Arranque con mismo modelo → no-op, < 1ms overhead
-  - Arranque con modelo distinto → log `"embed model changed nomic-embed-text→qwen3-embedding:4b, re-embedding 974 observations"` + `BackfillPending` asíncrono
-  - `neurox reembed` fuerza el proceso manualmente desde CLI
-  - `config.yaml` con `consolidation.dedup_threshold: 0.90` → pipeline usa ese valor
-  - Test `TestModelTrackerFirstRun` → solo guarda, sin reembed
-  - Test `TestModelTrackerNoChange` → no-op
-  - Test `TestModelTrackerChanged` → `ReembedAll` invocado + `db_settings` actualizado
-  - Test `TestReembedAll` → obs con embedding ≠ NULL → post call → embedding = NULL + enqueued
-  - Test `TestConsolidationThresholdsFromConfig` → config custom → pipeline usa esos valores
-  - Test `TestDetectorThresholds` → `NewDetector` con `minSim=0.70` → pares con sim=0.65 no son candidatos
-  - `go test -race ./...` verde (verifica goroutine-safety de `atomic.Int32` en `Ollama.dims`)
+  - Primera reflection de un namespace: crea row en `reflections`, crea observation activo, no crea `supersedes`.
+  - Segunda reflection del mismo namespace: crea nuevo row en `reflections`, crea nuevo observation activo, crea link `supersedes`, soft-delete del observation anterior.
+  - Tras múltiples reconsolidaciones, `SELECT COUNT(*) FROM observations WHERE namespace=? AND source='reflection' AND deleted_at IS NULL` devuelve siempre `1`.
+  - La tabla `reflections` sigue creciendo append-only; no se borra ni actualiza historial en esta iteración.
+  - Hay tests para la cadena de `supersedes` y la unicidad del nodo activo.
+  - `CGO_ENABLED=1 go test -tags fts5 ./internal/reflect`
 - **Status**: [x] done
 
-### Step 8: Verificación final
-- **What**: Ejecutar la suite completa, verificar el brain score, instalar el git hook.
-- **Why**: Gate de calidad antes de considerar el plan terminado.
-- **Where**: Proyecto raíz
+### Step 3: Limpiar datos heredados y exponer thresholds de spreading activation
+
+- **What**:
+  - Crear migración `internal/db/009_reconcile_active_reflections.sql` para soft-delete de reflections heredadas en `observations`, dejando solo una activa por namespace.
+  - Registrar la migración en `internal/db/db.go`.
+  - Extender `internal/config/config.go`, `internal/consolidate/pipeline.go` y `main.go` con thresholds explícitos para spreading activation (`RelatedMin`, `RelatedMax`), con defaults coherentes con dedup:
+    - `RelatedMin = 0.65`
+    - `RelatedMax = DedupThreshold`
+- **Why**:
+  - La migración deja el estado histórico compatible con la nueva regla antes de que corra la reconsolidación viva.
+  - Los thresholds deben quedar configurables como ya ocurre con dedup y contradiction detection.
+- **Where**:
+  - `internal/db/009_reconcile_active_reflections.sql`
+  - `internal/db/db.go`
+  - `internal/db/db_test.go`
+  - `internal/config/config.go`
+  - `internal/config/config_test.go`
+  - `internal/consolidate/pipeline.go`
+  - `main.go`
 - **Acceptance**:
-  - `CGO_ENABLED=1 go build -tags fts5 ./...` limpio
-  - `go vet ./...` sin warnings
-  - `CGO_ENABLED=1 go test -tags fts5 ./...` verde
-  - `CGO_ENABLED=1 go test -race -tags fts5 ./...` verde
-  - `neurox health_check` → score ≥ 90
-  - `neurox status` → `expired` ≤ 50, `active_sessions` ≤ 1
-  - `neurox install-hook` ejecutado correctamente
+  - Después de migrar, cada namespace tiene como máximo una reflection activa en `observations`.
+  - La migración no borra rows de la tabla `reflections`.
+  - `config.Load()` aplica defaults para `RelatedMin` y `RelatedMax`.
+  - `main.go` pasa los nuevos campos a `consolidate.Config`.
+  - Hay tests para defaults/config parsing y para registrar/aplicar la migración 009.
+  - `CGO_ENABLED=1 go test -tags fts5 ./internal/config ./internal/db ./internal/consolidate`
 - **Status**: [x] done
 
----
+### Step 4: Añadir `relates_to` cross-namespace al pipeline de consolidación
+
+- **What**:
+  - Implementar un paso privado en `internal/consolidate/pipeline.go` que evalúe observaciones con embedding en namespaces distintos y cree links `relates_to` cuando la similitud caiga en la ventana `[RelatedMin, RelatedMax)`.
+  - Respetar el enum real del schema usando `links.RelationRelatesTo`.
+  - Evitar duplicados comprobando links existentes entre el par en cualquier dirección.
+  - Limitar cardinalidad inicial por observación (por ejemplo top-N) para controlar explosión de links.
+  - Añadir contadores al `RunResult` y logging del paso.
+  - Ejecutar este paso después de dedup y antes de finalizar el pipeline.
+- **Why**:
+  - Esto construye la capa de grafo necesaria para future spreading activation sin tocar todavía el comportamiento de recall.
+- **Where**:
+  - `internal/consolidate/pipeline.go`
+  - `internal/consolidate/pipeline_test.go`
+  - opcionalmente `internal/links/store_test.go` si hace falta validar helpers
+- **Acceptance**:
+  - Dos observaciones de namespaces distintos con similitud dentro de la ventana crean un link `relates_to`.
+  - Observaciones del mismo namespace no generan `relates_to` por este paso.
+  - Pares con similitud `>= RelatedMax` no generan `relates_to`.
+  - Pares con similitud `< RelatedMin` no generan `relates_to`.
+  - Si ya existe un link equivalente entre el par, no se duplica.
+  - El código usa `relates_to`, no `related_to`.
+  - La aceptación **no** promete recall cross-namespace; el resultado esperado en v1 es enriquecimiento del grafo, no cambio en `recall.Search()`.
+  - `CGO_ENABLED=1 go test -tags fts5 ./internal/consolidate`
+- **Status**: [x] done
+
+### Step 5: Verificación integral y documentación de límites de la versión
+
+- **What**:
+  - Ejecutar validación completa de build, vet y tests.
+  - Verificar manualmente en DB que:
+    - solo existe una reflection activa por namespace en `observations`,
+    - `reflections` conserva historial append-only,
+    - existen links `supersedes` y `relates_to` donde corresponde.
+  - Dejar explícito en notas o comentarios del cambio que recall cross-namespace queda fuera de esta versión.
+- **Why**:
+  - Cierra el cambio con verificación técnica realista y evita una expectativa de producto que el código aún no cumple.
+- **Where**:
+  - raíz del proyecto
+  - comentarios/notas en los archivos tocados si aplica
+- **Acceptance**:
+  - `CGO_ENABLED=1 go build -tags fts5 ./...`
+  - `CGO_ENABLED=1 go vet -tags fts5 ./...`
+  - `CGO_ENABLED=1 go test -tags fts5 ./...`
+  - `CGO_ENABLED=1 go test -race -tags fts5 ./...`
+  - `CGO_ENABLED=1 go build -tags fts5 -o neurox .`
+  - Verificación SQL manual:
+    - `SELECT namespace, COUNT(*) FROM observations WHERE source='reflection' AND deleted_at IS NULL GROUP BY namespace;` devuelve máximo 1 por namespace.
+    - `SELECT COUNT(*) FROM observation_links WHERE relation_type='supersedes';` refleja reconsolidaciones realizadas.
+    - `SELECT COUNT(*) FROM observation_links WHERE relation_type='relates_to';` refleja links cross-namespace creados por el pipeline.
+- **Status**: [x] done
 
 ## Verification
 
 ```bash
-# Build
-CGO_ENABLED=1 go build -tags fts5 -o neurox .
-
-# Tests
+CGO_ENABLED=1 go test -tags fts5 ./internal/reflect
+CGO_ENABLED=1 go test -tags fts5 ./internal/config ./internal/db ./internal/consolidate
+CGO_ENABLED=1 go build -tags fts5 ./...
+CGO_ENABLED=1 go vet -tags fts5 ./...
 CGO_ENABLED=1 go test -tags fts5 ./...
 CGO_ENABLED=1 go test -race -tags fts5 ./...
-
-# Health post-fix
-./neurox health_check
-
-# Estado del DB post-migration
-./neurox status
-
-# Git hook
-./neurox install-hook
+CGO_ENABLED=1 go build -tags fts5 -o neurox .
 ```
 
----
+Verificaciones manuales recomendadas:
+
+```sql
+SELECT namespace, COUNT(*)
+FROM observations
+WHERE source='reflection' AND deleted_at IS NULL
+GROUP BY namespace;
+
+SELECT relation_type, COUNT(*)
+FROM observation_links
+WHERE relation_type IN ('supersedes', 'relates_to')
+GROUP BY relation_type;
+
+SELECT namespace, COUNT(*)
+FROM reflections
+GROUP BY namespace;
+```
 
 ## Risks / Notes
 
-- **Step 2 + Step 7 interacción**: El threshold 0.65 está calibrado para `nomic-embed-text`. Al migrar a otro modelo (Step 7), los thresholds deben recalibrarse. Por eso Step 7 los hace configurables en `config.yaml` en lugar de mantenerlos como constantes.
-- **Step 3 (rescue migration)**: El criterio "sin enlace supersedes apuntando" es conservador. Observaciones legítimamente supersedidas conservan `expired`. Riesgo de rescatar una obs realmente inválida: bajo.
-- **Step 5 (títulos)**: El LLM no garantiza el prefijo `TITLE:`. El fallback `"Synthesis: {namespace}"` es mejor que el actual `"Reflection: {namespace}"`. Las reflections duplicadas existentes en Core no se limpian automáticamente — usar `neurox forget <id>` manualmente si se desea.
-- **Step 6 auto-detect**: `pickBestEmbedModel` hace una llamada HTTP adicional a `/api/tags` dentro de `AutoDetect`. `AutoDetect` ya llamaba a `Ping()` (que también usa `/api/tags`) seguido de un test embed. Se puede optimizar consolidando ambas llamadas, o dejarlo simple con dos llamadas ya que `AutoDetect` se ejecuta solo al startup y no es hot-path.
-- **Step 6 installer**: `writeConfigFile` en `installer.go` intencionalmente NO escribe `embeddings.ollama_model` al elegir Ollama — el auto-detect elige el mejor modelo disponible en runtime. Si el usuario quiere fijar un modelo específico, puede editar `config.yaml` manualmente o usar `NEUROX_EMBED_OLLAMA_MODEL`.
-- **Step 7 background reembed**: Durante el re-embed hay una ventana donde coexisten embeddings del modelo viejo y del nuevo. La ventana dura segundos/minutos para ~1000 obs — aceptable. `CosineSimilarity` retorna 0 para pares de dimensión distinta (falla visible), o scores incorrectos para mismo dim pero distinto espacio (falla silenciosa). En ambos casos el dedup y contradiction simplemente no actúan sobre esos pares — el impacto es bajo.
-- **Tags/file-links coverage (33%)**: Problema de disciplina histórica de uso, no de código. Mejora orgánicamente. No se aborda en este plan.
+- **Límite intencional de la v1**: crear links `relates_to` entre namespaces no modifica `recall.Search()` todavía. Cualquier historia de “recall cross-namespace” requiere un cambio posterior en `internal/recall/engine.go`.
+- **Historial dual de reflections**:
+  - `observations`: una sola reflection activa por namespace.
+  - `reflections`: historial append-only completo.
+  Esto es intencional y debe mantenerse explícito.
+- **Integridad transaccional**: la reconsolidación debe guardar observation nuevo, link `supersedes` y soft-delete del anterior en la misma transacción para evitar dos reflections activas temporalmente.
+- **Migración 009**: solo debe reconciliar el espejo en `observations`; no debe borrar historial de `reflections`.
+- **Costo del paso cross-namespace**: comparar embeddings entre namespaces puede crecer rápido; conviene limitar top-N por observación y revisar impacto inicial en tiempo de consolidación.
+- **Compatibilidad de schema**: no hace falta migrar `relation_type`; el schema actual ya soporta `relates_to`.

@@ -87,8 +87,14 @@ func (e *Engine) Run(ctx context.Context, namespace string) (ReflectResult, erro
 		return result, nil
 	}
 
+	// Get active reflection for reconsolidation context
+	active, err := e.getActiveReflection(ctx, namespace)
+	if err != nil {
+		return result, fmt.Errorf("get active reflection: %w", err)
+	}
+
 	// Generate reflection
-	reflection, err := e.synthesize(ctx, sources, namespace)
+	reflection, err := e.synthesize(ctx, sources, namespace, active)
 	if err != nil {
 		return result, fmt.Errorf("synthesize reflection: %w", err)
 	}
@@ -100,7 +106,7 @@ func (e *Engine) Run(ctx context.Context, namespace string) (ReflectResult, erro
 	}
 
 	// Save the reflection
-	if err := e.saveReflection(ctx, reflection, sources, namespace); err != nil {
+	if err := e.saveReflection(ctx, reflection, sources, namespace, active); err != nil {
 		return result, fmt.Errorf("save reflection: %w", err)
 	}
 
@@ -138,7 +144,13 @@ func (e *Engine) ForceReflect(ctx context.Context, namespace string) (ReflectRes
 		return result, fmt.Errorf("need at least 3 observations to reflect, have %d", len(sources))
 	}
 
-	reflection, err := e.synthesize(ctx, sources, namespace)
+	// Get active reflection for reconsolidation context
+	active, err := e.getActiveReflection(ctx, namespace)
+	if err != nil {
+		return result, fmt.Errorf("get active reflection: %w", err)
+	}
+
+	reflection, err := e.synthesize(ctx, sources, namespace, active)
 	if err != nil {
 		return result, fmt.Errorf("synthesize: %w", err)
 	}
@@ -149,7 +161,7 @@ func (e *Engine) ForceReflect(ctx context.Context, namespace string) (ReflectRes
 		return result, nil
 	}
 
-	if err := e.saveReflection(ctx, reflection, sources, namespace); err != nil {
+	if err := e.saveReflection(ctx, reflection, sources, namespace, active); err != nil {
 		return result, fmt.Errorf("save: %w", err)
 	}
 
@@ -219,28 +231,74 @@ func scanSources(rows *sql.Rows) ([]sourceObs, error) {
 	return sources, rows.Err()
 }
 
-func (e *Engine) synthesize(ctx context.Context, sources []sourceObs, namespace string) (string, error) {
+// activeReflection represents the currently active reflection observation for a namespace.
+type activeReflection struct {
+	id      string
+	title   string
+	content string
+}
+
+// getActiveReflection returns the most recent active reflection observation for a namespace.
+// Returns (nil, nil) if no active reflection exists.
+func (e *Engine) getActiveReflection(ctx context.Context, namespace string) (*activeReflection, error) {
+	var r activeReflection
+	err := e.db.QueryRowContext(ctx, `
+		SELECT id, title, content
+		FROM observations
+		WHERE deleted_at IS NULL
+		  AND source = 'reflection'
+		  AND namespace = ?
+		ORDER BY created_at DESC
+		LIMIT 1
+	`, namespace).Scan(&r.id, &r.title, &r.content)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("query active reflection: %w", err)
+	}
+	return &r, nil
+}
+
+func (e *Engine) synthesize(ctx context.Context, sources []sourceObs, namespace string, prev *activeReflection) (string, error) {
 	var sb strings.Builder
 	for i, s := range sources {
 		fmt.Fprintf(&sb, "%d. [%s] %s: %s\n", i+1, s.obsType, s.title, s.content)
 	}
 
-	prompt := fmt.Sprintf(`You are a memory synthesis engine. Given the following %d observations from the "%s" project namespace, extract 3 high-level insights or patterns.
+	var prevSection string
+	if prev != nil {
+		prevSection = fmt.Sprintf(`
+Previous Active Reflection (to enrich/reconsolidate):
+Title: %s
+Content:
+%s
 
-Observations:
+`, prev.title, prev.content)
+	}
+
+	prompt := fmt.Sprintf(`You are a memory synthesis engine. Given the following %d observations from the "%s" project namespace, extract 3 high-level insights or patterns.
+%sObservations:
 %s
 Rules:
 - Each insight should synthesize multiple observations, not just repeat one
 - Focus on patterns, recurring themes, architectural decisions, or learned lessons
 - Be specific and actionable
-- Format: numbered list, each insight as a single concise paragraph
+- Format: numbered list, each insight as a single concise paragraph%s
 
 Output format:
 TITLE: <concise descriptive title for the synthesis>
 
 **Insight 1:** ...
 **Insight 2:** ...
-**Insight 3:** ...`, len(sources), namespace, sb.String())
+**Insight 3:** ...`,
+		len(sources), namespace, prevSection, sb.String(),
+		func() string {
+			if prev != nil {
+				return "\n- Build upon and enrich the previous reflection where appropriate, incorporating new patterns from recent observations"
+			}
+			return ""
+		}())
 
 	return e.llm.Complete(ctx, prompt)
 }
@@ -282,7 +340,12 @@ func extractTitle(content string, namespace string) (title, body string) {
 	return "Synthesis: " + namespace, content
 }
 
-func (e *Engine) saveReflection(ctx context.Context, content string, sources []sourceObs, namespace string) error {
+// saveReflection saves a reflection atomically:
+// - inserts into reflections table (append-only history)
+// - inserts into observations as the new active reflection
+// - creates derived_from links to source observations
+// - if a previous active reflection exists, creates supersedes link and soft-deletes it
+func (e *Engine) saveReflection(ctx context.Context, content string, sources []sourceObs, namespace string, prevActive *activeReflection) error {
 	reflectionID := e.idGen.New()
 	sourceIDs := make([]string, len(sources))
 	for i, s := range sources {
@@ -293,8 +356,15 @@ func (e *Engine) saveReflection(ctx context.Context, content string, sources []s
 	// Extract title from content or use fallback
 	title, body := extractTitle(content, namespace)
 
-	// Insert into reflections table
-	_, err := e.db.ExecContext(ctx, `
+	// Start transaction for atomic operation
+	tx, err := e.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	// Insert into reflections table (append-only history)
+	_, err = tx.ExecContext(ctx, `
 		INSERT INTO reflections(id, content, source_observation_ids, namespace)
 		VALUES(?, ?, ?, ?)
 	`, reflectionID, body, sourceIDsStr, namespace)
@@ -304,7 +374,7 @@ func (e *Engine) saveReflection(ctx context.Context, content string, sources []s
 
 	// Also save as a Core-layer observation for recall
 	obsID := e.idGen.New()
-	_, err = e.db.ExecContext(ctx, `
+	_, err = tx.ExecContext(ctx, `
 		INSERT INTO observations(id, title, content, observation_type, layer, confidence, importance, kind, namespace, source, retention)
 		VALUES(?, ?, ?, 'pattern', 2, 0.9, 0.9, 'semantic', ?, 'reflection', 'durable')
 	`, obsID, title, body, namespace)
@@ -314,7 +384,7 @@ func (e *Engine) saveReflection(ctx context.Context, content string, sources []s
 
 	// Create derived_from links from the reflection to each source
 	for _, s := range sources {
-		_, linkErr := e.linkStore.Create(ctx, links.CreateLinkInput{
+		_, linkErr := e.linkStore.CreateTx(ctx, tx, links.CreateLinkInput{
 			SourceID:     obsID,
 			TargetID:     s.id,
 			RelationType: links.RelationDerivedFrom,
@@ -322,9 +392,40 @@ func (e *Engine) saveReflection(ctx context.Context, content string, sources []s
 			CreatedBy:    links.CreatedByConsolidator,
 		})
 		if linkErr != nil {
-			// Non-fatal: link might fail if source was deleted
+			// Non-fatal: link might fail if source was deleted or link already exists
 			log.Printf("create derived_from link for reflection: %v", linkErr)
 		}
+	}
+
+	// If there's a previous active reflection, create supersedes link and soft-delete it
+	if prevActive != nil {
+		// Create supersedes link: new observation supersedes the previous one
+		_, linkErr := e.linkStore.CreateTx(ctx, tx, links.CreateLinkInput{
+			SourceID:     obsID,
+			TargetID:     prevActive.id,
+			RelationType: links.RelationSupersedes,
+			Confidence:   1.0,
+			CreatedBy:    links.CreatedByConsolidator,
+		})
+		if linkErr != nil {
+			// Non-fatal: link might fail if previous observation was deleted
+			log.Printf("create supersedes link for reflection: %v", linkErr)
+		}
+
+		// Soft-delete the previous observation
+		_, err = tx.ExecContext(ctx, `
+			UPDATE observations
+			SET deleted_at = datetime('now'),
+			    updated_at = datetime('now')
+			WHERE id = ? AND deleted_at IS NULL
+		`, prevActive.id)
+		if err != nil {
+			return fmt.Errorf("soft-delete previous reflection: %w", err)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit transaction: %w", err)
 	}
 
 	log.Printf("reflection created: %s from %d sources in namespace %s", reflectionID, len(sources), namespace)

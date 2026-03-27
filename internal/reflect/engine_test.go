@@ -14,11 +14,15 @@ import (
 )
 
 type mockLLM struct {
-	response string
-	err      error
+	response      string
+	err           error
+	capturePrompt *string // if set, captures the prompt sent to Complete
 }
 
-func (m *mockLLM) Complete(_ context.Context, _ string) (string, error) {
+func (m *mockLLM) Complete(_ context.Context, prompt string) (string, error) {
+	if m.capturePrompt != nil {
+		*m.capturePrompt = prompt
+	}
 	return m.response, m.err
 }
 
@@ -433,5 +437,442 @@ func TestExtractTitleFallback(t *testing.T) {
 	}
 	if content != mockResponse {
 		t.Errorf("content should be full original content when no TITLE: prefix\ngot: %s\nwant: %s", content, mockResponse)
+	}
+}
+
+func TestGetActiveReflectionNoExisting(t *testing.T) {
+	e, _ := setupTest(t)
+	ctx := context.Background()
+
+	// No reflection exists yet
+	active, err := e.getActiveReflection(ctx, "nonexistentns")
+	if err != nil {
+		t.Fatalf("getActiveReflection: %v", err)
+	}
+	if active != nil {
+		t.Errorf("expected nil when no active reflection, got %+v", active)
+	}
+}
+
+func TestGetActiveReflectionReturnsMostRecent(t *testing.T) {
+	e, tdb := setupTest(t)
+	ctx := context.Background()
+
+	// Insert first reflection observation
+	tdb.Exec(t, `INSERT INTO observations(id, title, content, observation_type, layer, confidence, importance, kind, namespace, source, retention, created_at)
+		VALUES('REF001', 'First Reflection', 'First content', 'pattern', 2, 0.9, 0.9, 'semantic', 'testns', 'reflection', 'durable', datetime('now', '-2 hours'))`)
+
+	// Insert second (more recent) reflection observation
+	tdb.Exec(t, `INSERT INTO observations(id, title, content, observation_type, layer, confidence, importance, kind, namespace, source, retention, created_at)
+		VALUES('REF002', 'Second Reflection', 'Second content', 'pattern', 2, 0.9, 0.9, 'semantic', 'testns', 'reflection', 'durable', datetime('now'))`)
+
+	active, err := e.getActiveReflection(ctx, "testns")
+	if err != nil {
+		t.Fatalf("getActiveReflection: %v", err)
+	}
+	if active == nil {
+		t.Fatal("expected active reflection, got nil")
+	}
+	if active.id != "REF002" {
+		t.Errorf("expected most recent reflection REF002, got %s", active.id)
+	}
+	if active.title != "Second Reflection" {
+		t.Errorf("expected title 'Second Reflection', got %s", active.title)
+	}
+	if active.content != "Second content" {
+		t.Errorf("expected content 'Second content', got %s", active.content)
+	}
+}
+
+func TestGetActiveReflectionIgnoresSoftDeleted(t *testing.T) {
+	e, tdb := setupTest(t)
+	ctx := context.Background()
+
+	// Insert a soft-deleted reflection
+	tdb.Exec(t, `INSERT INTO observations(id, title, content, observation_type, layer, confidence, importance, kind, namespace, source, retention, deleted_at)
+		VALUES('REF001', 'Deleted Reflection', 'Deleted content', 'pattern', 2, 0.9, 0.9, 'semantic', 'testns', 'reflection', 'durable', datetime('now'))`)
+
+	// Insert an active reflection
+	tdb.Exec(t, `INSERT INTO observations(id, title, content, observation_type, layer, confidence, importance, kind, namespace, source, retention)
+		VALUES('REF002', 'Active Reflection', 'Active content', 'pattern', 2, 0.9, 0.9, 'semantic', 'testns', 'reflection', 'durable')`)
+
+	active, err := e.getActiveReflection(ctx, "testns")
+	if err != nil {
+		t.Fatalf("getActiveReflection: %v", err)
+	}
+	if active == nil {
+		t.Fatal("expected active reflection, got nil")
+	}
+	if active.id != "REF002" {
+		t.Errorf("expected active reflection REF002, got %s", active.id)
+	}
+}
+
+func TestSynthesizeWithoutPreviousReflection(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "neurox.db")
+	database, err := db.Open(context.Background(), dbPath)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	t.Cleanup(func() { database.Close() })
+
+	idGen := observation.NewULIDGenerator()
+	linkStore := links.NewStore(database, idGen)
+
+	// Track the prompt sent to LLM
+	var capturedPrompt string
+	mock := &mockLLM{
+		response:      "TITLE: Test Synthesis\n\n**Insight 1:** First insight.",
+		capturePrompt: &capturedPrompt,
+	}
+
+	engine := NewEngine(database, mock, linkStore, idGen)
+	ctx := context.Background()
+
+	sources := []sourceObs{
+		{id: "OBS001", title: "Test Obs", content: "Test content", obsType: "discovery"},
+	}
+
+	_, err = engine.synthesize(ctx, sources, "testns", nil)
+	if err != nil {
+		t.Fatalf("synthesize: %v", err)
+	}
+
+	// Verify the prompt does NOT contain previous reflection context
+	if strings.Contains(capturedPrompt, "Previous Active Reflection") {
+		t.Error("prompt should NOT contain 'Previous Active Reflection' when no previous reflection exists")
+	}
+	// Verify the prompt contains the expected base structure
+	if !strings.Contains(capturedPrompt, "memory synthesis engine") {
+		t.Error("prompt should contain base synthesis instructions")
+	}
+}
+
+func TestSynthesizeWithPreviousReflection(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "neurox.db")
+	database, err := db.Open(context.Background(), dbPath)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	t.Cleanup(func() { database.Close() })
+
+	idGen := observation.NewULIDGenerator()
+	linkStore := links.NewStore(database, idGen)
+
+	// Track the prompt sent to LLM
+	var capturedPrompt string
+	mock := &mockLLM{
+		response:      "TITLE: Enriched Synthesis\n\n**Insight 1:** Enhanced insight.",
+		capturePrompt: &capturedPrompt,
+	}
+
+	engine := NewEngine(database, mock, linkStore, idGen)
+	ctx := context.Background()
+
+	sources := []sourceObs{
+		{id: "OBS001", title: "Test Obs", content: "Test content", obsType: "discovery"},
+	}
+
+	prev := &activeReflection{
+		id:      "PREV001",
+		title:   "Previous Reflection Title",
+		content: "Previous reflection content for context",
+	}
+
+	_, err = engine.synthesize(ctx, sources, "testns", prev)
+	if err != nil {
+		t.Fatalf("synthesize: %v", err)
+	}
+
+	// Verify the prompt contains previous reflection context
+	if !strings.Contains(capturedPrompt, "Previous Active Reflection") {
+		t.Error("prompt should contain 'Previous Active Reflection' when previous reflection exists")
+	}
+	if !strings.Contains(capturedPrompt, "Previous Reflection Title") {
+		t.Error("prompt should contain the previous reflection title")
+	}
+	if !strings.Contains(capturedPrompt, "Previous reflection content for context") {
+		t.Error("prompt should contain the previous reflection content")
+	}
+	// Verify reconsolidation instruction is present
+	if !strings.Contains(capturedPrompt, "Build upon and enrich the previous reflection") {
+		t.Error("prompt should contain instruction to build upon previous reflection")
+	}
+}
+
+// TestFirstReflectionNoSupersedes verifies that the first reflection in a namespace
+// does not create a supersedes link.
+func TestFirstReflectionNoSupersedes(t *testing.T) {
+	e, tdb := setupTest(t)
+	ctx := context.Background()
+
+	// Insert enough observations for ForceReflect
+	for i := 0; i < 5; i++ {
+		tdb.Exec(t, `INSERT INTO observations(id, title, content, observation_type, layer, confidence, importance, kind, namespace)
+			VALUES(?, 'obs', 'content', 'decision', 1, 0.9, 0.8, 'semantic', 'firstns')`, fmt.Sprintf("FST%04d", i))
+	}
+
+	result, err := e.ForceReflect(ctx, "firstns")
+	if err != nil {
+		t.Fatalf("force reflect: %v", err)
+	}
+	if result.ReflectionsCreated != 1 {
+		t.Fatalf("expected 1 reflection, got %d", result.ReflectionsCreated)
+	}
+
+	// Verify exactly 1 active reflection observation exists
+	var activeCount int
+	tdb.DB.QueryRowContext(ctx, `SELECT COUNT(*) FROM observations WHERE namespace='firstns' AND source='reflection' AND deleted_at IS NULL`).Scan(&activeCount)
+	if activeCount != 1 {
+		t.Errorf("active reflections = %d, want 1", activeCount)
+	}
+
+	// Verify no supersedes links exist
+	var supersedesCount int
+	tdb.DB.QueryRowContext(ctx, `SELECT COUNT(*) FROM observation_links WHERE relation_type='supersedes'`).Scan(&supersedesCount)
+	if supersedesCount != 0 {
+		t.Errorf("supersedes links = %d, want 0", supersedesCount)
+	}
+
+	// Verify 1 row in reflections table (append-only history)
+	var reflectionCount int
+	tdb.DB.QueryRowContext(ctx, `SELECT COUNT(*) FROM reflections WHERE namespace='firstns'`).Scan(&reflectionCount)
+	if reflectionCount != 1 {
+		t.Errorf("reflections rows = %d, want 1", reflectionCount)
+	}
+}
+
+// TestSecondReflectionCreatesSupersedes verifies that a second reflection
+// creates a supersedes link and soft-deletes the previous observation.
+func TestSecondReflectionCreatesSupersedes(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "neurox.db")
+	database, err := db.Open(context.Background(), dbPath)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	t.Cleanup(func() { database.Close() })
+
+	idGen := observation.NewULIDGenerator()
+	linkStore := links.NewStore(database, idGen)
+	mock := &mockLLM{response: "TITLE: Test Reflection\n\n**Insight 1:** First insight about patterns.\n**Insight 2:** Second insight about architecture.\n**Insight 3:** Third insight about testing."}
+
+	// Create engine with modified cooldown for testing
+	engine := NewEngine(database, mock, linkStore, idGen)
+
+	ctx := context.Background()
+
+	// Insert enough observations for first reflection
+	for i := 0; i < 5; i++ {
+		database.ExecContext(ctx, `INSERT INTO observations(id, title, content, observation_type, layer, confidence, importance, kind, namespace)
+			VALUES(?, 'obs', 'content', 'decision', 1, 0.9, 0.8, 'semantic', 'secondns')`, fmt.Sprintf("SND%04d", i))
+	}
+
+	// First reflection
+	result1, err := engine.ForceReflect(ctx, "secondns")
+	if err != nil {
+		t.Fatalf("first force reflect: %v", err)
+	}
+	if result1.ReflectionsCreated != 1 {
+		t.Fatalf("first: expected 1 reflection, got %d", result1.ReflectionsCreated)
+	}
+
+	// Get the ID of the first reflection observation
+	var firstObsID string
+	database.QueryRowContext(ctx, `SELECT id FROM observations WHERE namespace='secondns' AND source='reflection' AND deleted_at IS NULL ORDER BY created_at DESC LIMIT 1`).Scan(&firstObsID)
+	if firstObsID == "" {
+		t.Fatal("could not get first reflection observation ID")
+	}
+
+	// Add more observations for second reflection
+	for i := 5; i < 10; i++ {
+		database.ExecContext(ctx, `INSERT INTO observations(id, title, content, observation_type, layer, confidence, importance, kind, namespace)
+			VALUES(?, 'obs', 'content', 'decision', 1, 0.9, 0.8, 'semantic', 'secondns')`, fmt.Sprintf("SND%04d", i))
+	}
+
+	// Update the first reflection's created_at to be older than cooldown
+	database.ExecContext(ctx, `UPDATE reflections SET created_at = datetime('now', '-3 hours') WHERE namespace='secondns'`)
+
+	// Now force reflect should work (cooldown check passes due to old reflection)
+	result2, err := engine.ForceReflect(ctx, "secondns")
+	if err != nil {
+		t.Fatalf("second force reflect: %v", err)
+	}
+	if result2.ReflectionsCreated != 1 {
+		t.Fatalf("second: expected 1 reflection, got %d", result2.ReflectionsCreated)
+	}
+
+	// Verify exactly 1 active reflection observation exists
+	var activeCount int
+	database.QueryRowContext(ctx, `SELECT COUNT(*) FROM observations WHERE namespace='secondns' AND source='reflection' AND deleted_at IS NULL`).Scan(&activeCount)
+	if activeCount != 1 {
+		t.Errorf("active reflections = %d, want 1", activeCount)
+	}
+
+	// Verify the first observation is now soft-deleted
+	var firstDeleted bool
+	database.QueryRowContext(ctx, `SELECT deleted_at IS NOT NULL FROM observations WHERE id = ?`, firstObsID).Scan(&firstDeleted)
+	if !firstDeleted {
+		t.Error("first reflection observation should be soft-deleted")
+	}
+
+	// Verify exactly 1 supersedes link exists
+	var supersedesCount int
+	database.QueryRowContext(ctx, `SELECT COUNT(*) FROM observation_links WHERE relation_type='supersedes'`).Scan(&supersedesCount)
+	if supersedesCount != 1 {
+		t.Errorf("supersedes links = %d, want 1", supersedesCount)
+	}
+
+	// Verify the supersedes link points from new to old
+	var sourceID, targetID string
+	database.QueryRowContext(ctx, `SELECT source_id, target_id FROM observation_links WHERE relation_type='supersedes' LIMIT 1`).Scan(&sourceID, &targetID)
+	if targetID != firstObsID {
+		t.Errorf("supersedes target = %s, want %s (the first reflection)", targetID, firstObsID)
+	}
+
+	// Verify 2 rows in reflections table (append-only)
+	var reflectionCount int
+	database.QueryRowContext(ctx, `SELECT COUNT(*) FROM reflections WHERE namespace='secondns'`).Scan(&reflectionCount)
+	if reflectionCount != 2 {
+		t.Errorf("reflections rows = %d, want 2", reflectionCount)
+	}
+}
+
+// TestMultipleReconsolidationsUniqueness verifies that after multiple reconsolidations,
+// there is always exactly 1 active reflection per namespace.
+func TestMultipleReconsolidationsUniqueness(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "neurox.db")
+	database, err := db.Open(context.Background(), dbPath)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	t.Cleanup(func() { database.Close() })
+
+	idGen := observation.NewULIDGenerator()
+	linkStore := links.NewStore(database, idGen)
+	mock := &mockLLM{response: "TITLE: Test Reflection\n\n**Insight 1:** First insight about patterns.\n**Insight 2:** Second insight about architecture.\n**Insight 3:** Third insight about testing."}
+
+	engine := NewEngine(database, mock, linkStore, idGen)
+	ctx := context.Background()
+
+	// Insert initial observations
+	for i := 0; i < 5; i++ {
+		database.ExecContext(ctx, `INSERT INTO observations(id, title, content, observation_type, layer, confidence, importance, kind, namespace)
+			VALUES(?, 'obs', 'content', 'decision', 1, 0.9, 0.8, 'semantic', 'multi-ns')`, fmt.Sprintf("MLT%04d", i))
+	}
+
+	// Create 3 reflections
+	for round := 0; round < 3; round++ {
+		// Add more observations for each round
+		for i := 0; i < 3; i++ {
+			database.ExecContext(ctx, `INSERT INTO observations(id, title, content, observation_type, layer, confidence, importance, kind, namespace)
+				VALUES(?, 'obs', 'content', 'decision', 1, 0.9, 0.8, 'semantic', 'multi-ns')`, fmt.Sprintf("MLT%04d%d%d", round, i, round))
+		}
+
+		// Update all previous reflections to be older than cooldown
+		database.ExecContext(ctx, `UPDATE reflections SET created_at = datetime('now', '-3 hours') WHERE namespace='multi-ns'`)
+
+		result, err := engine.ForceReflect(ctx, "multi-ns")
+		if err != nil {
+			t.Fatalf("round %d force reflect: %v", round, err)
+		}
+		if result.ReflectionsCreated != 1 {
+			t.Fatalf("round %d: expected 1 reflection, got %d", round, result.ReflectionsCreated)
+		}
+	}
+
+	// Verify exactly 1 active reflection observation exists
+	var activeCount int
+	database.QueryRowContext(ctx, `SELECT COUNT(*) FROM observations WHERE namespace='multi-ns' AND source='reflection' AND deleted_at IS NULL`).Scan(&activeCount)
+	if activeCount != 1 {
+		t.Errorf("active reflections = %d, want 1", activeCount)
+	}
+
+	// Verify exactly 2 supersedes links exist (3 reflections = 2 transitions)
+	var supersedesCount int
+	database.QueryRowContext(ctx, `SELECT COUNT(*) FROM observation_links WHERE relation_type='supersedes'`).Scan(&supersedesCount)
+	if supersedesCount != 2 {
+		t.Errorf("supersedes links = %d, want 2", supersedesCount)
+	}
+
+	// Verify reflections table has all 3 rows
+	var reflectionCount int
+	database.QueryRowContext(ctx, `SELECT COUNT(*) FROM reflections WHERE namespace='multi-ns'`).Scan(&reflectionCount)
+	if reflectionCount != 3 {
+		t.Errorf("reflections rows = %d, want 3", reflectionCount)
+	}
+}
+
+// TestSupersedesChain verifies that the supersedes links form a proper chain.
+func TestSupersedesChain(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "neurox.db")
+	database, err := db.Open(context.Background(), dbPath)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	t.Cleanup(func() { database.Close() })
+
+	idGen := observation.NewULIDGenerator()
+	linkStore := links.NewStore(database, idGen)
+	mock := &mockLLM{response: "TITLE: Test Reflection\n\n**Insight 1:** First insight about patterns.\n**Insight 2:** Second insight about architecture.\n**Insight 3:** Third insight about testing."}
+
+	engine := NewEngine(database, mock, linkStore, idGen)
+	ctx := context.Background()
+
+	// Insert initial observations
+	for i := 0; i < 5; i++ {
+		database.ExecContext(ctx, `INSERT INTO observations(id, title, content, observation_type, layer, confidence, importance, kind, namespace)
+			VALUES(?, 'obs', 'content', 'decision', 1, 0.9, 0.8, 'semantic', 'chain-ns')`, fmt.Sprintf("CHN%04d", i))
+	}
+
+	// First reflection
+	result1, err := engine.ForceReflect(ctx, "chain-ns")
+	if err != nil {
+		t.Fatalf("first force reflect: %v", err)
+	}
+	if result1.ReflectionsCreated != 1 {
+		t.Fatalf("first: expected 1 reflection, got %d", result1.ReflectionsCreated)
+	}
+
+	var obsID1 string
+	database.QueryRowContext(ctx, `SELECT id FROM observations WHERE namespace='chain-ns' AND source='reflection' AND deleted_at IS NULL ORDER BY created_at DESC LIMIT 1`).Scan(&obsID1)
+
+	// Second reflection
+	for i := 5; i < 8; i++ {
+		database.ExecContext(ctx, `INSERT INTO observations(id, title, content, observation_type, layer, confidence, importance, kind, namespace)
+			VALUES(?, 'obs', 'content', 'decision', 1, 0.9, 0.8, 'semantic', 'chain-ns')`, fmt.Sprintf("CHN%04d", i))
+	}
+
+	// Update first reflection to be older than cooldown
+	database.ExecContext(ctx, `UPDATE reflections SET created_at = datetime('now', '-3 hours') WHERE namespace='chain-ns'`)
+
+	result2, err := engine.ForceReflect(ctx, "chain-ns")
+	if err != nil {
+		t.Fatalf("second force reflect: %v", err)
+	}
+	if result2.ReflectionsCreated != 1 {
+		t.Fatalf("second: expected 1 reflection, got %d", result2.ReflectionsCreated)
+	}
+
+	var obsID2 string
+	database.QueryRowContext(ctx, `SELECT id FROM observations WHERE namespace='chain-ns' AND source='reflection' AND deleted_at IS NULL ORDER BY created_at DESC LIMIT 1`).Scan(&obsID2)
+
+	// Verify obsID2 supersedes obsID1
+	var count int
+	database.QueryRowContext(ctx, `SELECT COUNT(*) FROM observation_links WHERE source_id=? AND target_id=? AND relation_type='supersedes'`, obsID2, obsID1).Scan(&count)
+	if count != 1 {
+		t.Errorf("expected obsID2 to supersede obsID1")
+	}
+
+	// Verify obsID1 is soft-deleted
+	var deleted bool
+	database.QueryRowContext(ctx, `SELECT deleted_at IS NOT NULL FROM observations WHERE id=?`, obsID1).Scan(&deleted)
+	if !deleted {
+		t.Error("obsID1 should be soft-deleted")
+	}
+
+	// Verify obsID2 is NOT soft-deleted
+	database.QueryRowContext(ctx, `SELECT deleted_at IS NOT NULL FROM observations WHERE id=?`, obsID2).Scan(&deleted)
+	if deleted {
+		t.Error("obsID2 should NOT be soft-deleted")
 	}
 }

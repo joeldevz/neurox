@@ -750,6 +750,8 @@ func initDeps(ctx context.Context, database *sql.DB, cfg config.Config) *deps {
 		DedupThreshold:   cfg.Consolidation.DedupThreshold,
 		ContradictionMin: cfg.Consolidation.ContradictionMin,
 		ContradictionMax: cfg.Consolidation.ContradictionMax,
+		RelatedMin:       cfg.Consolidation.RelatedMin,
+		RelatedMax:       cfg.Consolidation.RelatedMax,
 	}
 	pipeline := consolidate.NewPipeline(database, decayEngine, embedder, embedQueue, gate, linkStore, llmProvider, curatorProvider, idGen, pipelineCfg)
 
