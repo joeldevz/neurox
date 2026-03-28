@@ -26,6 +26,12 @@ type ConsolidationConfig struct {
 	ContradictionMax float64 `yaml:"contradiction_max"`
 	RelatedMin       float64 `yaml:"related_min"`
 	RelatedMax       float64 `yaml:"related_max"`
+
+	// Promotion thresholds (0 = use defaults)
+	BufferToWorkingThreshold   float64 `yaml:"buffer_to_working_threshold"`   // Composite score threshold
+	WorkingToCoreThreshold     float64 `yaml:"working_to_core_threshold"`     // Composite score threshold
+	CoreRecalibrationBase      float64 `yaml:"core_recalibration_base"`       // Base importance for Core
+	CoreRecalibrationTypeBonus float64 `yaml:"core_recalibration_type_bonus"` // Bonus for high-value types
 }
 
 type CuratorConfig struct {
@@ -274,4 +280,8 @@ func applyDerivedDefaults(cfg *Config, configPath string, configDir string) {
 	if cfg.Consolidation.RelatedMax == 0 {
 		cfg.Consolidation.RelatedMax = cfg.Consolidation.DedupThreshold
 	}
+
+	// Promotion threshold defaults (0 means "use hardcoded default")
+	// We don't set defaults here - the consolidate package uses its own constants
+	// when these are 0, allowing users to explicitly override if needed
 }

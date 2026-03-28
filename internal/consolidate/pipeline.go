@@ -22,10 +22,30 @@ const (
 	defaultInterval = 30 * time.Minute
 	bufferCap       = 200
 
-	// Promotion thresholds
+	// Legacy promotion thresholds (kept for backward compatibility, may be deprecated)
 	bufferToWorkingScore    = 0.3 // importance threshold for Buffer→Working
 	workingToCoreAccessMin  = 5   // min access_count for Working→Core
 	workingToCoreAgeMinDays = 7   // min age in days for Working→Core
+
+	// New multi-factor promotion thresholds
+	// Buffer→Working: requires composite score based on durable value + activation
+	bufferToWorkingMinActivation       = 0.25 // minimum activation level
+	bufferToWorkingMinConsolidation    = 0.15 // minimum consolidation strength OR importance
+	bufferToWorkingImportanceWeight    = 0.4  // weight for importance in composite score
+	bufferToWorkingActivationWeight    = 0.35 // weight for activation level
+	bufferToWorkingConsolidationWeight = 0.25 // weight for consolidation strength
+	bufferToWorkingCompositeThreshold  = 0.35 // minimum composite score
+
+	// Working→Core: requires semantic stability beyond just age/access
+	workingToCoreMinActivation     = 0.30 // minimum activation level
+	workingToCoreMinConsolidation  = 0.40 // minimum consolidation strength
+	workingToCoreMinCompositeScore = 0.50 // minimum composite score
+	workingToCoreRecencyDays       = 14   // must have been accessed within this many days
+
+	// Core recalibration: values assigned when promoting to Core
+	coreRecalibrationBaseImportance = 0.60 // base importance for durable observations entering Core
+	coreRecalibrationMinImportance  = 0.45 // minimum importance after recalibration
+	coreRecalibrationTypeBonus      = 0.10 // bonus for high-value types (decision, bugfix)
 )
 
 type Config struct {
@@ -35,6 +55,12 @@ type Config struct {
 	ContradictionMax float64
 	RelatedMin       float64
 	RelatedMax       float64
+
+	// Promotion thresholds (optional overrides)
+	BufferToWorkingThreshold   float64 // Composite score threshold for Buffer→Working
+	WorkingToCoreThreshold     float64 // Composite score threshold for Working→Core
+	CoreRecalibrationBase      float64 // Base importance when recalibrating for Core
+	CoreRecalibrationTypeBonus float64 // Bonus for high-value types in Core
 }
 
 type Pipeline struct {
@@ -423,31 +449,115 @@ func (p *Pipeline) completeRun(ctx context.Context, runID string, result RunResu
 	`, result.Decayed, result.PromotedToWorking+result.PromotedToCore, result.Deduped, result.ContradictionsFound, result.ReflectionsCreated, runID)
 }
 
-// promoteBufferToWorking promotes Buffer observations that meet the importance threshold
-// or are procedural (auto-promote). When the gate is in auto/full mode, uncertain
-// candidates are evaluated by the LLM.
+// calculateCompositeScore computes a weighted score combining importance, activation, and consolidation.
+// This represents the overall "memory strength" for promotion decisions.
+func calculateCompositeScore(importance, activation, consolidation float64) float64 {
+	return importance*bufferToWorkingImportanceWeight +
+		activation*bufferToWorkingActivationWeight +
+		consolidation*bufferToWorkingConsolidationWeight
+}
+
+// isHighValueType returns true for observation types that represent durable knowledge.
+func isHighValueType(obsType string) bool {
+	switch obsType {
+	case "decision", "bugfix", "pattern", "gotcha", "preference":
+		return true
+	default:
+		return false
+	}
+}
+
+// promoteBufferToWorking promotes Buffer observations based on a composite score
+// combining durable value (importance), activation level, and consolidation strength.
+// Procedural observations are auto-promoted. Operational observations can reach Working
+// but will be blocked from Core by retention policy.
 func (p *Pipeline) promoteBufferToWorking(ctx context.Context, epoch int) (int64, error) {
-	if p.gate.Mode() == llm.GateModeOff {
-		// Pure heuristic: same as before
-		result, err := p.db.ExecContext(ctx, `
-			UPDATE observations
-			SET layer = 1,
-			    consolidation_status = 'promoted',
-			    updated_at = datetime('now')
-			WHERE deleted_at IS NULL
-			  AND layer = 0
-			  AND (importance >= ? OR kind = 'procedural')
-			  AND consolidation_status = 'pending'
-		`, bufferToWorkingScore)
-		if err != nil {
-			return 0, err
-		}
-		return result.RowsAffected()
+	// Use configured threshold or default
+	threshold := p.cfg.BufferToWorkingThreshold
+	if threshold == 0 {
+		threshold = bufferToWorkingCompositeThreshold
 	}
 
-	// Gate-assisted promotion: fetch candidates and evaluate
+	if p.gate.Mode() == llm.GateModeOff {
+		// Multi-factor heuristic promotion
+		// Fetch candidates with all relevant signals
+		rows, err := p.db.QueryContext(ctx, `
+			SELECT id, observation_type, kind, importance, activation_level, consolidation_strength
+			FROM observations
+			WHERE deleted_at IS NULL
+			  AND layer = 0
+			  AND consolidation_status = 'pending'
+		`)
+		if err != nil {
+			return 0, fmt.Errorf("query buffer candidates: %w", err)
+		}
+		defer rows.Close()
+
+		type candidate struct {
+			id             string
+			obsType        string
+			kind           string
+			importance     float64
+			activation     float64
+			consolidation  float64
+			compositeScore float64
+		}
+		var candidates []candidate
+		for rows.Next() {
+			var c candidate
+			if err := rows.Scan(&c.id, &c.obsType, &c.kind, &c.importance, &c.activation, &c.consolidation); err != nil {
+				continue
+			}
+			c.compositeScore = calculateCompositeScore(c.importance, c.activation, c.consolidation)
+			candidates = append(candidates, c)
+		}
+
+		var promoted int64
+		for _, c := range candidates {
+			// Auto-promote procedural (procedural knowledge is always useful)
+			if c.kind == "procedural" {
+				if _, err := p.db.ExecContext(ctx, `
+					UPDATE observations SET layer = 1, consolidation_status = 'promoted', updated_at = datetime('now')
+					WHERE id = ?
+				`, c.id); err == nil {
+					promoted++
+				}
+				continue
+			}
+
+			// Auto-promote high-importance durable observations
+			if c.importance >= 0.7 && isHighValueType(c.obsType) {
+				if _, err := p.db.ExecContext(ctx, `
+					UPDATE observations SET layer = 1, consolidation_status = 'promoted', updated_at = datetime('now')
+					WHERE id = ?
+				`, c.id); err == nil {
+					promoted++
+				}
+				continue
+			}
+
+			// Check minimum thresholds for activation/consolidation
+			if c.activation < bufferToWorkingMinActivation && c.consolidation < bufferToWorkingMinConsolidation {
+				continue // Too weak on both activation and consolidation
+			}
+
+			// Promote based on composite score
+			if c.compositeScore >= threshold {
+				if _, err := p.db.ExecContext(ctx, `
+					UPDATE observations SET layer = 1, consolidation_status = 'promoted', updated_at = datetime('now')
+					WHERE id = ?
+				`, c.id); err == nil {
+					promoted++
+				}
+			}
+		}
+
+		return promoted, nil
+	}
+
+	// Gate-assisted promotion: fetch candidates and evaluate with richer signals
 	rows, err := p.db.QueryContext(ctx, `
-		SELECT id, title, content, observation_type, importance, access_count
+		SELECT id, title, content, observation_type, kind, importance, activation_level, consolidation_strength, access_count
 		FROM observations
 		WHERE deleted_at IS NULL
 		  AND layer = 0
@@ -465,22 +575,27 @@ func (p *Pipeline) promoteBufferToWorking(ctx context.Context, epoch int) (int64
 		title           string
 		content         string
 		observationType string
+		kind            string
 		importance      float64
+		activation      float64
+		consolidation   float64
 		accessCount     int
+		compositeScore  float64
 	}
 	var candidates []candidate
 	for rows.Next() {
 		var c candidate
-		if err := rows.Scan(&c.id, &c.title, &c.content, &c.observationType, &c.importance, &c.accessCount); err != nil {
+		if err := rows.Scan(&c.id, &c.title, &c.content, &c.observationType, &c.kind, &c.importance, &c.activation, &c.consolidation, &c.accessCount); err != nil {
 			continue
 		}
+		c.compositeScore = calculateCompositeScore(c.importance, c.activation, c.consolidation)
 		candidates = append(candidates, c)
 	}
 
 	var promoted int64
 	for _, c := range candidates {
-		// Auto-promote procedural or high-importance
-		if c.observationType == "procedural" || c.importance >= 0.7 {
+		// Auto-promote procedural or high-importance durable
+		if c.kind == "procedural" || (c.importance >= 0.7 && isHighValueType(c.observationType)) {
 			if _, err := p.db.ExecContext(ctx, `
 				UPDATE observations SET layer = 1, consolidation_status = 'promoted', updated_at = datetime('now')
 				WHERE id = ?
@@ -490,8 +605,13 @@ func (p *Pipeline) promoteBufferToWorking(ctx context.Context, epoch int) (int64
 			continue
 		}
 
-		// Below threshold → skip
-		if c.importance < bufferToWorkingScore {
+		// Below minimum thresholds → skip
+		if c.activation < bufferToWorkingMinActivation && c.consolidation < bufferToWorkingMinConsolidation {
+			continue
+		}
+
+		// Below composite threshold → skip
+		if c.compositeScore < threshold {
 			continue
 		}
 
@@ -505,7 +625,7 @@ func (p *Pipeline) promoteBufferToWorking(ctx context.Context, epoch int) (int64
 			Layer:           0,
 		})
 		if err != nil {
-			// On error, use heuristic
+			// On error, use heuristic (promote if composite score is good)
 			decision = llm.PromotionPromote
 		}
 
@@ -527,14 +647,58 @@ func (p *Pipeline) promoteBufferToWorking(ctx context.Context, epoch int) (int64
 	return promoted, nil
 }
 
-// promoteWorkingToCore promotes Working observations with sustained access and sufficient age.
-// Only durable observations are eligible — operational observations stay in Working.
+// calculateCoreImportance recalibrates importance when promoting to Core.
+// It ensures durable knowledge doesn't enter Core with degraded scores.
+func calculateCoreImportance(currentImportance float64, obsType string, consolidationStrength float64) float64 {
+	// Base recalibration value
+	base := coreRecalibrationBaseImportance
+
+	// Bonus for high-value observation types
+	typeBonus := 0.0
+	if isHighValueType(obsType) {
+		typeBonus = coreRecalibrationTypeBonus
+	}
+
+	// Consolidation strength can add up to 0.15 bonus
+	consolidationBonus := consolidationStrength * 0.15
+
+	// Calculate new importance
+	newImportance := base + typeBonus + consolidationBonus
+
+	// Don't reduce importance if current is already higher
+	if currentImportance > newImportance {
+		return currentImportance
+	}
+
+	// Ensure minimum importance
+	if newImportance < coreRecalibrationMinImportance {
+		return coreRecalibrationMinImportance
+	}
+
+	// Cap at 1.0
+	if newImportance > 1.0 {
+		return 1.0
+	}
+
+	return newImportance
+}
+
+// promoteWorkingToCore promotes Working observations with semantic stability to Core.
+// Requires: durable retention, sufficient activation, consolidation strength, and recency.
+// Recalibrates importance to prevent degraded scores from entering Core.
+// Operational observations are explicitly blocked from Core regardless of other signals.
 func (p *Pipeline) promoteWorkingToCore(ctx context.Context) (int64, error) {
-	result, err := p.db.ExecContext(ctx, `
-		UPDATE observations
-		SET layer = 2,
-		    consolidation_status = 'promoted',
-		    updated_at = datetime('now')
+	// Use configured threshold or default
+	threshold := p.cfg.WorkingToCoreThreshold
+	if threshold == 0 {
+		threshold = workingToCoreMinCompositeScore
+	}
+
+	// Fetch candidates with all relevant signals
+	rows, err := p.db.QueryContext(ctx, `
+		SELECT id, observation_type, importance, activation_level, consolidation_strength,
+		       access_count, julianday('now') - julianday(COALESCE(last_accessed, created_at)) as days_since_access
+		FROM observations
 		WHERE deleted_at IS NULL
 		  AND layer = 1
 		  AND retention = 'durable'
@@ -542,9 +706,67 @@ func (p *Pipeline) promoteWorkingToCore(ctx context.Context) (int64, error) {
 		  AND julianday('now') - julianday(created_at) >= ?
 	`, workingToCoreAccessMin, workingToCoreAgeMinDays)
 	if err != nil {
-		return 0, err
+		return 0, fmt.Errorf("query working candidates: %w", err)
 	}
-	return result.RowsAffected()
+	defer rows.Close()
+
+	type candidate struct {
+		id              string
+		obsType         string
+		importance      float64
+		activation      float64
+		consolidation   float64
+		accessCount     int
+		daysSinceAccess float64
+		compositeScore  float64
+	}
+	var candidates []candidate
+	for rows.Next() {
+		var c candidate
+		if err := rows.Scan(&c.id, &c.obsType, &c.importance, &c.activation, &c.consolidation, &c.accessCount, &c.daysSinceAccess); err != nil {
+			continue
+		}
+		c.compositeScore = calculateCompositeScore(c.importance, c.activation, c.consolidation)
+		candidates = append(candidates, c)
+	}
+
+	var promoted int64
+	for _, c := range candidates {
+		// Check recency: must have been accessed within recent window
+		if c.daysSinceAccess > workingToCoreRecencyDays {
+			continue // Too stale, even if it meets other criteria
+		}
+
+		// Check minimum thresholds for activation and consolidation
+		if c.activation < workingToCoreMinActivation {
+			continue
+		}
+		if c.consolidation < workingToCoreMinConsolidation {
+			continue
+		}
+
+		// Check composite score
+		if c.compositeScore < threshold {
+			continue
+		}
+
+		// Calculate recalibrated importance for Core
+		newImportance := calculateCoreImportance(c.importance, c.obsType, c.consolidation)
+
+		// Promote to Core with recalibrated importance
+		if _, err := p.db.ExecContext(ctx, `
+			UPDATE observations
+			SET layer = 2,
+			    consolidation_status = 'promoted',
+			    importance = ?,
+			    updated_at = datetime('now')
+			WHERE id = ?
+		`, newImportance, c.id); err == nil {
+			promoted++
+		}
+	}
+
+	return promoted, nil
 }
 
 // retryRejected resets previously rejected observations to 'pending' if enough epochs
