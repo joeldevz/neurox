@@ -1,6 +1,6 @@
 {
   "name": "neurox",
-  "version": "0.1.17",
+  "version": "0.1.18",
   "description": "Brain-inspired memory engine for AI coding agents",
   "keywords": ["mcp", "memory", "ai-agents", "claude", "cursor", "skills"],
   "repository": {
