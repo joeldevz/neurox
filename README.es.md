@@ -10,6 +10,7 @@
     <a href="#inicio-rapido">Inicio Rapido</a> &bull;
     <a href="#que-recuerda">Que Recuerda</a> &bull;
     <a href="#resultados-del-benchmark">98% Recall</a> &bull;
+    <a href="#preguntas-frecuentes">FAQ</a> &bull;
     <a href="README.md">Read in English</a>
   </p>
 </p>
@@ -93,8 +94,10 @@ Lanza un TUI con Bubble Tea donde puedes elegir directorio de instalacion, direc
 ### Compilar desde source
 
 ```bash
-CGO_ENABLED=1 go build -tags fts5 -o neurox .
+go build -o neurox .
 ```
+
+No se requiere compilador C — Neurox usa un driver SQLite puro en Go.
 
 ### Usar como servidor MCP
 
@@ -102,11 +105,22 @@ CGO_ENABLED=1 go build -tags fts5 -o neurox .
 neurox mcp     # stdio — para Claude Code, Cursor, OpenCode, etc.
 ```
 
-### Usar como API HTTP
+### Usar como API HTTP + Dashboard Web
 
 ```bash
-neurox serve   # localhost:7438
+neurox serve   # localhost:7438 — abre API REST y dashboard web
 ```
+
+Abre `http://localhost:7438` en tu navegador para acceder al dashboard interactivo:
+
+| Tab | Que muestra |
+|---|---|
+| **Brain** | Total de observaciones, distribucion por capas, grafico de actividad, conteo de stale |
+| **Explorer** | Navega y busca todas las observaciones con filtros (namespace, capa, kind), panel de detalle con metadata completa |
+| **Graph** | Grafo interactivo force-directed (vis-network) de relaciones entre observaciones — filtra por tipo, namespace, importancia |
+| **Health** | Brain power score (0-100%), desglose por dimensiones con recomendaciones, funnel de capas de memoria, grafico de decay temporal |
+
+El dashboard es una pagina HTML autocontenida — sin frameworks externos, sin paso de build, sin instalacion separada.
 
 ---
 
@@ -284,6 +298,55 @@ Todos los tests corren contra una base de datos en memoria — los datos de prod
 
 ---
 
+## Preguntas Frecuentes
+
+### "¿La licencia BSL es restrictiva?"
+
+La BSL 1.1 te permite:
+
+- ✅ Usar Neurox en tu empresa, equipo o proyectos personales
+- ✅ Modificar el codigo fuente
+- ✅ Distribuir copias
+- ✅ Construir productos comerciales encima
+- ✅ Usarlo en produccion, a cualquier escala
+
+La **unica** restriccion: no puedes ofrecer Neurox como un servicio comercial hospedado que compita directamente con las ofertas pagas del Licenciante.
+
+El **2030-03-28**, la licencia se convierte automaticamente a **Apache 2.0** — completamente permisiva, sin ninguna restriccion.
+
+Este es el mismo modelo de licencia que usan [Sentry](https://blog.sentry.io/relicensing-sentry/), [CockroachDB](https://www.cockroachlabs.com/blog/oss-relicensing-cockroachdb/), [HashiCorp](https://www.hashicorp.com/blog/hashicorp-adopts-business-source-license) y [MariaDB](https://mariadb.com/bsl-faq-adopting/). Si tu caso de uso es cualquier cosa que no sea revender Neurox como servicio de memoria hospedado, la BSL tiene cero impacto practico para ti.
+
+### "¿Es solo para usuarios avanzados o sistemas de agentes autonomos?"
+
+No. La instalacion es igual que cualquier MCP memory server:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/joeldevz/neurox/main/install.sh | bash
+neurox setup claude-code
+```
+
+Dos comandos. Sin archivos de configuracion que editar, sin API keys requeridas, sin servicios externos necesarios. Funciona inmediatamente con Claude Code, OpenCode, Cursor, VS Code, Gemini CLI y Claude Desktop.
+
+La instalacion base con cero dependencias ya entrega [98% de recall](#resultados-del-benchmark). ¿Quieres ir mas alla? Añade un proveedor de embeddings (Ollama o cualquier API compatible con OpenAI) para desbloquear busqueda semantica hibrida, deduplicacion automatica y deteccion de contradicciones. Añade un LLM para habilitar quality gates, extraccion de facts y reflexion. Estas features se activan automaticamente cuando se detecta un proveedor — ver [Degradacion Elegante](#degradacion-elegante) para el desglose completo.
+
+### "¿Como saben que realmente funciona?"
+
+Benchmarks publicados, reproducibles por cualquiera:
+
+**[LongMemEval](https://github.com/xiaowu0162/LongMemEval)** (ICLR 2025) — 500 preguntas en 6 categorias, 48 sesiones de distraccion por query. Resultado: **98.1% Recall@10**, **90.0% NDCG@10**. Sin LLM. Se ejecuta en ~2 minutos.
+
+**Brain Benchmark** — un suite autocontenido de 12 dimensiones que prueba fidelidad cognitiva (knowledge updates, razonamiento temporal, signal vs noise, memoria cross-session, ciclo de vida), rendimiento (throughput de escritura, latencia de recall, acceso concurrente) y simulacion de agentes (uso lazy vs perfecto, workflows realistas).
+
+```bash
+# Reproducelo tu mismo
+neurox benchmark                                            # Ejecucion rapida
+neurox benchmark --scale large --output-html report.html    # Ejecucion completa con reporte HTML
+```
+
+Cada test corre contra una base de datos en memoria. Los resultados son deterministicos y auditables. Si una herramienta de memoria no publica benchmarks, no tienes forma de saber si funciona a escala — estas confiando en marketing, no en datos.
+
+---
+
 ## Grafo de Conocimiento
 
 Las observaciones se enriquecen en facts estructurados (tripletas sujeto-predicado-objeto):
@@ -373,7 +436,7 @@ Cada etapa es determinista y auditable. Los runs de consolidacion se loguean con
 | Comando | Que hace | Flags utiles |
 |---|---|---|
 | `neurox mcp` | Iniciar servidor MCP (stdio) | — |
-| `neurox serve` | Iniciar servidor HTTP en puerto 7438 | `--host` |
+| `neurox serve` | Iniciar servidor HTTP + dashboard web en puerto 7438 | `--host` |
 | `neurox save "titulo"` | Guardar observacion | `--content`, `--type`, `--kind`, `--confidence`, `--topic-key`, `--tags`, `--files`, `--namespace` |
 | `neurox recall "query"` | Buscar con ranking temporal-aware | `--type`, `--kind`, `--namespace`, `--files`, `--include-stale`, `--limit`, `--debug` |
 | `neurox context` | Contexto proactivo por namespace/archivos | `--namespace`, `--files`, `--limit` |
@@ -487,8 +550,8 @@ Todos los clientes usan el mismo patron: instalar el binario, agregar `neurox` a
 | `bugfix` | Que se rompio y por que | "Query N+1 en lista de usuarios, arreglado con preload" |
 | `discovery` | Aprendiste algo del codebase | "El middleware de auth corre antes que CORS" |
 | `pattern` | Convenciones recurrentes | "Todos los stores usan inyeccion por constructor" |
-| `gotcha` | Trampas y edge cases | "Hay que usar -tags fts5 para compilar" |
-| `config` | Setup de entorno y herramientas | "El CI usa Go 1.23 con CGO" |
+| `gotcha` | Trampas y edge cases | "SQLite WAL requiere single-writer" |
+| `config` | Setup de entorno y herramientas | "El CI usa Go 1.26" |
 | `preference` | Correcciones y preferencias del usuario | "Preferir tests table-driven" |
 | `question` | Preguntas abiertas para revision | "Deberiamos separar este paquete?" |
 
@@ -559,7 +622,7 @@ Lista completa de overrides de entorno en [docs/concepts.md](docs/concepts.md).
 | `recall` (hibrido) | <50ms | FTS + semantico + boost cross-signal |
 | `context` | <10ms | Retrieval proactivo multi-senal |
 | `consolidate` | <1s | Ciclo completo para 1,000 observaciones |
-| Tamano binario | ~15MB | Ejecutable unico (enlaza dinamicamente libc para SQLite/CGO) |
+| Tamano binario | ~15MB | Ejecutable unico estaticamente enlazado |
 | Memoria | <150MB | Con 10k observaciones + embeddings |
 
 ---
@@ -570,7 +633,7 @@ Lista completa de overrides de entorno en [docs/concepts.md](docs/concepts.md).
 neurox/
 ├── main.go                    Punto de entrada CLI
 ├── internal/
-│   ├── api/                   Servidor HTTP REST + dashboard
+│   ├── api/                   Servidor HTTP REST + dashboard web (tabs Brain, Explorer, Graph, Health)
 │   ├── benchmark/             Suite de brain benchmark
 │   ├── classify/              Auto-clasificacion de tipo y kind
 │   ├── config/                Carga de config YAML + env
@@ -603,8 +666,8 @@ neurox/
 
 ## Tecnologia
 
-- **Go 1.23** — binario unico, goroutines para consolidacion background
-- **SQLite 3** — modo WAL, busqueda full-text FTS5, via mattn/go-sqlite3 (CGO)
+- **Go 1.26+** — binario unico, goroutines para consolidacion background
+- **SQLite 3** — modo WAL, busqueda full-text FTS5, via ncruces/go-sqlite3 (Go puro, sin CGO)
 - **Embeddings** — Ollama (nomic-embed-text) o cualquier API compatible OpenAI (opcional)
 - **LLM** — Ollama o compatible OpenAI (opcional — para quality gate, reflexion, facts)
 - **MCP** — Model Context Protocol via mark3labs/mcp-go
