@@ -29,6 +29,8 @@ func SupportedAgents() []AgentInfo {
 
 // Setup configures a specific AI agent to use Neurox as MCP server.
 // It writes the minimum config needed — no questions asked.
+// For agents that support instruction files (Claude Code, OpenCode,
+// Antigravity), it also injects the Neurox behavioral protocol.
 func Setup(agent string) error {
 	agent = strings.ToLower(strings.TrimSpace(agent))
 
@@ -39,15 +41,57 @@ func Setup(agent string) error {
 
 	neuroxCmd := findNeuroxBinary()
 
+	// 1. Write MCP server config.
 	switch agent {
 	case "opencode":
-		return setupOpenCode(configPath, neuroxCmd)
+		if err := setupOpenCode(configPath, neuroxCmd); err != nil {
+			return err
+		}
 	case "vscode":
-		return setupVSCode(configPath, neuroxCmd)
+		if err := setupVSCode(configPath, neuroxCmd); err != nil {
+			return err
+		}
 	default:
 		// claude-code, claude-desktop, cursor, antigravity all use mcpServers
-		return setupMCPServers(agent, configPath, neuroxCmd)
+		if err := setupMCPServers(agent, configPath, neuroxCmd); err != nil {
+			return err
+		}
 	}
+
+	// 2. Install behavioral protocol into instruction files.
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return fmt.Errorf("resolve home dir: %w", err)
+	}
+
+	switch agent {
+	case "claude-code":
+		// Also install Claude skill (SKILL.md)
+		if err := installClaudeSkill(homeDir); err != nil {
+			fmt.Printf("  warning: Claude Code skill: %v\n", err)
+		} else {
+			fmt.Printf("  + Installed skill → %s\n", filepath.Join(homeDir, ".claude", "skills", "neurox", "SKILL.md"))
+		}
+		if err := installClaudeProtocol(homeDir); err != nil {
+			fmt.Printf("  warning: Claude Code protocol: %v\n", err)
+		} else {
+			fmt.Printf("  + Injected protocol → %s\n", filepath.Join(homeDir, ".claude", "CLAUDE.md"))
+		}
+	case "opencode":
+		if err := installOpenCodeProtocol(homeDir); err != nil {
+			fmt.Printf("  warning: OpenCode protocol: %v\n", err)
+		} else {
+			fmt.Printf("  + Injected protocol → %s\n", openCodeAgentsPath(homeDir))
+		}
+	case "antigravity":
+		if err := installAntigravityProtocol(homeDir); err != nil {
+			fmt.Printf("  warning: Antigravity protocol: %v\n", err)
+		} else {
+			fmt.Printf("  + Injected protocol → %s\n", filepath.Join(homeDir, ".gemini", "GEMINI.md"))
+		}
+	}
+
+	return nil
 }
 
 // agentConfigPath returns the config file path for a given agent.

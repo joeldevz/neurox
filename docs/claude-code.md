@@ -8,8 +8,10 @@ Claude Code is the primary supported client for Neurox. The `SKILL.md` file in t
 
 **Option A — Install via Go (recommended):**
 
+Requires **Go 1.26+**. No C compiler required.
+
 ```bash
-CGO_ENABLED=1 go install -tags fts5 github.com/joeldevz/neurox@main
+go install github.com/joeldevz/neurox@main
 ```
 
 The binary is placed in `$(go env GOPATH)/bin/neurox`. Make sure `$(go env GOPATH)/bin` is in your `PATH`.
@@ -19,7 +21,7 @@ The binary is placed in `$(go env GOPATH)/bin/neurox`. Make sure `$(go env GOPAT
 ```bash
 git clone https://github.com/joeldevz/neurox.git
 cd neurox
-CGO_ENABLED=1 go build -tags fts5 -o neurox .
+go build -o neurox .
 sudo mv neurox /usr/local/bin/
 ```
 

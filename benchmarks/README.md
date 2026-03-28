@@ -10,28 +10,28 @@ It produces a colour-coded scorecard with letter grades, a per-dimension breakdo
 
 ```bash
 # Small scale (~30 s) — good for development iteration
-go run -tags fts5 . benchmark
+go run . benchmark
 
 # Cognitive dimensions only
-go run -tags fts5 . benchmark --category cognitive
+go run . benchmark --category cognitive
 
 # Performance dimensions only
-go run -tags fts5 . benchmark --category performance
+go run . benchmark --category performance
 
 # Agent simulation dimensions only
-go run -tags fts5 . benchmark --category agent
+go run . benchmark --category agent
 
 # Specific dimensions
-go run -tags fts5 . benchmark --dimensions "Knowledge Evolution,Write Throughput"
+go run . benchmark --dimensions "Knowledge Evolution,Write Throughput"
 
 # Export results to JSON
-go run -tags fts5 . benchmark --output benchmarks/results.json
+go run . benchmark --output benchmarks/results.json
 
 # Medium scale (~5 min) with verbose check details
-go run -tags fts5 . benchmark --scale medium --verbose
+go run . benchmark --scale medium --verbose
 
 # Full large-scale torture test
-go run -tags fts5 . benchmark --scale large --output benchmarks/results_large.json
+go run . benchmark --scale large --output benchmarks/results_large.json
 ```
 
 ---
@@ -194,7 +194,7 @@ Pass `--output path/to/results.json` to export the full report. The file is vali
 
 ```bash
 # Run at each release and archive results
-go run -tags fts5 . benchmark --scale medium --output "benchmarks/$(date +%Y-%m-%d).json"
+go run . benchmark --scale medium --output "benchmarks/$(date +%Y-%m-%d).json"
 
 # Compare two runs
 jq '.OverallScore' benchmarks/2026-01-01.json benchmarks/2026-03-22.json
@@ -208,14 +208,14 @@ In addition to the `neurox benchmark` command, the repository includes standard 
 
 ```bash
 # Run all integration benchmarks
-go test -tags fts5 -bench=. -benchmem ./tests/integration/...
+go test -bench=. -benchmem ./tests/integration/...
 
 # Run specific benchmarks
-go test -tags fts5 -bench=BenchmarkSave_10K ./tests/integration/...
-go test -tags fts5 -bench=BenchmarkRecallFTS_50K ./tests/integration/...
-go test -tags fts5 -bench=BenchmarkConsolidation_5K ./tests/integration/...
-go test -tags fts5 -bench=BenchmarkConcurrentWrites ./tests/integration/...
-go test -tags fts5 -bench=BenchmarkFactGraph ./tests/integration/...
+go test -bench=BenchmarkSave_10K ./tests/integration/...
+go test -bench=BenchmarkRecallFTS_50K ./tests/integration/...
+go test -bench=BenchmarkConsolidation_5K ./tests/integration/...
+go test -bench=BenchmarkConcurrentWrites ./tests/integration/...
+go test -bench=BenchmarkFactGraph ./tests/integration/...
 ```
 
 Available Go benchmarks:
@@ -234,11 +234,11 @@ Available Go benchmarks:
 
 ```bash
 # Full suite smoke test at small scale (runs all 12 dimensions, ~30 s)
-go test -tags fts5 -run TestBenchmarkSuite_Small ./tests/integration/...
+go test -run TestBenchmarkSuite_Small ./tests/integration/...
 
 # Category and dimension filter unit tests
-go test -tags fts5 -run TestBenchmarkSuite_CategoryFilter ./tests/integration/...
-go test -tags fts5 -run TestBenchmarkSuite_DimensionFilter ./tests/integration/...
+go test -run TestBenchmarkSuite_CategoryFilter ./tests/integration/...
+go test -run TestBenchmarkSuite_DimensionFilter ./tests/integration/...
 ```
 
 ---
@@ -248,10 +248,10 @@ go test -tags fts5 -run TestBenchmarkSuite_DimensionFilter ./tests/integration/.
 - **FakeEmbedder**: All benchmark dimensions use a deterministic word-hash embedder (no Ollama/OpenAI required). This enables hybrid recall testing — FTS5 + cosine similarity — without any external service.
 - **Isolated SQLite**: Each `BenchEnv` uses a temporary directory with a fresh WAL-mode SQLite database. Dimensions do not share state.
 - **Mock LLM**: `llm.Disabled{}` + `llm.GateModeOff` ensures deterministic consolidation. LLM quality is tested separately via LongMemEval.
-- **Build requirement**: `CGO_ENABLED=1` and `-tags fts5` are required. Without FTS5, all full-text searches will fail.
+- **Build requirement**: Go 1.26+ is the only prerequisite. No C compiler or CGO required — Neurox uses a pure Go SQLite driver with FTS5 built in.
 
 ```bash
-# Required build invocation
-CGO_ENABLED=1 go build -tags fts5 ./...
-CGO_ENABLED=1 go test -tags fts5 ./...
+# Build and test
+go build ./...
+go test ./...
 ```

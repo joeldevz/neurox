@@ -6,13 +6,14 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-
-	sqlite3 "github.com/mattn/go-sqlite3"
 )
 
 // Backup performs a safe, consistent backup of a SQLite database using
-// the online backup API. This is the only reliable way to copy a
-// WAL-mode database while writers may be active.
+// VACUUM INTO, which creates a clean, compacted copy of the database.
+//
+// VACUUM INTO is atomic (succeeds completely or not at all), works with
+// WAL-mode databases, and requires no driver-specific types — just
+// standard database/sql. Available since SQLite 3.27.0.
 //
 // The destination file is created (or overwritten) at destPath.
 // The parent directory of destPath is created if it does not exist.
@@ -27,67 +28,18 @@ func Backup(ctx context.Context, srcDB *sql.DB, destPath string) error {
 	}
 
 	// Remove existing backup file to start fresh.
+	// VACUUM INTO fails if the destination file already exists.
 	if err := os.Remove(destPath); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("remove existing backup: %w", err)
 	}
 
-	// Open a dedicated source connection for the backup.
-	srcConn, err := srcDB.Conn(ctx)
-	if err != nil {
-		return fmt.Errorf("acquire source connection: %w", err)
+	// VACUUM INTO creates a clean, compacted copy of the database.
+	// The path is passed as a parameter to avoid SQL injection.
+	if _, err := srcDB.ExecContext(ctx, "VACUUM INTO ?", destPath); err != nil {
+		return fmt.Errorf("backup via VACUUM INTO: %w", err)
 	}
-	defer srcConn.Close()
 
-	// Open the destination database directly.
-	destDB, err := sql.Open("sqlite3", destPath)
-	if err != nil {
-		return fmt.Errorf("open destination database: %w", err)
-	}
-	defer destDB.Close()
-
-	destConn, err := destDB.Conn(ctx)
-	if err != nil {
-		return fmt.Errorf("acquire destination connection: %w", err)
-	}
-	defer destConn.Close()
-
-	// Access raw SQLite connections and perform backup.
-	return srcConn.Raw(func(srcRaw interface{}) error {
-		srcSQLiteConn, ok := srcRaw.(*sqlite3.SQLiteConn)
-		if !ok {
-			return fmt.Errorf("source connection is not *sqlite3.SQLiteConn")
-		}
-
-		return destConn.Raw(func(destRaw interface{}) error {
-			destSQLiteConn, ok := destRaw.(*sqlite3.SQLiteConn)
-			if !ok {
-				return fmt.Errorf("destination connection is not *sqlite3.SQLiteConn")
-			}
-
-			// Backup is called on the destination conn, passing the source conn.
-			backup, err := destSQLiteConn.Backup("main", srcSQLiteConn, "main")
-			if err != nil {
-				return fmt.Errorf("init backup: %w", err)
-			}
-
-			// Step(-1) copies all pages in one call.
-			done, err := backup.Step(-1)
-			if err != nil {
-				_ = backup.Finish()
-				return fmt.Errorf("backup step: %w", err)
-			}
-			if !done {
-				_ = backup.Finish()
-				return fmt.Errorf("backup not complete after step(-1)")
-			}
-
-			if err := backup.Finish(); err != nil {
-				return fmt.Errorf("finish backup: %w", err)
-			}
-
-			return nil
-		})
-	})
+	return nil
 }
 
 // BackupResult holds the result of a backup operation.

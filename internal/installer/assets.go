@@ -8,3 +8,10 @@ import _ "embed"
 //
 //go:embed skill.md
 var neuroxSkillContent []byte
+
+// neuroxProtocolContent is the protocol.md file embedded at build time.
+// It is injected into agent instruction files (CLAUDE.md, AGENTS.md, GEMINI.md)
+// using HTML comment markers for idempotent updates.
+//
+//go:embed protocol.md
+var neuroxProtocolContent []byte

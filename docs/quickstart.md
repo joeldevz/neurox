@@ -6,7 +6,7 @@ Neurox is a brain-inspired memory engine for AI coding agents. It gives your AI 
 
 ```bash
 # 1. Install
-CGO_ENABLED=1 go install -tags fts5 github.com/joeldevz/neurox@main
+go install github.com/joeldevz/neurox@main
 
 # 2. Configure your AI client
 # Add neurox to your MCP config — see the client guides below
@@ -14,6 +14,8 @@ CGO_ENABLED=1 go install -tags fts5 github.com/joeldevz/neurox@main
 # 3. Verify
 # Ask your AI: "Run neurox status" — it should return brain stats
 ```
+
+No C compiler required — Neurox uses a pure Go SQLite driver. Prerequisites: **Go 1.26+**.
 
 ## Client Setup Guides
 

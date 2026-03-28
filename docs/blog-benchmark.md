@@ -111,15 +111,17 @@ The benchmark is included in the Neurox binary. No external services required fo
 ```bash
 git clone https://github.com/joeldevz/neurox.git
 cd neurox
-CGO_ENABLED=1 go run -tags fts5 . benchmark --scale small
+go run . benchmark --scale small
 ```
+
+No C compiler required — Neurox uses a pure Go SQLite driver. Prerequisites: **Go 1.26+**.
 
 The `--scale small` flag runs a representative subset (~10 minutes). `--scale medium` takes 30-40 minutes. `--scale large` is the full suite.
 
 To generate a shareable HTML report with radar chart and per-dimension breakdown:
 
 ```bash
-CGO_ENABLED=1 go run -tags fts5 . benchmark --scale small --output-html report.html
+go run . benchmark --scale small --output-html report.html
 ```
 
 The HTML report is self-contained (no external dependencies) and includes comparison lines for mem0/Zep LOCOMO scores with a clear methodology note.

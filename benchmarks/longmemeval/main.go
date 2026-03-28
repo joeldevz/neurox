@@ -5,7 +5,7 @@
 //
 // Usage:
 //
-//	go run -tags fts5 ./benchmarks/longmemeval/ -data benchmarks/longmemeval/data/longmemeval_oracle.json
+//	go run ./benchmarks/longmemeval/ -data benchmarks/longmemeval/data/longmemeval_oracle.json
 package main
 
 import (
@@ -75,13 +75,13 @@ type QuestionResult struct {
 }
 
 type AggregateMetrics struct {
-	Total         int                `json:"total"`
-	RecallAnyAt5  float64            `json:"recall_any@5"`
-	RecallAnyAt10 float64            `json:"recall_any@10"`
-	RecallAllAt5  float64            `json:"recall_all@5"`
-	RecallAllAt10 float64            `json:"recall_all@10"`
-	NDCGAnyAt5    float64            `json:"ndcg_any@5"`
-	NDCGAnyAt10   float64            `json:"ndcg_any@10"`
+	Total         int                    `json:"total"`
+	RecallAnyAt5  float64                `json:"recall_any@5"`
+	RecallAnyAt10 float64                `json:"recall_any@10"`
+	RecallAllAt5  float64                `json:"recall_all@5"`
+	RecallAllAt10 float64                `json:"recall_all@10"`
+	NDCGAnyAt5    float64                `json:"ndcg_any@5"`
+	NDCGAnyAt10   float64                `json:"ndcg_any@10"`
 	ByType        map[string]TypeMetrics `json:"by_type"`
 }
 
@@ -491,10 +491,10 @@ func toSet(items []string) map[string]bool {
 
 func computeAggregateMetrics(results []QuestionResult) AggregateMetrics {
 	byType := make(map[string]*struct {
-		count                                         int
-		recallAny5, recallAny10                       float64
-		recallAll5, recallAll10                        float64
-		ndcgAny5, ndcgAny10                           float64
+		count                   int
+		recallAny5, recallAny10 float64
+		recallAll5, recallAll10 float64
+		ndcgAny5, ndcgAny10     float64
 	})
 
 	var totalRecallAny5, totalRecallAny10 float64
@@ -527,10 +527,10 @@ func computeAggregateMetrics(results []QuestionResult) AggregateMetrics {
 
 		if _, ok := byType[r.QuestionType]; !ok {
 			byType[r.QuestionType] = &struct {
-				count                                         int
-				recallAny5, recallAny10                       float64
-				recallAll5, recallAll10                        float64
-				ndcgAny5, ndcgAny10                           float64
+				count                   int
+				recallAny5, recallAny10 float64
+				recallAll5, recallAll10 float64
+				ndcgAny5, ndcgAny10     float64
 			}{}
 		}
 		bt := byType[r.QuestionType]

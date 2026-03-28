@@ -1105,6 +1105,11 @@ func executeInstall(s state, env Environment) installResult {
 		} else {
 			result.Updated = append(result.Updated, filepath.Join(env.HomeDir, ".claude", "skills", "neurox", "SKILL.md"))
 		}
+		if err := installClaudeProtocol(env.HomeDir); err != nil {
+			result.Warnings = append(result.Warnings, fmt.Sprintf("Claude Code protocol: %v", err))
+		} else {
+			result.Updated = append(result.Updated, filepath.Join(env.HomeDir, ".claude", "CLAUDE.md"))
+		}
 	}
 	if s.ConfigureClaudeDesktop {
 		if err := upsertClaudeDesktopConfig(env.ClaudeDesktopConfig, binaryPath); err != nil {
@@ -1119,6 +1124,11 @@ func executeInstall(s state, env Environment) installResult {
 		} else {
 			result.Updated = append(result.Updated, env.OpenCodeConfig)
 		}
+		if err := installOpenCodeProtocol(env.HomeDir); err != nil {
+			result.Warnings = append(result.Warnings, fmt.Sprintf("OpenCode protocol: %v", err))
+		} else {
+			result.Updated = append(result.Updated, openCodeAgentsPath(env.HomeDir))
+		}
 	}
 	if s.ConfigureCursor {
 		if err := upsertCursorConfig(env.CursorConfig, binaryPath); err != nil {
@@ -1132,6 +1142,11 @@ func executeInstall(s state, env Environment) installResult {
 			result.Warnings = append(result.Warnings, fmt.Sprintf("Antigravity config: %v", err))
 		} else {
 			result.Updated = append(result.Updated, env.AntigravityConfig)
+		}
+		if err := installAntigravityProtocol(env.HomeDir); err != nil {
+			result.Warnings = append(result.Warnings, fmt.Sprintf("Antigravity protocol: %v", err))
+		} else {
+			result.Updated = append(result.Updated, filepath.Join(env.HomeDir, ".gemini", "GEMINI.md"))
 		}
 	}
 	if s.InstallHook && env.GitRoot != "" {
@@ -1310,6 +1325,81 @@ func ensureObject(parent map[string]any, key string) map[string]any {
 	child := map[string]any{}
 	parent[key] = child
 	return child
+}
+
+// Protocol injection markers — used to idempotently inject/update the Neurox
+// behavioral protocol into agent instruction files (CLAUDE.md, AGENTS.md,
+// GEMINI.md). Re-running the installer updates the section; user content
+// outside the markers is never touched.
+const (
+	protocolMarkerBegin = "<!-- neurox:protocol -->"
+	protocolMarkerEnd   = "<!-- /neurox:protocol -->"
+)
+
+// upsertProtocol injects the Neurox protocol into a Markdown instruction file.
+// If the file does not exist, it is created with just the protocol section.
+// If the file exists but has no markers, the protocol is appended.
+// If the file already has markers, the section between them is replaced.
+// User content outside the markers is never modified.
+func upsertProtocol(path string) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return fmt.Errorf("create parent dir: %w", err)
+	}
+
+	section := protocolMarkerBegin + "\n" + strings.TrimRight(string(neuroxProtocolContent), "\n") + "\n" + protocolMarkerEnd
+
+	existing, err := os.ReadFile(path)
+	if err != nil {
+		if !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("read %s: %w", path, err)
+		}
+		// File does not exist — create with just the protocol section.
+		return os.WriteFile(path, []byte(section+"\n"), 0o644)
+	}
+
+	content := string(existing)
+	beginIdx := strings.Index(content, protocolMarkerBegin)
+	endIdx := strings.Index(content, protocolMarkerEnd)
+
+	if beginIdx >= 0 && endIdx >= 0 && endIdx > beginIdx {
+		// Replace existing section (begin marker through end marker inclusive).
+		updated := content[:beginIdx] + section + content[endIdx+len(protocolMarkerEnd):]
+		return os.WriteFile(path, []byte(updated), 0o644)
+	}
+
+	// No markers found — append with a blank line separator.
+	separator := "\n\n"
+	trimmed := strings.TrimRight(content, "\n\r\t ")
+	if trimmed == "" {
+		separator = ""
+	}
+	return os.WriteFile(path, []byte(trimmed+separator+section+"\n"), 0o644)
+}
+
+// installClaudeProtocol injects the Neurox protocol into ~/.claude/CLAUDE.md.
+func installClaudeProtocol(homeDir string) error {
+	path := filepath.Join(homeDir, ".claude", "CLAUDE.md")
+	return upsertProtocol(path)
+}
+
+// openCodeAgentsPath returns the path to the OpenCode global instructions file.
+func openCodeAgentsPath(homeDir string) string {
+	xdgConfig := os.Getenv("XDG_CONFIG_HOME")
+	if xdgConfig == "" {
+		xdgConfig = filepath.Join(homeDir, ".config")
+	}
+	return filepath.Join(xdgConfig, "opencode", "AGENTS.md")
+}
+
+// installOpenCodeProtocol injects the Neurox protocol into ~/.config/opencode/AGENTS.md.
+func installOpenCodeProtocol(homeDir string) error {
+	return upsertProtocol(openCodeAgentsPath(homeDir))
+}
+
+// installAntigravityProtocol injects the Neurox protocol into ~/.gemini/GEMINI.md.
+func installAntigravityProtocol(homeDir string) error {
+	path := filepath.Join(homeDir, ".gemini", "GEMINI.md")
+	return upsertProtocol(path)
 }
 
 func fallback(value string, alt string) string {

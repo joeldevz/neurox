@@ -50,9 +50,6 @@ github.com/mattn/go-localereader
 # github.com/mattn/go-runewidth v0.0.15
 ## explicit; go 1.9
 github.com/mattn/go-runewidth
-# github.com/mattn/go-sqlite3 v1.14.32
-## explicit; go 1.19
-github.com/mattn/go-sqlite3
 # github.com/muesli/ansi v0.0.0-20230316100256-276c6243b2f6
 ## explicit; go 1.17
 github.com/muesli/ansi
@@ -63,6 +60,22 @@ github.com/muesli/cancelreader
 # github.com/muesli/termenv v0.15.2
 ## explicit; go 1.17
 github.com/muesli/termenv
+# github.com/ncruces/go-sqlite3 v0.33.1
+## explicit; go 1.26.0
+github.com/ncruces/go-sqlite3
+github.com/ncruces/go-sqlite3/driver
+github.com/ncruces/go-sqlite3/internal/dotlk
+github.com/ncruces/go-sqlite3/internal/errutil
+github.com/ncruces/go-sqlite3/internal/sqlite3_wrap
+github.com/ncruces/go-sqlite3/internal/testenv
+github.com/ncruces/go-sqlite3/internal/util
+github.com/ncruces/go-sqlite3/vfs
+# github.com/ncruces/go-sqlite3-wasm v1.0.3-0.20260328094950-9a3c1e23fa90
+## explicit; go 1.24.8
+github.com/ncruces/go-sqlite3-wasm
+# github.com/ncruces/julianday v1.0.0
+## explicit; go 1.17
+github.com/ncruces/julianday
 # github.com/oklog/ulid/v2 v2.1.1
 ## explicit; go 1.15
 github.com/oklog/ulid/v2
@@ -78,15 +91,15 @@ github.com/wk8/go-ordered-map/v2
 # github.com/yosida95/uritemplate/v3 v3.0.2
 ## explicit; go 1.14
 github.com/yosida95/uritemplate/v3
-# golang.org/x/sync v0.9.0
-## explicit; go 1.18
+# golang.org/x/sync v0.19.0
+## explicit; go 1.24.0
 golang.org/x/sync/errgroup
-# golang.org/x/sys v0.27.0
-## explicit; go 1.18
+# golang.org/x/sys v0.41.0
+## explicit; go 1.24.0
 golang.org/x/sys/unix
 golang.org/x/sys/windows
-# golang.org/x/text v0.3.8
-## explicit; go 1.17
+# golang.org/x/text v0.34.0
+## explicit; go 1.24.0
 golang.org/x/text/transform
 # gopkg.in/yaml.v3 v3.0.1
 ## explicit

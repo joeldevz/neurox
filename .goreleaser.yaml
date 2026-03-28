@@ -1,7 +1,6 @@
 version: 2
 
-# GoReleaser is not used for builds (CGO cross-compilation is handled
-# directly in .github/workflows/release.yml using native runners).
+# GoReleaser is not used for builds currently.
 # This file is kept for reference and future use.
 
 changelog:

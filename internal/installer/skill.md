@@ -201,8 +201,8 @@ git_hook(
 | `bugfix` | What broke and why | "Fixed N+1 query in user list with preload" |
 | `discovery` | Learned something about the codebase | "Auth middleware runs before CORS" |
 | `pattern` | Recurring conventions you've confirmed | "All stores use constructor injection" |
-| `gotcha` | Traps and pitfalls | "Must use -tags fts5 when building" |
-| `config` | Environment and tool setup | "CI uses Go 1.23 with CGO enabled" |
+| `gotcha` | Traps and pitfalls | "Must run migrations before first query" |
+| `config` | Environment and tool setup | "CI uses Go 1.26" |
 | `preference` | User corrections and stated preferences | "User prefers table-driven tests" |
 | `question` | Open questions for human review | "Should this package be split?" |
 
@@ -254,12 +254,12 @@ save(
 
 ```
 save(
-  title: "Fixed CGO build tag missing in tests",
-  content: "What: Tests failed with 'no such table: observations'. Why: SQLite FTS5 requires CGO, but tests were run without -tags fts5. Where: Makefile and CI config. Learned: Always run tests with CGO_ENABLED=1 go test -tags fts5 ./...",
+  title: "Fixed missing migration causing test failures",
+  content: "What: Tests failed with 'no such table: observations'. Why: Schema migration had not run before tests. Where: internal/db/schema.sql and test helpers. Learned: Always ensure db.Init() runs before any store operation in tests.",
   observation_type: "bugfix",
   kind: "procedural",
-  tags: "cgo,fts5,sqlite,build,testing",
-  files: "Makefile",
+  tags: "sqlite,schema,migration,testing",
+  files: "internal/db/init.go",
   namespace: "myproject"
 )
 ```
