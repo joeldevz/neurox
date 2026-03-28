@@ -229,6 +229,28 @@ project    | uses        | go
 
 Facts have temporal validity — when a fact is superseded, the old one keeps its history (`valid_until` set, `superseded_by` linked). You can query both current state and historical changes.
 
+## Deep Curation
+
+Over time, memory accumulates noise — low-value observations, duplicates that slipped past dedup, importance scores skewed by aggressive decay. Curation fixes this by sending an entire namespace to a large language model for bulk review.
+
+The curator examines every observation and decides:
+- **KEEP** with recalibrated importance (based on actual value, not just decay math)
+- **DELETE** noise, redundant entries, and observations that no longer provide signal
+
+```bash
+# Preview what the curator would do
+neurox curate --namespace myproject --dry-run
+
+# Apply curation
+neurox curate --namespace myproject
+```
+
+Curation requires a configured curator provider — typically a large, capable model like Gemini Flash that can process hundreds of observations in a single context window. Configure it in `config.yaml` under `curator:` or via `NEUROX_CURATOR_*` environment variables.
+
+**Priorities file**: An optional `priorities.yaml` lets you tell the curator what matters most in your domain — for example, "decisions about database choices are high priority" or "temporary debugging notes are low priority". This biases the curation toward keeping domain-relevant knowledge.
+
+Available via `neurox curate` CLI and the `curate` MCP tool (with optional `dry_run` mode).
+
 ## Benchmark Results
 
 Evaluated on [LongMemEval](https://github.com/xiaowu0162/LongMemEval) (ICLR 2025) — a benchmark for long-term conversational memory with 500 questions across 6 categories.
@@ -246,6 +268,40 @@ Evaluated on [LongMemEval](https://github.com/xiaowu0162/LongMemEval) (ICLR 2025
 | **Overall** | **470** | **98.1%** | **90.0%** |
 
 > FTS5 + BM25 + temporal scoring, no LLM required. 500 questions in ~2 minutes.
+
+## Brain Benchmark
+
+Beyond retrieval accuracy (measured by LongMemEval), Neurox includes a self-contained benchmark suite that evaluates the full memory engine across 12 dimensions in 3 categories.
+
+| Category | Weight | Dimensions |
+|---|---|---|
+| **Cognitive** | 45% | Knowledge Update, Signal vs Noise, Cross-Session, Temporal Reasoning, Memory Lifecycle |
+| **Performance** | 20% | Write Throughput, Recall Latency, Concurrent Access, Context Retrieval |
+| **Agent Simulation** | 35% | Lazy vs Perfect Agent, Realistic Workflows, Parameter Impact |
+
+Each dimension runs isolated checks against a fresh in-memory database (your production data is never touched) and produces a score mapped to four tiers:
+
+| Tier | Score range | Meaning |
+|---|---|---|
+| Beyond | 95-100 | Exceeds elite expectations |
+| Elite | 70-95 | Production-grade |
+| Target | 40-70 | Acceptable baseline |
+| Base | 0-40 | Below expectations |
+
+Scores are aggregated into an overall letter grade (S/A/B/C/D/F) with category-weighted averaging.
+
+```bash
+# Quick run (1k observations)
+neurox benchmark
+
+# Full run with report
+neurox benchmark --scale large --output report.json --output-html report.html
+
+# Run specific category
+neurox benchmark --category cognitive --verbose
+```
+
+Scale controls synthetic dataset size: `small` (1k), `medium` (10k), `large` (100k observations).
 
 ## Quick Start
 
@@ -313,6 +369,20 @@ neurox graph --output neurox-graph.html
 
 # Install git hook (auto-marks memories stale when files change)
 neurox install-hook
+
+# Export and import memories
+neurox export --namespace myproject --output ./backup
+neurox import --source ./backup
+
+# Run brain benchmark
+neurox benchmark --scale medium --output report.json
+
+# Deep curation (preview first, then apply)
+neurox curate --namespace myproject --dry-run
+neurox curate --namespace myproject
+
+# Re-embed after changing embedding model
+neurox reembed
 ```
 
 Most CLI commands print JSON, which makes them easy to pipe into other tools or shell scripts.
@@ -332,12 +402,21 @@ Most CLI commands print JSON, which makes them easy to pipe into other tools or 
 | `neurox graph` | Generates an interactive HTML graph view | `--namespace`, `--type`, `--tags`, `--min-importance`, `--limit`, `--linked-only`, `--output`, `--no-browser` |
 | `neurox config` | Prints the resolved runtime config | none |
 | `neurox install-hook` | Installs the git `post-commit` hook in the current repo | none |
+| `neurox curate` | Deep memory curation with external LLM | `--namespace`, `-n`, `--dry-run` |
+| `neurox reembed` | Re-embed all observations (useful after model change) | none |
+| `neurox export` | Export observations as Markdown files | `--format`, `--output`, `--namespace` |
+| `neurox import` | Import .md observation files into the database | `--source` |
+| `neurox benchmark` | Run brain benchmark suite | `--scale`, `--category`, `--dimensions`, `--output`, `--output-html`, `--verbose` |
+| `neurox update` | Update neurox to the latest version | `--yes`, `-y` |
 
 ### CLI Notes
 
 - `save`, `recall`, `context`, `invalidate`, `status`, and `config` return JSON to stdout.
 - `graph` writes `neurox-graph.html` by default and opens the browser unless `--no-browser` is set.
 - `install-hook` does not overwrite an existing hook; remove `.git/hooks/post-commit` first if you want to replace it.
+- `curate` requires a configured curator provider (see Configuration).
+- `export` writes one `.md` file per observation. `import` reads them back.
+- `benchmark` runs an isolated in-memory test suite — it does not touch your production database.
 
 ## Agent Setup
 
@@ -377,6 +456,8 @@ neurox serve  # REST API on port 7438
 | **`git_hook`** | Report changed files from commit, mark linked observations stale |
 | **`reflect`** | Synthesize Working-layer observations into high-level insights |
 | **`consolidate`** | Force immediate full consolidation cycle |
+| **`health_check`** | Compute brain power score (0-100%) with per-dimension breakdown and recommendations |
+| **`curate`** | Deep memory curation: review namespace with large model, delete noise, recalibrate importance |
 
 ### MCP Tool Inputs
 
@@ -394,28 +475,33 @@ neurox serve  # REST API on port 7438
 | `git_hook` | `changed_files`, `commit_sha`, `branch` |
 | `reflect` | `namespace` |
 | `consolidate` | no inputs |
+| `health_check` | `days` |
+| `curate` | `namespace`, `dry_run` |
 
 The MCP surface is the best choice for coding agents; the CLI and HTTP API expose the same core engine for local scripts, dashboards, and debugging.
 
 ## REST API
 
 ```
-GET    /health                              Health check
-GET    /api/v1/status                       Brain statistics
-GET    /api/v1/observations/browse          Browse recent observations
-POST   /api/v1/observations                 Save observation
-GET    /api/v1/observations/search?q=...    Search memories
-GET    /api/v1/observations/context         Get proactive context
-GET    /api/v1/observations/{id}            Get observation
-PUT    /api/v1/observations/{id}            Update observation
-DELETE /api/v1/observations/{id}            Soft-delete
-POST   /api/v1/observations/{id}/invalidate Invalidate + replace
-GET    /api/v1/stats/breakdown              Breakdown by type/layer/namespace/kind
-POST   /api/v1/sessions                     Start session
-PUT    /api/v1/sessions/{id}/end            End session
-POST   /api/v1/hooks/git                    Git hook
-GET    /api/v1/graph                        Interactive graph view (or JSON with ?format=json)
-POST   /api/v1/reflect                      Trigger reflection
+GET    /health                               Health check
+GET    /api/v1/status                        Brain statistics
+GET    /api/v1/health-check                  Brain power score and dimension breakdown
+GET    /api/v1/decay-timeline                Average importance by layer per day
+GET    /api/v1/stats/activity                Tool call activity per day
+GET    /api/v1/observations/browse           Browse recent observations
+POST   /api/v1/observations                  Save observation
+GET    /api/v1/observations/search?q=...     Search memories
+GET    /api/v1/observations/context          Get proactive context
+GET    /api/v1/observations/{id}             Get observation
+PUT    /api/v1/observations/{id}             Update observation
+DELETE /api/v1/observations/{id}             Soft-delete
+POST   /api/v1/observations/{id}/invalidate  Invalidate + replace
+GET    /api/v1/stats/breakdown               Breakdown by type/layer/namespace/kind
+POST   /api/v1/sessions                      Start session
+PUT    /api/v1/sessions/{id}/end             End session
+POST   /api/v1/hooks/git                     Git hook
+GET    /api/v1/graph                         Interactive graph view (or JSON with ?format=json)
+POST   /api/v1/reflect                       Trigger reflection
 ```
 
 ### REST Query Parameters
@@ -426,6 +512,9 @@ POST   /api/v1/reflect                      Trigger reflection
 | `GET /api/v1/observations/context` | `namespace`, `files`, `limit` |
 | `GET /api/v1/observations/browse` | `limit`, `offset`, `type`, `layer`, `namespace`, `kind`, `staleness` |
 | `GET /api/v1/graph` | `namespace`, `type`, `tags`, `min_importance`, `limit`, `linked_only`, `format=json` |
+| `GET /api/v1/stats/activity` | `days` |
+| `GET /api/v1/health-check` | `days` |
+| `GET /api/v1/decay-timeline` | `days`, `layers` |
 
 ### REST Payload Examples
 
@@ -477,6 +566,20 @@ embeddings:
   remote_api_key: ""
   remote_model: ""
   dimensions: 0         # auto-detect from provider
+
+curator:
+  provider: ""          # "remote" or "" (disabled)
+  remote_url: ""        # OpenAI-compatible endpoint for curation
+  remote_api_key: ""
+  remote_model: ""      # e.g. "gemini-2.5-flash"
+  priorities_file: ""   # path to priorities.yaml for domain weighting
+
+consolidation:
+  dedup_threshold: 0.85           # cosine similarity threshold for dedup
+  contradiction_min: 0.65         # minimum similarity for contradiction check
+  contradiction_max: 0.85         # maximum similarity for contradiction check
+  related_min: 0.65               # minimum similarity for relates_to links
+  related_max: 0.85               # maximum similarity for relates_to links
 ```
 
 Agent setup examples match `install.sh`: Claude and Cursor use `command` + `args`, while OpenCode uses a local MCP entry with an array command.
@@ -503,6 +606,11 @@ Common overrides:
 | `NEUROX_LLM_REMOTE_URL` / `NEUROX_LLM_REMOTE_API_KEY` / `NEUROX_LLM_REMOTE_MODEL` | Override remote OpenAI-compatible LLM settings |
 | `NEUROX_EMBED_PROVIDER` | Set embeddings provider |
 | `NEUROX_EMBED_REMOTE_URL` / `NEUROX_EMBED_REMOTE_API_KEY` / `NEUROX_EMBED_REMOTE_MODEL` | Override remote embedding settings |
+| `NEUROX_CURATOR_PROVIDER` | Set curator provider (`remote` or empty) |
+| `NEUROX_CURATOR_REMOTE_URL` | Curator LLM endpoint |
+| `NEUROX_CURATOR_REMOTE_API_KEY` | Curator API key |
+| `NEUROX_CURATOR_REMOTE_MODEL` | Curator model name |
+| `NEUROX_CURATOR_PRIORITIES_FILE` | Path to priorities.yaml |
 
 ### Graceful Degradation
 
@@ -514,6 +622,7 @@ Neurox works without any external services. Features activate based on what's av
 | + Ollama embeddings | Hybrid search, semantic dedup, contradiction detection |
 | + Ollama LLM | Quality gate, fact extraction, reflection, session extraction |
 | + Remote API | Same as above with cloud provider |
+| + Curator LLM (remote) | Deep curation, higher-quality reflections |
 
 ## Observation Types
 
@@ -534,25 +643,32 @@ Neurox works without any external services. Features activate based on what's av
 neurox/
 ├── main.go                    CLI entry point
 ├── internal/
-│   ├── observation/           Core types, CRUD, temporal extraction
-│   ├── recall/                FTS5 + semantic + temporal-aware search
-│   ├── temporal/              Date parser, mention storage, helpers
-│   ├── facts/                 Knowledge triples, LLM extraction
+│   ├── api/                   HTTP REST server + dashboard
+│   ├── benchmark/             Brain benchmark suite (12 dimensions, 3 categories)
+│   ├── classify/              Auto-classification of observation type and kind
+│   ├── config/                YAML + env config loading
 │   ├── consolidate/           Background pipeline (promote, dedup, evict)
 │   ├── contradiction/         Conflict detection + temporal supersession
+│   ├── curate/                Deep memory curation with external LLM
+│   ├── db/                    SQLite schema, migrations, WAL mode
 │   ├── decay/                 Ebbinghaus curves, garbage collection
+│   ├── embed/                 Ollama + OpenAI-compatible embeddings
+│   ├── export/                Markdown export and import
+│   ├── facts/                 Knowledge triples, LLM extraction
+│   ├── filelink/              File-observation linking
+│   ├── graph/                 Interactive HTML graph rendering + graph queries
+│   ├── health/                Brain power scoring (0-100) with recommendations
+│   ├── installer/             Bubble Tea TUI interactive installer
+│   ├── links/                 Observation relationships (supersedes, contradicts)
+│   ├── llm/                   LLM providers, quality gate, 3-strike system
+│   ├── mcp/                   MCP protocol server
+│   ├── observation/           Core types, CRUD, temporal extraction
+│   ├── proactive/             Context retrieval without explicit queries
+│   ├── recall/                FTS5 + semantic + temporal-aware search
 │   ├── reflect/               Insight synthesis (Generative Agents pattern)
 │   ├── session/               Session lifecycle, LLM observation extraction
-│   ├── proactive/             Context retrieval without explicit queries
-│   ├── embed/                 Ollama + OpenAI-compatible embeddings
-│   ├── llm/                   LLM providers, quality gate, 3-strike system
-│   ├── links/                 Observation relationships (supersedes, contradicts)
-│   ├── db/                    SQLite schema, migrations, WAL mode
-│   ├── mcp/                   MCP protocol server
-│   ├── api/                   HTTP REST server + dashboard
-│   ├── graph/                 Interactive HTML graph rendering + graph queries
-│   ├── config/                YAML + env config loading
-│   └── filelink/              File-observation linking
+│   ├── telemetry/             Tool call tracking for usage analytics
+│   └── temporal/              Date parser, mention storage, helpers
 ├── benchmarks/
 │   └── longmemeval/           LongMemEval benchmark harness
 ├── tests/

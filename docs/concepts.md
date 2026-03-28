@@ -74,6 +74,36 @@ A reference guide to the core concepts behind persistent memory in AI coding age
 
 ---
 
+## Deep Curation
+
+**Definition:** A batch review process where a large language model examines an entire namespace of observations to identify noise, recalibrate importance weights, and delete low-value entries — essentially a "spring cleaning" for agent memory.
+
+**In practice:** After weeks of active development, an agent's memory accumulates hundreds of observations. Many are redundant ("fixed the build" appears five times with slight variations), some have importance scores distorted by aggressive decay math (a critical decision shows 0.01 importance because it hasn't been accessed recently), and others are outright noise (temporary debugging notes that were never cleaned up). Manual review at this scale is impractical. Curation automates the judgment call — "is this observation still worth keeping, and if so, how important is it really?"
+
+**In Neurox:** The `curate` command (CLI and MCP tool) sends all observations in a namespace to a configured curator provider — typically a large, capable model like Gemini Flash. The curator classifies each observation as KEEP (with recalibrated importance) or DELETE (soft-delete). An optional `priorities.yaml` file lets users bias the curation toward domain-specific value signals — for example, marking "database decisions" as high-priority and "temporary debugging notes" as low-priority. Dry-run mode previews all changes without applying them. Results are recorded in a `curation_runs` audit table. Configure the curator under the `curator:` section in `config.yaml` or via `NEUROX_CURATOR_*` environment variables.
+
+---
+
+## Brain Benchmark
+
+**Definition:** A self-contained test suite that measures the quality and performance of the memory engine across multiple dimensions — cognitive accuracy, system performance, and agent simulation — producing a composite score and letter grade.
+
+**In practice:** Knowing that "recall works" is insufficient. You need to know: Does knowledge update correctly when facts change? Can the system distinguish signal from noise at scale? Does temporal reasoning actually affect ranking? How fast are writes under concurrent load? Does a lazy agent (bare saves, no tags) perform meaningfully worse than a disciplined one? The brain benchmark answers all of these with reproducible, isolated tests that never touch production data.
+
+**In Neurox:** `neurox benchmark` runs 12 dimensions across 3 weighted categories: Cognitive (45% — knowledge update, signal-noise separation, cross-session retrieval, temporal reasoning, memory lifecycle), Performance (20% — write throughput, recall latency, concurrent access, context retrieval), and Agent Simulation (35% — lazy vs. perfect agent comparison, realistic multi-session workflows, parameter impact analysis). Each dimension produces a raw score mapped to four tiers: Base (0-40), Target (40-70), Elite (70-95), and Beyond (95-100). Scores aggregate into a letter grade (S through F). Scale configs control synthetic dataset size: `small` (1,000 observations), `medium` (10,000), `large` (100,000). All tests run against a fresh in-memory SQLite database. Output is available as terminal table, JSON (`--output`), or HTML report (`--output-html`).
+
+---
+
+## Activation Signals
+
+**Definition:** Two complementary metrics — `activation_level` and `consolidation_strength` — that separate an observation's transient accessibility from its durable semantic value, enabling more accurate memory-like retention behavior than a single `importance` score alone.
+
+**In practice:** A critical architectural decision made six months ago ("we chose SQLite for single-file deployment") has high durable value but hasn't been accessed recently. A build log from yesterday ("CI failed due to missing env var") has high transient accessibility but low long-term value. If both are tracked by a single `importance` score, one of two things goes wrong: either the old decision decays below the new log (losing signal), or the new log inherits importance it doesn't deserve (adding noise). Separating these signals lets decay curves, promotion rules, and recall scoring each target the right dimension.
+
+**In Neurox:** `importance` (0.0-1.0) represents enduring semantic value — it changes slowly through access patterns and curation, never through time-based decay alone. `activation_level` (0.0-1.0, default 0.5) tracks recent accessibility — it decays with time and bumps on recall access, making recently-used memories easier to find without inflating their long-term importance. `consolidation_strength` (0.0-1.0, default 0.0) tracks how well-established a memory is within the system — it grows through promotion, repeated access, and curation validation. Together, these three signals drive the promotion pipeline (Buffer→Working→Core), recall ranking, and decay behavior, producing a more faithful approximation of human memory dynamics where frequently-recalled knowledge stays accessible while rarely-accessed-but-important knowledge survives through consolidation.
+
+---
+
 ## Further Reading
 
 - [docs/quickstart.md](quickstart.md) — Get Neurox running with your AI client in under 5 minutes

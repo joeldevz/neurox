@@ -42,7 +42,7 @@ import (
 )
 
 const (
-	version         = "0.1.15"
+	version         = "0.1.17"
 	defaultHTTPPort = 7438
 )
 

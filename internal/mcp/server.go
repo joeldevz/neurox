@@ -7,7 +7,7 @@ import (
 
 const (
 	ServerName    = "neurox"
-	ServerVersion = "0.1.0"
+	ServerVersion = "0.1.17"
 )
 
 func NewServer(deps *Deps) *server.MCPServer {

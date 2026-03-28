@@ -1,159 +1,175 @@
-# Plan: Dashboard Redesign — Fey-inspired Dark Premium UI
+# Plan: Documentation Sync — Align READMEs, concepts, and memory with current codebase
 
 ## Goal
 
-Redesign completo del dashboard de Neurox (`GET /`) para conseguir una visual premium inspirada en Fey (app financiera): fondo dark, tipografía grande para KPIs, cards con bordes sutiles, charts elegantes, whitespace generoso, y una experiencia cohesiva entre las 4 tabs (Brain, Explorer, Graph, Health). También añadir datos nuevos: activity timeline (saves/recalls por día), recent observations, y mejorar la tab de Graph para que esté integrada visualmente con el nuevo diseño.
+Bring all user-facing documentation (README.md, README.es.md, docs/concepts.md) up to date with features, commands, tools, API routes, packages, and configuration that have been added since the docs were last touched. Also fix the stale version constant in `server.go` and invalidate outdated Neurox memory observations.
 
 ## Business Context
 
-- **Problema**: el dashboard actual es funcional pero tiene aspecto de dev tool — cards pequeñas, texto apretado, poco breathing room. No transmite la calidad premium del producto.
-- **Referencia visual**: Fey (Mobbin) — KPIs en una fila horizontal con label arriba y big number abajo, chart principal con línea fina sobre fondo dark, cards con bordes `rgba(255,255,255,0.08)` y border-radius 12-16px, tabs limpios, mucho whitespace.
-- **Preferencias del usuario**: Christopher prefiere consistentemente dark UI, palette purple-blue + pink, estética premium tipo Vercel/OpenCode/Claude.
-- **El brain SVG animado se mantiene** — es un diferenciador, pero se pule visualmente.
-- **Scope**: redesign visual de los 4 tabs + 2 nuevos endpoints de datos + nuevas secciones (activity chart, recent observations). Todo en el HTML embebido single-file.
+- **Problem**: The README documents 12 MCP tools (actual: 14), 11 CLI commands (actual: 16), and 15 internal packages (actual: 26). Three REST endpoints, the full `curator` and `consolidation` config sections, and several env vars are missing entirely. New major features (Brain Benchmark, Deep Curation) have no explanatory sections.
+- **Users**: Anyone evaluating or onboarding to Neurox — developers, agent authors, and contributors.
+- **Outcome**: A single source of truth in both languages, no undocumented features, and clean memory state.
+- **Non-goals**: No code changes beyond the version fix. No new features.
 
 ## Technical Context
 
-- **Dashboard actual**: `internal/api/dashboard.html` (1112 líneas), embebido via `go:embed` en `dashboard.go`. 4 tabs: Brain, Explorer, Graph, Health.
-- **Graph standalone**: `internal/graph/render.go` tiene su propio template HTML para `neurox graph` CLI. El dashboard usa el graph API con `?format=json` y renderiza con vis-network en el tab.
-- **CDN dependencies**: vis-network 9.1.9, Chart.js 4. Añadiremos Inter font desde Google Fonts.
-- **APIs existentes que usa el dashboard**:
-  - `GET /api/v1/status` — aggregate stats
-  - `GET /api/v1/stats/breakdown` — counts by type/layer/namespace/kind/relation
-  - `GET /api/v1/observations/browse` — paginated list
-  - `GET /api/v1/graph?format=json` — graph nodes/edges
-  - `GET /api/v1/health-check` — health score + dimensions
-  - `GET /api/v1/decay-timeline` — avg importance by layer per day
-- **APIs que faltan** (necesarias para nuevas features):
-  - `GET /api/v1/stats/activity` — saves/recalls per day (datos en `tool_calls` table)
-  - `GET /api/v1/observations/browse?sort=recent` — soporte de sort cronológico
-- **Constraint**: todo el dashboard es un single HTML file embebido — no hay build step, bundler, ni framework JS.
+### Gaps identified (auditoría session 2026-03-28)
+
+| Area | Documented | Actual | Delta |
+|------|-----------|--------|-------|
+| MCP Tools | 12 | 14 | +`health_check`, +`curate` |
+| CLI Commands | 11 | 16 | +`curate`, `reembed`, `export`, `import`, `benchmark` |
+| REST Endpoints | 14 | 17 | +`GET /api/v1/health-check`, `GET /api/v1/decay-timeline`, `GET /api/v1/stats/activity` |
+| Internal Packages | 15 | 26 | +`curate/`, `health/`, `telemetry/`, `export/`, `benchmark/`, `classify/`, `installer/` |
+| Config sections | 3 | 5 | +`curator`, `consolidation` |
+| Env vars | 14 | 19+ | +`NEUROX_CURATOR_*` (5 vars) |
+| Concepts (docs/concepts.md) | 6 | 9+ | +curation, brain benchmark, activation signals |
+
+### Version mismatch
+- `internal/mcp/server.go` line 10: `ServerVersion = "0.1.0"` should be `"0.1.16"` to match `main.go`
+
+### Stale Neurox observations
+- `01KM60RSD27Y1Y4Y54ACTVQAEW` — Project Structure says 20 packages, 11 commands, 12 tools (all wrong now)
+- `01KM9MFARDCBJCMD95H25V2K78` — Bug: embed.Queue.Enqueue never called (fixed: `main.go` L630-635 wires it)
 
 ## Implementation Steps
 
-### Step 1: Añadir endpoints de datos para las nuevas secciones
-- **What**: Crear `GET /api/v1/stats/activity?days=30` que devuelve tool calls agrupados por día y tool_name (saves, recalls, etc.). Añadir parámetro `sort=recent` al endpoint `/api/v1/observations/browse` para ordenar por `created_at DESC`.
-- **Why**: El dashboard necesita datos de actividad temporal y observaciones recientes cronológicas que no existen todavía.
-- **Where**:
-  - `internal/api/handlers.go` — nuevo handler `handleActivity`, modificar `handleBrowse`
-  - `internal/api/server.go` — registrar nueva ruta
+### Step 1: Fix version constant in server.go
+- **What**: Change `ServerVersion = "0.1.0"` → `"0.1.16"` in `internal/mcp/server.go` line 10
+- **Why**: MCP clients see this version. It should match the binary version in `main.go`.
+- **Where**: `internal/mcp/server.go`
 - **Acceptance**:
-  - `GET /api/v1/stats/activity?days=30` devuelve `{ "days": [...], "series": { "save": [...], "recall": [...], ... } }`
-  - `GET /api/v1/observations/browse?sort=recent&limit=10` devuelve las 10 observaciones más recientes
-  - `CGO_ENABLED=1 go test -tags fts5 ./internal/api/...`
-  - `CGO_ENABLED=1 go build -tags fts5 ./...`
+  - `grep 'ServerVersion' internal/mcp/server.go` shows `"0.1.16"`
+  - `CGO_ENABLED=1 go build -tags fts5 ./...` passes
+- **Status**: [x] done (already at 0.1.16)
+
+### Step 2: Update README.md — MCP Tools section
+
+- **What**: Add `health_check` and `curate` to both the MCP Tools table and the MCP Tool Inputs table. Update the count reference from 12 → 14 if mentioned.
+- **Why**: These tools exist in production and are registered in `server.go` but invisible to users reading the README.
+- **Where**: `README.md` — sections "MCP Tools" and "MCP Tool Inputs"
+- **Acceptance**:
+  - MCP Tools table has 14 rows
+  - MCP Tool Inputs table has 14 rows
+  - `health_check` entry: `days` input
+  - `curate` entry: `namespace`, `dry_run` inputs
+  - No other section is modified
 - **Status**: [x] done
 
-### Step 2: Redesign del Brain Tab — hero visual con KPI row y activity chart
-- **What**: Rediseñar el Brain tab con:
-  1. Header refinado con logo más premium, tabs estilo Fey (pill-shaped o underline sutil), y provider tags más elegantes
-  2. Brain SVG mantenido pero con glow más refinado y tipografía más grande dentro de los anillos
-  3. KPI row estilo Fey: 9 métricas en cards horizontales (Total, Core, Working, Buffer, Links, Facts, Health Score, Sessions, Stale) con label arriba en texto dim y valor grande abajo
-  4. Activity chart nuevo debajo de KPIs: Chart.js area chart mostrando saves/recalls por día (últimos 30 días) con la estética de Fey (línea fina blanca, area fill sutil, dark background)
-  5. "Recent observations" card tipo "News summary" de Fey: últimas 5 observaciones con title, type badge, y timestamp
-- **Why**: El Brain tab es la primera impresión. Debe transmitir la calidad del producto y dar un overview completo del brain health.
-- **Where**:
-  - `internal/api/dashboard.html` — CSS variables, header, brain-tab HTML + JS
+### Step 3: Update README.md — CLI Reference section
+- **What**: Add 5 missing commands to the CLI Reference table and update the CLI section code example block:
+  - `curate` — Deep curation with LLM, flags: `--namespace`, `-n`, `--dry-run`
+  - `reembed` — Re-embed all observations, no flags
+  - `export` — Export as Markdown, flags: `--format`, `--output`, `--namespace`
+  - `import` — Import .md files, flags: `--source`
+  - `benchmark` — Brain benchmark suite, flags: `--scale`, `--category`, `--dimensions`, `--output`, `--output-html`, `--verbose`
+  - Also add `update` as a listed command (even though implementation says "not yet implemented", the subcommand exists with `--yes` flag)
+- **Why**: Users can't discover these features if they're not in the reference.
+- **Where**: `README.md` — sections "CLI", "CLI Reference", "CLI Notes"
 - **Acceptance**:
-  - El Brain tab muestra el SVG animado, KPI row, activity chart, y recent observations
-  - Los KPIs se actualizan cada 5 segundos vía polling
-  - El activity chart se carga con datos del nuevo endpoint
-  - Visual cohesiva con palette dark, borders sutiles, tipografía Inter, border-radius 12-16px
-  - Responsive: se ve bien en 1280px+ (no necesita ser mobile)
+  - CLI Reference table has all 17 commands (mcp, serve, save, recall, context, invalidate, status, consolidate, curate, reembed, graph, benchmark, export, import, install, install-hook, config, update)
+  - CLI code block includes example of `export`, `import`, and `benchmark`
+  - CLI Notes updated with notes about curate, export, import, benchmark output
 - **Status**: [x] done
 
-### Step 3: Redesign del Explorer Tab — layout refinado con glass cards
-- **What**: Rediseñar el Explorer con:
-  1. Sidebar con categorías en cards más elegantes, icons por tipo, y contadores con tipografía tabular
-  2. Observation cards más espaciados con hover effects sutiles, badges de tipo más refinados, importance bars más visual
-  3. Detail panel con glass-morphism (backdrop-filter blur), tipografía más limpia, y mejor jerarquía visual
-  4. Toolbar con filtros estilizados (selects con bordes sutiles, search input con icon)
-- **Why**: El Explorer es donde el usuario pasa más tiempo explorando observaciones. Necesita sentirse premium sin perder funcionalidad.
-- **Where**:
-  - `internal/api/dashboard.html` — CSS del explorer + HTML restructure
+### Step 4: Update README.md — REST API section
+- **What**: Add 3 missing endpoints to the REST API listing and query params table:
+  - `GET /api/v1/health-check` — Brain power score and dimension breakdown
+  - `GET /api/v1/decay-timeline` — Average importance by layer per day
+  - `GET /api/v1/stats/activity` — Tool call activity per day
+- **Why**: HTTP clients need a complete API reference.
+- **Where**: `README.md` — sections "REST API" and "REST Query Parameters"
 - **Acceptance**:
-  - Toda la funcionalidad existente sigue intacta (filtros, browse, detail panel, load more)
-  - Visual consistente con el nuevo Brain tab
-  - Hover transitions suaves (150-200ms)
-  - Scrollbar custom sutil
+  - REST route listing has all 17 routes
+  - Query params table includes `health-check`, `decay-timeline`, `stats/activity`
+  - `stats/activity` documents `?days=N` parameter
 - **Status**: [x] done
 
-### Step 4: Redesign del Graph Tab — integración visual completa
-- **What**: Rediseñar el Graph tab para que sea cohesivo con el nuevo diseño:
-  1. Sidebar flotante con glass-morphism, filtros estilizados, y legend refinada
-  2. Stats overlay más elegante (top-right) con glass background
-  3. Detail panel (bottom-right) con glass-morphism y tipografía consistente
-  4. Botón "Load Graph" con estilo de los nuevos buttons
-  5. Namespace/type selects poblados dinámicamente desde breakdown API
-- **Why**: El Graph tab usa el mismo vis-network pero su chrome (sidebar, overlays, legend) debe ser consistente con el redesign.
-- **Where**:
-  - `internal/api/dashboard.html` — CSS y HTML del graph tab
+### Step 5: Update README.md — Architecture, Config, Graceful Degradation, and new feature sections
+- **What**: Multiple updates in the same file:
+  1. **Architecture tree**: Add 7 missing packages (`curate/`, `health/`, `telemetry/`, `export/`, `benchmark/`, `classify/`, `installer/`) with one-line descriptions
+  2. **Configuration**: Add `curator` and `consolidation` YAML blocks with field descriptions. Add 5 `NEUROX_CURATOR_*` env vars to the overrides table.
+  3. **Graceful Degradation table**: Add row for `+ Curator LLM (remote)` → "Deep curation, higher-quality reflections"
+  4. **New section "Deep Curation"** (after Knowledge Graph): Explain the curator concept — uses a large model (e.g. Gemini Flash) to review entire namespaces, delete noise, recalibrate importance weights. Available via `neurox curate` CLI and `curate` MCP tool. Supports dry-run mode and priorities.yaml for domain-specific weighting.
+  5. **New section "Brain Benchmark"** (after Benchmark Results / LongMemEval): Explain the self-contained benchmark suite — 12 dimensions across 3 categories (Cognitive 45%, Performance 20%, Agent Simulation 35%), 3 scale tiers (small/medium/large = 1k/10k/100k observations), letter grading S/A/B/C/D/F, JSON and HTML report output. Available via `neurox benchmark`.
+- **Why**: Major features like curation and benchmarking are completely undocumented. The architecture tree and config are stale.
+- **Where**: `README.md` — multiple sections
 - **Acceptance**:
-  - Graph carga y funciona igual que antes (vis-network, filtros, click para detalle)
-  - Chrome visual (sidebar, overlays) consistente con el diseño Fey
-  - Glass-morphism en todos los overlays flotantes
+  - Architecture tree lists all 26 packages alphabetically within `internal/`
+  - Config YAML example includes all 5 sections (database, llm, embeddings, curator, consolidation)
+  - Env vars table includes all `NEUROX_CURATOR_*` vars
+  - Graceful Degradation table has 5 rows (nothing, +embeddings, +LLM, +remote API, +curator)
+  - "Deep Curation" section exists with concept + CLI/MCP examples
+  - "Brain Benchmark" section exists with dimensions table + example command
 - **Status**: [x] done
 
-### Step 5: Redesign del Health Tab — score card premium y charts refinados
-- **What**: Rediseñar el Health tab:
-  1. Score card grande tipo "hero metric" con el número gigante, grade badge, y summary — estilo similar al "$329.28" de Fey
-  2. Top actions como pills/cards en vez de lista plana
-  3. Dimension breakdown con progress bars más anchas, colores por status, y tooltips para recommendations
-  4. Memory Layer Funnel con bars más anchas y visuales
-  5. Decay timeline chart con la estética refinada de Chart.js (grid lines sutiles, colores consistentes con el palette)
-- **Why**: El Health tab es la vista analítica principal. Debe sentirse como un dashboard financiero premium.
-- **Where**:
-  - `internal/api/dashboard.html` — CSS y HTML del health tab
+### Step 6: Sync README.es.md with all README.md changes
+- **What**: Apply the same structural changes from Steps 2-5 to the Spanish README, translating all new content.
+- **Why**: Both READMEs must be identical in coverage. Spanish-speaking users get the same information.
+- **Where**: `README.es.md`
 - **Acceptance**:
-  - Score card prominente con animación de entrada
-  - Dimension bars y funnel visualmente mejorados
-  - Chart con grid sutil y colores consistentes
-  - Todo funcional con datos del health-check API existente
+  - Every table, section, and entry added to README.md exists in README.es.md
+  - MCP Tools table: 14 rows
+  - CLI Reference table: all commands
+  - REST API: all 17 routes
+  - Architecture tree: 26 packages
+  - Config: includes curator and consolidation
+  - New sections "Curacion Profunda" and "Brain Benchmark" present
+  - Spanish prose is natural, not machine-translated
 - **Status**: [x] done
 
-### Step 6: Polish final — transiciones, loading states, y cohesión
+### Step 7: Update docs/concepts.md — add 3 new concepts
+- **What**: Add three new concept entries following the existing format (Definition / In practice / In Neurox):
+  1. **Deep Curation** — what it is, why bulk review by a large model matters, how it works in Neurox (curator provider, priorities.yaml, dry-run, namespace scope, MCP tool + CLI)
+  2. **Brain Benchmark** — what it measures, the 12 dimensions in 3 categories, scoring tiers (Base/Target/Elite/Beyond → 0-100 → letter grade S-F), scale configs, how to run it
+  3. **Activation Signals** — what `activation_level` and `consolidation_strength` are, why importance alone is insufficient for memory-like retention, how they interact with decay/promotion/recall
+- **Why**: These are core concepts that affect how users understand and configure the system.
+- **Where**: `docs/concepts.md`
+- **Acceptance**:
+  - Three new sections with Definition / In practice / In Neurox structure
+  - Each section references the relevant CLI commands, MCP tools, or config fields
+  - "Further Reading" section updated if needed
+- **Status**: [x] done
+
+### Step 8: Invalidate stale Neurox observations and save updated project structure
 - **What**:
-  1. Loading states para tabs que cargan datos (skeleton screens o spinners sutiles)
-  2. Transiciones de entrada para cards (fade-in staggered)
-  3. Verificar que los 4 tabs tienen una experiencia cohesiva
-  4. Asegurar que el header, tabs, y footer (si existe) son consistentes
-  5. Verificar que el graph standalone template (`internal/graph/render.go`) mantiene su visual (es independiente del dashboard pero debería ser consistente en palette)
-- **Why**: El polish marca la diferencia entre "funcional" y "premium".
-- **Where**:
-  - `internal/api/dashboard.html` — CSS animations, JS loading states
-  - `internal/graph/render.go` — actualizar palette si hay divergencia
+  1. `invalidate` observation `01KM60RSD27Y1Y4Y54ACTVQAEW` (Project Structure) with reason "outdated counts" and create a replacement with current accurate counts (26 packages, 16 commands, 14 MCP tools, etc.)
+  2. `invalidate` observation `01KM9MFARDCBJCMD95H25V2K78` (embed.Queue bug) with reason "bug was fixed — Enqueue is now wired in main.go saveQueue.OnPostSave"
+  3. `save` a new observation documenting this documentation sync (what was updated, where)
+- **Why**: Stale memories cause agents to give incorrect information about the project.
+- **Where**: Neurox memory (namespace: neurox)
 - **Acceptance**:
-  - No hay flash of unstyled content ni jumps al cargar tabs
-  - Transiciones suaves entre tabs
-  - No hay errores en la consola del browser
-  - `CGO_ENABLED=1 go build -tags fts5 ./...`
-  - `CGO_ENABLED=1 go vet -tags fts5 ./...`
-  - `CGO_ENABLED=1 go test -tags fts5 ./...`
-- **Status**: [x] done
+  - Old project structure observation is stale with replacement
+  - Embed bug observation is invalidated
+  - New observation captures the doc sync work
+- **Status**: [!] partial — invalidations blocked by FTS5 error in running Neurox MCP binary. New observation saved OK (ID: 01KMT8QBA2GEBX192805JJBCH2). Rebuild binary with `CGO_ENABLED=1 go build -tags fts5 -o neurox .` and retry invalidations.
 
 ## Verification
 
 ```bash
+# Build verification (ensures server.go change compiles)
 CGO_ENABLED=1 go build -tags fts5 ./...
 CGO_ENABLED=1 go vet -tags fts5 ./...
-CGO_ENABLED=1 go test -tags fts5 ./...
-CGO_ENABLED=1 go build -tags fts5 -o neurox .
+
+# Structural checks
+grep -c '|' README.md    # sanity: table row counts increased
+grep 'health_check' README.md README.es.md  # both mention health_check
+grep 'curate' README.md README.es.md        # both mention curate
+grep 'benchmark' README.md README.es.md     # both mention benchmark
+grep 'reembed' README.md README.es.md       # both mention reembed
+grep 'export' README.md README.es.md        # both mention export
+grep 'curator' README.md README.es.md       # both mention curator config
+grep 'Deep Curation' docs/concepts.md       # concept exists
+grep 'Brain Benchmark' docs/concepts.md     # concept exists
+grep 'Activation' docs/concepts.md          # concept exists
 ```
 
-Verificación manual:
-1. Abrir `http://localhost:7438` y verificar cada tab
-2. Brain tab: SVG animado visible, KPIs con datos reales, activity chart con datos, recent observations
-3. Explorer tab: filtros funcionales, browse/paginate, detail panel
-4. Graph tab: Load Graph funciona, filtros, click para detalle
-5. Health tab: score card con datos, dimensions, funnel, decay chart
-6. Verificar que no hay errores en la consola del browser
-7. Verificar en viewport 1280px+
+Manual: diff README.md and README.es.md section headers to confirm parity.
 
 ## Risks / Notes
 
-- **Single HTML file**: todo el dashboard es un archivo embebido. Con ~1100 líneas actuales, podría crecer a ~1800-2200. Es manejable pero hay que mantener el CSS organizado con secciones comentadas.
-- **No build step**: sin bundler ni framework. Todo es vanilla HTML/CSS/JS con CDN para Chart.js, vis-network, e Inter font. Esto es intencional y se mantiene.
-- **Graph standalone**: `internal/graph/render.go` tiene su propio template HTML. No se modifica estructuralmente, solo se alinea la palette si diverge.
-- **Datos de actividad**: depende de que la tabla `tool_calls` tenga datos. Si no hay historial, el activity chart mostrará un mensaje "Not enough data" como ya hace el decay chart.
-- **No mobile**: el dashboard está pensado para desktop (1280px+). No se invertirá en responsive mobile.
-- **Inter font**: se carga desde Google Fonts CDN. Si no hay conectividad, fallback a system fonts (ya definido en font-family).
+- **README.es.md must stay natural Spanish** — not a mechanical translation. The coder should write it as if a Spanish-speaking developer authored it.
+- **No code changes except `server.go` version** — this is purely a docs task. The coder must not refactor any Go code.
+- **`update` command**: exists in code but prints "not yet implemented". Document it honestly with a note that it's coming.
+- **Consolidation config**: the `buffer_to_working_threshold`, `working_to_core_threshold`, `core_recalibration_base`, `core_recalibration_type_bonus` fields exist in the struct but are advanced tuning — document them briefly or note they have sensible defaults.
+- **Order of sections in README**: new sections (Deep Curation, Brain Benchmark) should go in logical order — Deep Curation after Knowledge Graph, Brain Benchmark after LongMemEval results.
