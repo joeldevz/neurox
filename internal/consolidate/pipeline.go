@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"log"
+	"math"
 	"sync"
 	"time"
 
@@ -478,6 +479,8 @@ func (p *Pipeline) promoteBufferToWorking(ctx context.Context, epoch int) (int64
 		threshold = bufferToWorkingCompositeThreshold
 	}
 
+	const promoteTemplate = "UPDATE observations SET layer = 1, consolidation_status = 'promoted', updated_at = datetime('now') WHERE id IN (%s)"
+
 	if p.gate.Mode() == llm.GateModeOff {
 		// Multi-factor heuristic promotion
 		// Fetch candidates with all relevant signals
@@ -512,27 +515,18 @@ func (p *Pipeline) promoteBufferToWorking(ctx context.Context, epoch int) (int64
 			candidates = append(candidates, c)
 		}
 
-		var promoted int64
+		// Collect IDs to promote in a single batch
+		var toPromote []string
 		for _, c := range candidates {
 			// Auto-promote procedural (procedural knowledge is always useful)
 			if c.kind == "procedural" {
-				if _, err := p.db.ExecContext(ctx, `
-					UPDATE observations SET layer = 1, consolidation_status = 'promoted', updated_at = datetime('now')
-					WHERE id = ?
-				`, c.id); err == nil {
-					promoted++
-				}
+				toPromote = append(toPromote, c.id)
 				continue
 			}
 
 			// Auto-promote high-importance durable observations
 			if c.importance >= 0.7 && isHighValueType(c.obsType) {
-				if _, err := p.db.ExecContext(ctx, `
-					UPDATE observations SET layer = 1, consolidation_status = 'promoted', updated_at = datetime('now')
-					WHERE id = ?
-				`, c.id); err == nil {
-					promoted++
-				}
+				toPromote = append(toPromote, c.id)
 				continue
 			}
 
@@ -543,16 +537,11 @@ func (p *Pipeline) promoteBufferToWorking(ctx context.Context, epoch int) (int64
 
 			// Promote based on composite score
 			if c.compositeScore >= threshold {
-				if _, err := p.db.ExecContext(ctx, `
-					UPDATE observations SET layer = 1, consolidation_status = 'promoted', updated_at = datetime('now')
-					WHERE id = ?
-				`, c.id); err == nil {
-					promoted++
-				}
+				toPromote = append(toPromote, c.id)
 			}
 		}
 
-		return promoted, nil
+		return batchExecByIDs(ctx, p.db, promoteTemplate, toPromote, defaultChunkSize)
 	}
 
 	// Gate-assisted promotion: fetch candidates and evaluate with richer signals
@@ -592,16 +581,12 @@ func (p *Pipeline) promoteBufferToWorking(ctx context.Context, epoch int) (int64
 		candidates = append(candidates, c)
 	}
 
-	var promoted int64
+	// Collect IDs to promote in a single batch; handle rejections individually
+	var toPromote []string
 	for _, c := range candidates {
 		// Auto-promote procedural or high-importance durable
 		if c.kind == "procedural" || (c.importance >= 0.7 && isHighValueType(c.observationType)) {
-			if _, err := p.db.ExecContext(ctx, `
-				UPDATE observations SET layer = 1, consolidation_status = 'promoted', updated_at = datetime('now')
-				WHERE id = ?
-			`, c.id); err == nil {
-				promoted++
-			}
+			toPromote = append(toPromote, c.id)
 			continue
 		}
 
@@ -631,12 +616,7 @@ func (p *Pipeline) promoteBufferToWorking(ctx context.Context, epoch int) (int64
 
 		switch decision {
 		case llm.PromotionPromote:
-			if _, err := p.db.ExecContext(ctx, `
-				UPDATE observations SET layer = 1, consolidation_status = 'promoted', updated_at = datetime('now')
-				WHERE id = ?
-			`, c.id); err == nil {
-				promoted++
-			}
+			toPromote = append(toPromote, c.id)
 		case llm.PromotionReject:
 			p.handleRejection(ctx, c.id, epoch)
 		case llm.PromotionDefer:
@@ -644,7 +624,7 @@ func (p *Pipeline) promoteBufferToWorking(ctx context.Context, epoch int) (int64
 		}
 	}
 
-	return promoted, nil
+	return batchExecByIDs(ctx, p.db, promoteTemplate, toPromote, defaultChunkSize)
 }
 
 // calculateCoreImportance recalibrates importance when promoting to Core.
@@ -730,7 +710,8 @@ func (p *Pipeline) promoteWorkingToCore(ctx context.Context) (int64, error) {
 		candidates = append(candidates, c)
 	}
 
-	var promoted int64
+	// Group qualifying candidates by rounded importance for batch UPDATEs
+	groups := make(map[float64][]string) // key = importance rounded to 2 decimals
 	for _, c := range candidates {
 		// Check recency: must have been accessed within recent window
 		if c.daysSinceAccess > workingToCoreRecencyDays {
@@ -750,20 +731,23 @@ func (p *Pipeline) promoteWorkingToCore(ctx context.Context) (int64, error) {
 			continue
 		}
 
-		// Calculate recalibrated importance for Core
+		// Calculate recalibrated importance for Core and group by rounded value
 		newImportance := calculateCoreImportance(c.importance, c.obsType, c.consolidation)
+		key := math.Round(newImportance*100) / 100
+		groups[key] = append(groups[key], c.id)
+	}
 
-		// Promote to Core with recalibrated importance
-		if _, err := p.db.ExecContext(ctx, `
-			UPDATE observations
-			SET layer = 2,
-			    consolidation_status = 'promoted',
-			    importance = ?,
-			    updated_at = datetime('now')
-			WHERE id = ?
-		`, newImportance, c.id); err == nil {
-			promoted++
+	var promoted int64
+	for imp, ids := range groups {
+		template := fmt.Sprintf(
+			"UPDATE observations SET layer = 2, consolidation_status = 'promoted', importance = %g, updated_at = datetime('now') WHERE id IN (%%s)",
+			imp,
+		)
+		n, err := batchExecByIDs(ctx, p.db, template, ids, defaultChunkSize)
+		if err != nil {
+			log.Printf("promote to core batch (importance=%g): %v", imp, err)
 		}
+		promoted += n
 	}
 
 	return promoted, nil
@@ -894,8 +878,9 @@ func (p *Pipeline) dedup(ctx context.Context) (int64, error) {
 	temporalMap, _ := temporal.LoadByObservations(ctx, p.db, ids)
 
 	// Find duplicates (O(n^2) but Working layer should be small)
+	// Collect IDs to soft-delete in batch instead of individual UPDATEs
 	deleted := make(map[string]bool)
-	var deduped int64
+	var toDelete []string
 
 	for i := 0; i < len(items); i++ {
 		if deleted[items[i].id] {
@@ -911,16 +896,16 @@ func (p *Pipeline) dedup(ctx context.Context) (int64, error) {
 				if hasDistinctTemporalWindows(temporalMap[items[i].id], temporalMap[items[j].id]) {
 					continue
 				}
-				// Keep items[i] (higher importance/newer), soft-delete items[j]
-				p.db.ExecContext(ctx, `
-					UPDATE observations SET deleted_at = datetime('now'), updated_at = datetime('now')
-					WHERE id = ? AND deleted_at IS NULL
-				`, items[j].id)
+				// Keep items[i] (higher importance/newer), mark items[j] for deletion
+				toDelete = append(toDelete, items[j].id)
 				deleted[items[j].id] = true
-				deduped++
 			}
 		}
 	}
+
+	// Batch soft-delete all duplicates
+	const softDeleteTemplate = "UPDATE observations SET deleted_at = datetime('now'), updated_at = datetime('now') WHERE id IN (%s) AND deleted_at IS NULL"
+	deduped, _ := batchExecByIDs(ctx, p.db, softDeleteTemplate, toDelete, defaultChunkSize)
 
 	// Second pass: deduplicate reflections (layer = 2, source = 'reflection')
 	dedupedReflections, err := p.dedupReflections(ctx)
@@ -1008,8 +993,9 @@ func (p *Pipeline) dedupReflectionsForNamespace(ctx context.Context, namespace s
 	}
 
 	// Find duplicates (O(n^2) but reflection count per namespace should be small)
+	// Collect IDs to soft-delete in batch instead of individual UPDATEs
 	deleted := make(map[string]bool)
-	var deduped int64
+	var toDelete []string
 
 	for i := 0; i < len(items); i++ {
 		if deleted[items[i].id] {
@@ -1022,16 +1008,16 @@ func (p *Pipeline) dedupReflectionsForNamespace(ctx context.Context, namespace s
 			sim := embed.CosineSimilarity(items[i].embedding, items[j].embedding)
 			if sim >= p.cfg.DedupThreshold {
 				// Keep items[i] (older, since we ordered by created_at ASC),
-				// soft-delete items[j] (newer)
-				p.db.ExecContext(ctx, `
-					UPDATE observations SET deleted_at = datetime('now'), updated_at = datetime('now')
-					WHERE id = ? AND deleted_at IS NULL
-				`, items[j].id)
+				// mark items[j] (newer) for deletion
+				toDelete = append(toDelete, items[j].id)
 				deleted[items[j].id] = true
-				deduped++
 			}
 		}
 	}
+
+	// Batch soft-delete all duplicate reflections
+	const softDeleteTemplate = "UPDATE observations SET deleted_at = datetime('now'), updated_at = datetime('now') WHERE id IN (%s) AND deleted_at IS NULL"
+	deduped, _ := batchExecByIDs(ctx, p.db, softDeleteTemplate, toDelete, defaultChunkSize)
 
 	return deduped, nil
 }

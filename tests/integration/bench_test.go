@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"sync"
 	"testing"
+	"time"
 
 	bench "github.com/joeldevz/neurox/internal/benchmark"
 	"github.com/joeldevz/neurox/internal/consolidate"
@@ -295,6 +296,10 @@ func BenchmarkFactGraph(b *testing.B) {
 // result has a non-zero max score, a valid grade, and the JSON export is
 // parseable.
 func TestBenchmarkSuite_Small(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping benchmark suite in short mode")
+	}
+
 	cfg := bench.NewScaleConfig("small")
 	suite := bench.NewSuite(cfg)
 
@@ -311,7 +316,10 @@ func TestBenchmarkSuite_Small(t *testing.T) {
 		bench.PerfContext{},
 	)
 
-	ctx := context.Background()
+	// Safety net timeout: fail with a clear message instead of a panic from Go's test timeout.
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
+	defer cancel()
+
 	report, err := suite.Run(ctx)
 	if err != nil {
 		t.Fatalf("suite.Run: %v", err)

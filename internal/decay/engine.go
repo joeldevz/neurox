@@ -4,8 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"log"
 	"math"
+	"strings"
 	"time"
 )
 
@@ -147,17 +147,30 @@ func (e *Engine) GarbageCollect(ctx context.Context) (int64, error) {
 		return 0, nil
 	}
 
-	// Soft-delete in batches
+	// Soft-delete in batches using chunked WHERE id IN (...)
+	const chunkSize = 500
 	var deleted int64
-	for _, id := range toDelete {
-		result, err := e.db.ExecContext(ctx, `
-			UPDATE observations
-			SET deleted_at = datetime('now'), updated_at = datetime('now')
-			WHERE id = ? AND deleted_at IS NULL
-		`, id)
+	for start := 0; start < len(toDelete); start += chunkSize {
+		end := start + chunkSize
+		if end > len(toDelete) {
+			end = len(toDelete)
+		}
+		chunk := toDelete[start:end]
+
+		placeholders := strings.Repeat("?,", len(chunk))
+		placeholders = placeholders[:len(placeholders)-1]
+
+		query := fmt.Sprintf(
+			"UPDATE observations SET deleted_at = datetime('now'), updated_at = datetime('now') WHERE id IN (%s) AND deleted_at IS NULL",
+			placeholders,
+		)
+		args := make([]any, len(chunk))
+		for i, id := range chunk {
+			args[i] = id
+		}
+		result, err := e.db.ExecContext(ctx, query, args...)
 		if err != nil {
-			log.Printf("gc delete %s: %v", id, err)
-			continue
+			return deleted, fmt.Errorf("gc batch delete [%d:%d]: %w", start, end, err)
 		}
 		n, _ := result.RowsAffected()
 		deleted += n
