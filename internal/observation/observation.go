@@ -8,12 +8,15 @@ import (
 )
 
 const (
-	DefaultNamespace       = "default"
-	DefaultObservationType = ObservationTypeDiscovery
-	DefaultKind            = KindSemantic
-	DefaultConfidence      = 0.7
-	LayerBuffer            = 0
-	DefaultRetention       = RetentionDurable
+	DefaultNamespace             = "default"
+	DefaultObservationType       = ObservationTypeDiscovery
+	DefaultKind                  = KindSemantic
+	DefaultConfidence            = 0.7
+	DefaultImportance            = 0.5
+	DefaultActivationLevel       = 0.5
+	DefaultConsolidationStrength = 0.0
+	LayerBuffer                  = 0
+	DefaultRetention             = RetentionDurable
 )
 
 // Retention controls whether an observation is eligible for Core promotion.
@@ -51,23 +54,25 @@ const (
 )
 
 type Observation struct {
-	ID              string
-	Title           string
-	Content         string
-	ObservationType ObservationType
-	Layer           int
-	Confidence      float64
-	Importance      float64
-	Kind            Kind
-	Tags            []string
-	Namespace       string
-	Source          string
-	TopicKey        string
-	Retention       Retention
-	Files           []string
-	CreatedAt       time.Time
-	UpdatedAt       time.Time
-	DeletedAt       *time.Time
+	ID                    string
+	Title                 string
+	Content               string
+	ObservationType       ObservationType
+	Layer                 int
+	Confidence            float64
+	Importance            float64
+	ActivationLevel       float64
+	ConsolidationStrength float64
+	Kind                  Kind
+	Tags                  []string
+	Namespace             string
+	Source                string
+	TopicKey              string
+	Retention             Retention
+	Files                 []string
+	CreatedAt             time.Time
+	UpdatedAt             time.Time
+	DeletedAt             *time.Time
 }
 
 func (o *Observation) ApplyDefaults() {
@@ -82,6 +87,15 @@ func (o *Observation) ApplyDefaults() {
 	}
 	if o.Confidence == 0 {
 		o.Confidence = DefaultConfidence
+	}
+	if o.Importance == 0 {
+		o.Importance = DefaultImportance
+	}
+	if o.ActivationLevel == 0 {
+		o.ActivationLevel = DefaultActivationLevel
+	}
+	if o.ConsolidationStrength == 0 {
+		o.ConsolidationStrength = DefaultConsolidationStrength
 	}
 	o.Layer = LayerBuffer
 	if strings.TrimSpace(string(o.Retention)) == "" {

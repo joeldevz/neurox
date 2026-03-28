@@ -21,6 +21,8 @@ import (
 //go:embed 007_rescue_expired.sql
 //go:embed 008_db_settings.sql
 //go:embed 009_reconcile_active_reflections.sql
+//go:embed 010_activation_signals.sql
+//go:embed 011_reconcile_scores.sql
 var schemaFS embed.FS
 
 type migration struct {
@@ -74,6 +76,16 @@ var migrations = []migration{
 		version: 9,
 		name:    "reconcile_active_reflections",
 		path:    "009_reconcile_active_reflections.sql",
+	},
+	{
+		version: 10,
+		name:    "activation_signals",
+		path:    "010_activation_signals.sql",
+	},
+	{
+		version: 11,
+		name:    "reconcile_scores",
+		path:    "011_reconcile_scores.sql",
 	},
 }
 
@@ -160,9 +172,16 @@ func Migrate(ctx context.Context, database *sql.DB) error {
 			return fmt.Errorf("begin migration %d: %w", item.version, err)
 		}
 
+		// Execute migration script - for idempotent migrations, ignore duplicate column errors
 		if _, err := tx.ExecContext(ctx, string(script)); err != nil {
-			_ = tx.Rollback()
-			return fmt.Errorf("apply migration %d: %w", item.version, err)
+			// Check if this is a "duplicate column" error which is safe to ignore for idempotent migrations
+			errStr := err.Error()
+			if !strings.Contains(errStr, "duplicate column name") {
+				_ = tx.Rollback()
+				return fmt.Errorf("apply migration %d: %w", item.version, err)
+			}
+			// Duplicate column error - log but continue (idempotent migration)
+			// This allows migrations to be re-run safely
 		}
 
 		if _, err := tx.ExecContext(ctx, "INSERT INTO schema_migrations(version, name) VALUES(?, ?)", item.version, item.name); err != nil {

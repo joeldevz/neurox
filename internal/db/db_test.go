@@ -191,3 +191,225 @@ func TestMigration009ReconcileActiveReflections(t *testing.T) {
 		t.Errorf("deleted reflections = %d, want 3", deletedCount)
 	}
 }
+
+func TestMigration010ActivationSignals(t *testing.T) {
+	ctx := context.Background()
+	databasePath := filepath.Join(t.TempDir(), "neurox.db")
+
+	database, err := Open(ctx, databasePath)
+	if err != nil {
+		t.Fatalf("Open returned error: %v", err)
+	}
+	defer func() {
+		if closeErr := database.Close(); closeErr != nil {
+			t.Fatalf("Close returned error: %v", closeErr)
+		}
+	}()
+
+	// Verify migration 010 is recorded
+	var migration010Exists int
+	if err := database.QueryRowContext(ctx, "SELECT COUNT(1) FROM schema_migrations WHERE version = 10").Scan(&migration010Exists); err != nil {
+		t.Fatalf("migration 010 query failed: %v", err)
+	}
+	if migration010Exists != 1 {
+		t.Fatalf("migration 010 not recorded, got count = %d", migration010Exists)
+	}
+
+	// Insert test observations - they should get default values from schema
+	_, err = database.ExecContext(ctx, `
+		INSERT INTO observations (id, title, content, layer, importance, access_count, created_at)
+		VALUES 
+			('test1', 'Test 1', 'Content', 2, 0.8, 10, datetime('now')),
+			('test2', 'Test 2', 'Content', 1, 0.5, 5, datetime('now'))
+	`)
+	if err != nil {
+		t.Fatalf("insert test observations failed: %v", err)
+	}
+
+	// Verify columns exist and have default values
+	testCases := []struct {
+		id string
+		// New observations get schema defaults: activation_level=0.5, consolidation_strength=0.0
+		wantActivation    float64
+		wantConsolidation float64
+	}{
+		{"test1", 0.5, 0.0},
+		{"test2", 0.5, 0.0},
+	}
+
+	for _, tc := range testCases {
+		var activation, consolidation float64
+		err := database.QueryRowContext(ctx, `
+			SELECT activation_level, consolidation_strength 
+			FROM observations 
+			WHERE id = ?
+		`, tc.id).Scan(&activation, &consolidation)
+		if err != nil {
+			t.Fatalf("query %s failed: %v", tc.id, err)
+		}
+
+		if activation != tc.wantActivation {
+			t.Errorf("%s: activation_level = %v, want %v",
+				tc.id, activation, tc.wantActivation)
+		}
+		if consolidation != tc.wantConsolidation {
+			t.Errorf("%s: consolidation_strength = %v, want %v",
+				tc.id, consolidation, tc.wantConsolidation)
+		}
+	}
+
+	// Verify we can update the values
+	_, err = database.ExecContext(ctx, `
+		UPDATE observations 
+		SET activation_level = 0.85, consolidation_strength = 0.75
+		WHERE id = 'test1'
+	`)
+	if err != nil {
+		t.Fatalf("update activation signals failed: %v", err)
+	}
+
+	var updatedActivation, updatedConsolidation float64
+	err = database.QueryRowContext(ctx, `
+		SELECT activation_level, consolidation_strength 
+		FROM observations 
+		WHERE id = 'test1'
+	`).Scan(&updatedActivation, &updatedConsolidation)
+	if err != nil {
+		t.Fatalf("query updated observation failed: %v", err)
+	}
+
+	if updatedActivation != 0.85 {
+		t.Errorf("updated activation_level = %v, want 0.85", updatedActivation)
+	}
+	if updatedConsolidation != 0.75 {
+		t.Errorf("updated consolidation_strength = %v, want 0.75", updatedConsolidation)
+	}
+
+	// Verify index exists
+	var indexCount int
+	if err := database.QueryRowContext(ctx, `
+		SELECT COUNT(1) FROM sqlite_master 
+		WHERE type = 'index' AND name = 'idx_obs_activation'
+	`).Scan(&indexCount); err != nil {
+		t.Fatalf("index query failed: %v", err)
+	}
+	if indexCount != 1 {
+		t.Errorf("idx_obs_activation index count = %d, want 1", indexCount)
+	}
+
+	// Verify CHECK constraints work (values must be between 0 and 1)
+	_, err = database.ExecContext(ctx, `
+		UPDATE observations SET activation_level = 1.5 WHERE id = 'test2'
+	`)
+	if err == nil {
+		t.Error("expected error for activation_level > 1, got nil")
+	}
+
+	_, err = database.ExecContext(ctx, `
+		UPDATE observations SET consolidation_strength = -0.5 WHERE id = 'test2'
+	`)
+	if err == nil {
+		t.Error("expected error for consolidation_strength < 0, got nil")
+	}
+}
+
+func TestMigration011ReconcileScores(t *testing.T) {
+	ctx := context.Background()
+	databasePath := filepath.Join(t.TempDir(), "neurox.db")
+
+	database, err := Open(ctx, databasePath)
+	if err != nil {
+		t.Fatalf("Open returned error: %v", err)
+	}
+	defer func() {
+		if closeErr := database.Close(); closeErr != nil {
+			t.Fatalf("Close returned error: %v", closeErr)
+		}
+	}()
+
+	// Verify migration 011 is recorded
+	var migration011Exists int
+	if err := database.QueryRowContext(ctx, "SELECT COUNT(1) FROM schema_migrations WHERE version = 11").Scan(&migration011Exists); err != nil {
+		t.Fatalf("migration 011 query failed: %v", err)
+	}
+	if migration011Exists != 1 {
+		t.Fatalf("migration 011 not recorded, got count = %d", migration011Exists)
+	}
+
+	// Insert test data BEFORE running migration (simulate pre-existing data)
+	// We need to insert with the depressed importance values
+	_, err = database.ExecContext(ctx, `
+		INSERT INTO observations (id, title, content, observation_type, layer, importance, activation_level, consolidation_strength, kind, namespace, retention, access_count, created_at)
+		VALUES 
+			('core_dec', 'Core Decision', 'Content', 'decision', 2, 0.01, 0.1, 0.2, 'semantic', 'default', 'durable', 10, datetime('now', '-30 days')),
+			('core_ops', 'Core Operational', 'Content', 'discovery', 2, 0.01, 0.1, 0.2, 'semantic', 'default', 'operational', 10, datetime('now', '-30 days')),
+			('working_bug', 'Working Bugfix', 'Content', 'bugfix', 1, 0.01, 0.1, 0.15, 'semantic', 'default', 'durable', 5, datetime('now', '-30 days')),
+			('buf_disc', 'Buffer Discovery', 'Content', 'discovery', 0, 0.01, 0.1, 0.1, 'semantic', 'default', 'durable', 3, datetime('now', '-30 days'))
+	`)
+	if err != nil {
+		t.Fatalf("insert test observations failed: %v", err)
+	}
+
+	// Run migration 011 manually to test the backfill
+	migrationScript, err := schemaFS.ReadFile("011_reconcile_scores.sql")
+	if err != nil {
+		t.Fatalf("read migration 011 failed: %v", err)
+	}
+
+	_, err = database.ExecContext(ctx, string(migrationScript))
+	if err != nil {
+		t.Fatalf("apply migration 011 failed: %v", err)
+	}
+
+	// Verify durable Core observation was recalibrated
+	var coreDecImportance float64
+	err = database.QueryRowContext(ctx, "SELECT importance FROM observations WHERE id = 'core_dec'").Scan(&coreDecImportance)
+	if err != nil {
+		t.Fatalf("query core_dec failed: %v", err)
+	}
+	if coreDecImportance < 0.70 {
+		t.Errorf("core_dec: importance = %.3f, want >= 0.70 (decision in Core)", coreDecImportance)
+	}
+
+	// Verify operational Core observation was NOT recalibrated
+	var coreOpsImportance float64
+	err = database.QueryRowContext(ctx, "SELECT importance FROM observations WHERE id = 'core_ops'").Scan(&coreOpsImportance)
+	if err != nil {
+		t.Fatalf("query core_ops failed: %v", err)
+	}
+	if coreOpsImportance != 0.01 {
+		t.Errorf("core_ops: importance = %.3f, want = 0.01 (operational should not be recalibrated)", coreOpsImportance)
+	}
+
+	// Verify Working observation was recalibrated
+	var workingBugImportance float64
+	err = database.QueryRowContext(ctx, "SELECT importance FROM observations WHERE id = 'working_bug'").Scan(&workingBugImportance)
+	if err != nil {
+		t.Fatalf("query working_bug failed: %v", err)
+	}
+	if workingBugImportance < 0.60 {
+		t.Errorf("working_bug: importance = %.3f, want >= 0.60 (bugfix in Working)", workingBugImportance)
+	}
+
+	// Verify Buffer observation was recalibrated
+	var bufDiscImportance float64
+	err = database.QueryRowContext(ctx, "SELECT importance FROM observations WHERE id = 'buf_disc'").Scan(&bufDiscImportance)
+	if err != nil {
+		t.Fatalf("query buf_disc failed: %v", err)
+	}
+	if bufDiscImportance < 0.30 {
+		t.Errorf("buf_disc: importance = %.3f, want >= 0.30 (discovery in Buffer)", bufDiscImportance)
+	}
+
+	// Verify index was created
+	var indexCount int
+	if err := database.QueryRowContext(ctx, `
+		SELECT COUNT(1) FROM sqlite_master 
+		WHERE type = 'index' AND name = 'idx_obs_importance_layer'
+	`).Scan(&indexCount); err != nil {
+		t.Fatalf("index query failed: %v", err)
+	}
+	if indexCount != 1 {
+		t.Errorf("idx_obs_importance_layer index count = %d, want 1", indexCount)
+	}
+}

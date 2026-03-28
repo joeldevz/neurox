@@ -32,7 +32,9 @@ CREATE TABLE observations (
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now')),
     deleted_at TEXT,
-    modified_epoch INTEGER NOT NULL DEFAULT 0
+    modified_epoch INTEGER NOT NULL DEFAULT 0,
+    activation_level REAL NOT NULL DEFAULT 0.5 CHECK (activation_level BETWEEN 0.0 AND 1.0),
+    consolidation_strength REAL NOT NULL DEFAULT 0.0 CHECK (consolidation_strength BETWEEN 0.0 AND 1.0)
 );
 
 CREATE UNIQUE INDEX uq_active_topic_key
@@ -47,6 +49,7 @@ CREATE INDEX idx_obs_staleness ON observations(staleness) WHERE staleness = 'sta
 CREATE INDEX idx_obs_created ON observations(created_at DESC) WHERE deleted_at IS NULL;
 CREATE INDEX idx_obs_importance ON observations(importance DESC) WHERE deleted_at IS NULL;
 CREATE INDEX idx_obs_consolidation ON observations(consolidation_status) WHERE consolidation_status = 'pending' AND deleted_at IS NULL;
+CREATE INDEX idx_obs_activation ON observations(activation_level DESC) WHERE deleted_at IS NULL;
 
 CREATE VIRTUAL TABLE observations_fts USING fts5(
     id UNINDEXED,

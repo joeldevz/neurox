@@ -41,6 +41,15 @@ func TestSaveBasicObservation(t *testing.T) {
 	if saved.Layer != LayerBuffer {
 		t.Fatalf("Layer = %d, want %d", saved.Layer, LayerBuffer)
 	}
+	if saved.Importance != DefaultImportance {
+		t.Fatalf("Importance = %v, want %v", saved.Importance, DefaultImportance)
+	}
+	if saved.ActivationLevel != DefaultActivationLevel {
+		t.Fatalf("ActivationLevel = %v, want %v", saved.ActivationLevel, DefaultActivationLevel)
+	}
+	if saved.ConsolidationStrength != DefaultConsolidationStrength {
+		t.Fatalf("ConsolidationStrength = %v, want %v", saved.ConsolidationStrength, DefaultConsolidationStrength)
+	}
 
 	var ftsCount int
 	if err := database.QueryRowContext(ctx, "SELECT COUNT(1) FROM observations_fts WHERE id = ?", saved.ID).Scan(&ftsCount); err != nil {
@@ -332,4 +341,123 @@ func newTestStore(t *testing.T) (*Store, *sql.DB) {
 		t.Fatalf("db.Open returned error: %v", err)
 	}
 	return NewStore(database, nil), database
+}
+
+func TestActivationSignalsRoundTrip(t *testing.T) {
+	store, database := newTestStore(t)
+	defer database.Close()
+
+	ctx := context.Background()
+	saved, err := store.Save(ctx, Observation{
+		Title:                 "Test activation signals",
+		Content:               "Testing activation_level and consolidation_strength persistence",
+		Importance:            0.8,
+		ActivationLevel:       0.75,
+		ConsolidationStrength: 0.6,
+	})
+	if err != nil {
+		t.Fatalf("Save returned error: %v", err)
+	}
+
+	if saved.Importance != 0.8 {
+		t.Fatalf("Importance = %v, want 0.8", saved.Importance)
+	}
+	if saved.ActivationLevel != 0.75 {
+		t.Fatalf("ActivationLevel = %v, want 0.75", saved.ActivationLevel)
+	}
+	if saved.ConsolidationStrength != 0.6 {
+		t.Fatalf("ConsolidationStrength = %v, want 0.6", saved.ConsolidationStrength)
+	}
+
+	// Verify via Get
+	got, err := store.Get(ctx, saved.ID)
+	if err != nil {
+		t.Fatalf("Get returned error: %v", err)
+	}
+	if got.Importance != 0.8 {
+		t.Fatalf("Get().Importance = %v, want 0.8", got.Importance)
+	}
+	if got.ActivationLevel != 0.75 {
+		t.Fatalf("Get().ActivationLevel = %v, want 0.75", got.ActivationLevel)
+	}
+	if got.ConsolidationStrength != 0.6 {
+		t.Fatalf("Get().ConsolidationStrength = %v, want 0.6", got.ConsolidationStrength)
+	}
+}
+
+func TestActivationSignalsUpdate(t *testing.T) {
+	store, database := newTestStore(t)
+	defer database.Close()
+
+	ctx := context.Background()
+	saved, err := store.Save(ctx, Observation{
+		Title:                 "Update activation test",
+		Content:               "Initial values",
+		Importance:            0.5,
+		ActivationLevel:       0.5,
+		ConsolidationStrength: 0.0,
+	})
+	if err != nil {
+		t.Fatalf("Save returned error: %v", err)
+	}
+
+	// Update activation signals
+	saved.Importance = 0.9
+	saved.ActivationLevel = 0.85
+	saved.ConsolidationStrength = 0.7
+
+	updated, err := store.Update(ctx, saved)
+	if err != nil {
+		t.Fatalf("Update returned error: %v", err)
+	}
+
+	if updated.Importance != 0.9 {
+		t.Fatalf("updated.Importance = %v, want 0.9", updated.Importance)
+	}
+	if updated.ActivationLevel != 0.85 {
+		t.Fatalf("updated.ActivationLevel = %v, want 0.85", updated.ActivationLevel)
+	}
+	if updated.ConsolidationStrength != 0.7 {
+		t.Fatalf("updated.ConsolidationStrength = %v, want 0.7", updated.ConsolidationStrength)
+	}
+
+	// Verify via Get
+	got, err := store.Get(ctx, saved.ID)
+	if err != nil {
+		t.Fatalf("Get returned error: %v", err)
+	}
+	if got.Importance != 0.9 {
+		t.Fatalf("Get().Importance = %v, want 0.9", got.Importance)
+	}
+	if got.ActivationLevel != 0.85 {
+		t.Fatalf("Get().ActivationLevel = %v, want 0.85", got.ActivationLevel)
+	}
+	if got.ConsolidationStrength != 0.7 {
+		t.Fatalf("Get().ConsolidationStrength = %v, want 0.7", got.ConsolidationStrength)
+	}
+}
+
+func TestActivationSignalsDefaults(t *testing.T) {
+	store, database := newTestStore(t)
+	defer database.Close()
+
+	ctx := context.Background()
+	saved, err := store.Save(ctx, Observation{
+		Title:   "Default activation test",
+		Content: "Testing default values for activation signals",
+		// Not setting Importance, ActivationLevel, or ConsolidationStrength
+	})
+	if err != nil {
+		t.Fatalf("Save returned error: %v", err)
+	}
+
+	if saved.Importance != DefaultImportance {
+		t.Fatalf("Importance = %v, want default %v", saved.Importance, DefaultImportance)
+	}
+	if saved.ActivationLevel != DefaultActivationLevel {
+		t.Fatalf("ActivationLevel = %v, want default %v", saved.ActivationLevel, DefaultActivationLevel)
+	}
+	if saved.ConsolidationStrength != DefaultConsolidationStrength {
+		t.Fatalf("ConsolidationStrength = %v, want default %v", saved.ConsolidationStrength, DefaultConsolidationStrength)
+	}
 }
