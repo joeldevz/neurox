@@ -62,7 +62,7 @@ type Options struct {
 // Query extracts graph data from the database with the given filters.
 func Query(ctx context.Context, db *sql.DB, opts Options) (*Data, error) {
 	if opts.Limit <= 0 {
-		opts.Limit = 200
+		opts.Limit = 2000
 	}
 
 	// Get total counts for stats.

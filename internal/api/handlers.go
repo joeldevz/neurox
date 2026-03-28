@@ -634,7 +634,7 @@ func (s *Server) handleBreakdown(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleGraph(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 
-	limit := 200
+	limit := 2000
 	if l := q.Get("limit"); l != "" {
 		if n, err := strconv.Atoi(l); err == nil && n > 0 {
 			limit = n

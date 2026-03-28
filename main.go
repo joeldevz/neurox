@@ -546,7 +546,7 @@ func runGraph(ctx context.Context, database *sql.DB) {
 	obsType := fs.String("type", "", "Filter by observation type")
 	tags := fs.String("tags", "", "Filter by tags (comma-separated)")
 	minImportance := fs.Float64("min-importance", 0, "Minimum importance (0.0-1.0)")
-	limit := fs.Int("limit", 200, "Max nodes to display")
+	limit := fs.Int("limit", 2000, "Max nodes to display")
 	linkedOnly := fs.Bool("linked-only", false, "Show only observations that have links")
 	output := fs.String("output", "", "Output file path (default: neurox-graph.html)")
 	noBrowser := fs.Bool("no-browser", false, "Don't open browser automatically")
