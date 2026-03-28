@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"math"
 	"path/filepath"
 	"sort"
 	"testing"
@@ -716,4 +717,385 @@ func findResultScore(t *testing.T, results []Result, id string) float64 {
 	}
 	t.Fatalf("result %q not found", id)
 	return 0
+}
+
+// ============================================================================
+// TESTS: New recall bump behavior
+// Recall now boosts activation_level and consolidation_strength, not importance.
+// This separates durable value (importance) from recency/activation signals.
+// ============================================================================
+
+// TestRecallBumpIncreasesActivation verifies that recall boosts activation_level
+// and consolidation_strength, while preserving importance.
+func TestRecallBumpIncreasesActivation(t *testing.T) {
+	engine, store, database := newTestEngine(t)
+	defer database.Close()
+
+	ctx := context.Background()
+	obs, err := store.Save(ctx, observation.Observation{
+		Title:   "Important decision",
+		Content: "Use PostgreSQL for main database",
+	})
+	if err != nil {
+		t.Fatalf("save observation: %v", err)
+	}
+
+	// Set initial values
+	setObservationFields(t, database, obs.ID, map[string]any{
+		"importance":             0.5,
+		"activation_level":       0.4,
+		"consolidation_strength": 0.2,
+	})
+
+	// Perform multiple recalls with unique query to ensure only our observation is matched
+	for i := 0; i < 5; i++ {
+		_, err = engine.Search(ctx, SearchOptions{Query: "PostgreSQL main", Limit: 10})
+		if err != nil {
+			t.Fatalf("search %d: %v", i, err)
+		}
+	}
+
+	// Check that activation and consolidation were increased, not importance
+	var importance, activation, consolidation float64
+	var accessCount int
+	database.QueryRowContext(ctx, "SELECT importance, activation_level, consolidation_strength, access_count FROM observations WHERE id = ?", obs.ID).
+		Scan(&importance, &activation, &consolidation, &accessCount)
+
+	// Importance should be preserved (no change)
+	if importance != 0.5 {
+		t.Errorf("importance should be preserved: got %.3f, want 0.5", importance)
+	}
+
+	// Activation should have increased by 0.08 * 5 = 0.40 (capped at 1.0)
+	// Starting from 0.4: 0.4 + 0.40 = 0.8
+	expectedActivationMin := 0.4 + 0.08*5 - 0.01 // allow small tolerance
+	if activation < expectedActivationMin {
+		t.Errorf("activation after 5 recalls: got %.3f, want at least %.3f", activation, expectedActivationMin)
+	}
+
+	// Consolidation should have increased by 0.02 * 5 = 0.10
+	// Starting from 0.2: 0.2 + 0.10 = 0.3
+	expectedConsolidationMin := 0.2 + 0.02*5 - 0.01
+	if consolidation < expectedConsolidationMin {
+		t.Errorf("consolidation after 5 recalls: got %.3f, want at least %.3f", consolidation, expectedConsolidationMin)
+	}
+
+	if accessCount < 5 {
+		t.Errorf("access_count after 5 recalls: got %d, want at least 5", accessCount)
+	}
+
+	t.Logf("Recall bump: importance preserved at %.3f, activation boosted to %.3f, consolidation to %.3f",
+		importance, activation, consolidation)
+}
+
+// TestRecallBumpCapsActivationAndConsolidation verifies that activation_level
+// and consolidation_strength are capped at 1.0 even with many repeated recalls.
+func TestRecallBumpCapsActivationAndConsolidation(t *testing.T) {
+	engine, store, database := newTestEngine(t)
+	defer database.Close()
+
+	ctx := context.Background()
+	obs, err := store.Save(ctx, observation.Observation{
+		Title:   "High activation",
+		Content: "Critical architecture decision",
+	})
+	if err != nil {
+		t.Fatalf("save observation: %v", err)
+	}
+
+	// Set high initial activation and consolidation
+	setObservationFields(t, database, obs.ID, map[string]any{
+		"activation_level":       0.85,
+		"consolidation_strength": 0.95,
+	})
+
+	// Perform many recalls
+	for i := 0; i < 10; i++ {
+		_, err = engine.Search(ctx, SearchOptions{Query: "critical", Limit: 10})
+		if err != nil {
+			t.Fatalf("search %d: %v", i, err)
+		}
+	}
+
+	// Check that activation and consolidation are capped at 1.0
+	var activation, consolidation float64
+	database.QueryRowContext(ctx, "SELECT activation_level, consolidation_strength FROM observations WHERE id = ?", obs.ID).
+		Scan(&activation, &consolidation)
+
+	if activation != 1.0 {
+		t.Errorf("activation should be capped at 1.0: got %.3f", activation)
+	}
+	if consolidation != 1.0 {
+		t.Errorf("consolidation should be capped at 1.0: got %.3f", consolidation)
+	}
+
+	t.Logf("Activation and consolidation capped at 1.0: activation=%.3f, consolidation=%.3f", activation, consolidation)
+}
+
+// TestRepeatedRecallBoostsActivationNotImportance demonstrates that repeated
+// recall boosts activation and consolidation without inflating importance.
+// This prevents low-value observations from appearing important just because
+// they were accessed frequently.
+func TestRepeatedRecallBoostsActivationNotImportance(t *testing.T) {
+	engine, store, database := newTestEngine(t)
+	defer database.Close()
+
+	ctx := context.Background()
+
+	// Create a low-importance observation
+	lowImp, err := store.Save(ctx, observation.Observation{
+		Title:   "Minor note",
+		Content: "This is just a minor observation",
+	})
+	if err != nil {
+		t.Fatalf("save low importance: %v", err)
+	}
+
+	// Set very low initial importance but decent activation
+	setObservationFields(t, database, lowImp.ID, map[string]any{
+		"importance":             0.1,
+		"activation_level":       0.3,
+		"consolidation_strength": 0.1,
+		"observation_type":       "'discovery'",
+	})
+
+	// Simulate many recalls (e.g., accidental repeated searches)
+	for i := 0; i < 20; i++ {
+		_, err = engine.Search(ctx, SearchOptions{Query: "minor", Limit: 10})
+		if err != nil {
+			t.Fatalf("search %d: %v", i, err)
+		}
+	}
+
+	// Check final values
+	var importance, activation, consolidation float64
+	database.QueryRowContext(ctx, "SELECT importance, activation_level, consolidation_strength FROM observations WHERE id = ?", lowImp.ID).
+		Scan(&importance, &activation, &consolidation)
+
+	// Importance should be preserved (not boosted)
+	if importance != 0.1 {
+		t.Errorf("importance should be preserved at 0.1: got %.3f", importance)
+	}
+
+	// Activation should be boosted (0.3 + 0.08*20 = 1.9, capped at 1.0)
+	if activation != 1.0 {
+		t.Errorf("activation should be capped at 1.0: got %.3f", activation)
+	}
+
+	// Consolidation should be boosted (0.1 + 0.02*20 = 0.5)
+	expectedConsolidation := 0.1 + 0.02*20
+	if consolidation < expectedConsolidation-0.01 {
+		t.Errorf("consolidation should be boosted to ~%.3f: got %.3f", expectedConsolidation, consolidation)
+	}
+
+	t.Logf("Repeated recall: importance preserved at %.3f, activation boosted to %.3f, consolidation to %.3f",
+		importance, activation, consolidation)
+}
+
+// TestRecallUpdatesLastAccessed verifies that recall updates the last_accessed timestamp.
+func TestRecallUpdatesLastAccessed(t *testing.T) {
+	engine, store, database := newTestEngine(t)
+	defer database.Close()
+
+	ctx := context.Background()
+	obs, err := store.Save(ctx, observation.Observation{
+		Title:   "Test observation",
+		Content: "Content for testing",
+	})
+	if err != nil {
+		t.Fatalf("save observation: %v", err)
+	}
+
+	// Set old last_accessed
+	setObservationFields(t, database, obs.ID, map[string]any{
+		"last_accessed": "datetime('now', '-30 days')",
+	})
+
+	// Perform recall
+	beforeRecall := time.Now()
+	_, err = engine.Search(ctx, SearchOptions{Query: "testing", Limit: 10})
+	if err != nil {
+		t.Fatalf("search: %v", err)
+	}
+
+	// Check that last_accessed was updated
+	var lastAccessed sql.NullString
+	database.QueryRowContext(ctx, "SELECT last_accessed FROM observations WHERE id = ?", obs.ID).Scan(&lastAccessed)
+
+	if !lastAccessed.Valid {
+		t.Fatal("last_accessed should be set after recall")
+	}
+
+	parsed, err := time.Parse("2006-01-02 15:04:05", lastAccessed.String)
+	if err != nil {
+		t.Fatalf("parse last_accessed: %v", err)
+	}
+
+	if parsed.Before(beforeRecall.Add(-time.Minute)) {
+		t.Errorf("last_accessed should be updated to recent time: got %v", parsed)
+	}
+
+	t.Logf("Baseline: recall updates last_accessed to: %v", lastAccessed.String)
+}
+
+// TestRecallBumpByObservationType verifies that all observation types receive
+// the same activation and consolidation boost on recall, while importance is preserved.
+func TestRecallBumpByObservationType(t *testing.T) {
+	engine, store, database := newTestEngine(t)
+	defer database.Close()
+
+	ctx := context.Background()
+
+	// Create observations of different types
+	types := []struct {
+		typ string
+		id  string
+	}{
+		{"decision", ""},
+		{"bugfix", ""},
+		{"discovery", ""},
+		{"preference", ""},
+	}
+
+	for i := range types {
+		obs, err := store.Save(ctx, observation.Observation{
+			Title:           types[i].typ + " observation",
+			Content:         "Content for " + types[i].typ,
+			ObservationType: observation.ObservationType(types[i].typ),
+		})
+		if err != nil {
+			t.Fatalf("save %s: %v", types[i].typ, err)
+		}
+		types[i].id = obs.ID
+
+		// Set same initial values
+		setObservationFields(t, database, obs.ID, map[string]any{
+			"importance":             0.5,
+			"activation_level":       0.4,
+			"consolidation_strength": 0.2,
+			"observation_type":       "'" + types[i].typ + "'",
+		})
+	}
+
+	// Recall each observation once
+	for _, tt := range types {
+		_, err := engine.Search(ctx, SearchOptions{Query: tt.typ, Limit: 10})
+		if err != nil {
+			t.Fatalf("search %s: %v", tt.typ, err)
+		}
+	}
+
+	// Check that all received same activation and consolidation boost
+	var activations, consolidations, importances []float64
+	for _, tt := range types {
+		var act, cons, imp float64
+		database.QueryRowContext(ctx, "SELECT activation_level, consolidation_strength, importance FROM observations WHERE id = ?", tt.id).
+			Scan(&act, &cons, &imp)
+		activations = append(activations, act)
+		consolidations = append(consolidations, cons)
+		importances = append(importances, imp)
+	}
+
+	// All activations should be equal (0.4 + 0.08 = 0.48)
+	expectedActivation := 0.48
+	for i, act := range activations {
+		if math.Abs(act-expectedActivation) > 0.001 {
+			t.Errorf("%s: activation=%.3f, want %.3f", types[i].typ, act, expectedActivation)
+		}
+	}
+
+	// All consolidations should be equal (0.2 + 0.02 = 0.22)
+	expectedConsolidation := 0.22
+	for i, cons := range consolidations {
+		if math.Abs(cons-expectedConsolidation) > 0.001 {
+			t.Errorf("%s: consolidation=%.3f, want %.3f", types[i].typ, cons, expectedConsolidation)
+		}
+	}
+
+	// All importances should be preserved at 0.5
+	for i, imp := range importances {
+		if math.Abs(imp-0.5) > 0.001 {
+			t.Errorf("%s: importance=%.3f, want 0.5 (preserved)", types[i].typ, imp)
+		}
+	}
+
+	t.Logf("All types get same boost: activation=%.3f, consolidation=%.3f, importance preserved at=%.3f",
+		activations[0], consolidations[0], importances[0])
+}
+
+// TestRecallBumpDoesNotConsiderRetention verifies that retention (operational vs durable)
+// does not affect the recall activation/consolidation boost, and importance is preserved.
+func TestRecallBumpDoesNotConsiderRetention(t *testing.T) {
+	engine, store, database := newTestEngine(t)
+	defer database.Close()
+
+	ctx := context.Background()
+
+	// Create operational observation
+	opsObs, err := store.Save(ctx, observation.Observation{
+		Title:   "Operational note",
+		Content: "Step 3 completed",
+	})
+	if err != nil {
+		t.Fatalf("save operational: %v", err)
+	}
+
+	// Create durable observation
+	durObs, err := store.Save(ctx, observation.Observation{
+		Title:   "Durable decision",
+		Content: "Use interfaces",
+	})
+	if err != nil {
+		t.Fatalf("save durable: %v", err)
+	}
+
+	// Set same initial values and different retentions
+	setObservationFields(t, database, opsObs.ID, map[string]any{
+		"importance":             0.5,
+		"activation_level":       0.4,
+		"consolidation_strength": 0.2,
+		"retention":              "'operational'",
+	})
+	setObservationFields(t, database, durObs.ID, map[string]any{
+		"importance":             0.5,
+		"activation_level":       0.4,
+		"consolidation_strength": 0.2,
+		"retention":              "'durable'",
+	})
+
+	// Recall both
+	_, err = engine.Search(ctx, SearchOptions{Query: "operational", Limit: 10})
+	if err != nil {
+		t.Fatalf("search operational: %v", err)
+	}
+	_, err = engine.Search(ctx, SearchOptions{Query: "durable", Limit: 10})
+	if err != nil {
+		t.Fatalf("search durable: %v", err)
+	}
+
+	// Check final values
+	var opsAct, opsCons, opsImp float64
+	var durAct, durCons, durImp float64
+	database.QueryRowContext(ctx, "SELECT activation_level, consolidation_strength, importance FROM observations WHERE id = ?", opsObs.ID).
+		Scan(&opsAct, &opsCons, &opsImp)
+	database.QueryRowContext(ctx, "SELECT activation_level, consolidation_strength, importance FROM observations WHERE id = ?", durObs.ID).
+		Scan(&durAct, &durCons, &durImp)
+
+	// Both should have same activation (0.4 + 0.08 = 0.48)
+	if opsAct != durAct {
+		t.Errorf("operational and durable should get same activation boost: ops=%.3f, dur=%.3f", opsAct, durAct)
+	}
+
+	// Both should have same consolidation (0.2 + 0.02 = 0.22)
+	if opsCons != durCons {
+		t.Errorf("operational and durable should get same consolidation boost: ops=%.3f, dur=%.3f", opsCons, durCons)
+	}
+
+	// Both should have preserved importance (0.5)
+	if opsImp != 0.5 || durImp != 0.5 {
+		t.Errorf("importance should be preserved: ops=%.3f, dur=%.3f", opsImp, durImp)
+	}
+
+	t.Logf("Retention doesn't affect boost: activation=%.3f, consolidation=%.3f, importance preserved at %.3f",
+		opsAct, opsCons, opsImp)
 }

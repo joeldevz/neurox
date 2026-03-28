@@ -260,7 +260,8 @@ func (e *Engine) bumpAccess(ctx context.Context, ids []string) error {
 		UPDATE observations
 		SET access_count = access_count + 1,
 		    last_accessed = datetime('now'),
-		    importance = MIN(1.0, importance + 0.03)
+		    activation_level = MIN(1.0, activation_level + 0.08),
+		    consolidation_strength = MIN(1.0, consolidation_strength + 0.02)
 		WHERE deleted_at IS NULL AND id IN (`+strings.Join(placeholders, ",")+`)
 	`, args...); err != nil {
 		return fmt.Errorf("update recall access metrics: %w", err)
