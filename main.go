@@ -125,6 +125,10 @@ func main() {
 		runImport(ctx, database)
 	case "graph":
 		runGraph(ctx, database)
+	case "backup":
+		runBackup(ctx, database, cfg)
+	case "audit":
+		runAudit(ctx, database)
 	case "config":
 		runConfig(cfg)
 	default:
@@ -148,6 +152,7 @@ func printUsage() {
 	fmt.Println("  context          Get relevant context for a namespace")
 	fmt.Println("  invalidate       Mark an observation as incorrect")
 	fmt.Println("  status           Show brain statistics")
+	fmt.Println("  audit            Show full lifecycle of an observation (neurox audit <id>)")
 	fmt.Println("  consolidate      Force immediate consolidation (promote, dedup, reflect)")
 	fmt.Println("  curate           Deep curation: clean noise, recalibrate importance (--namespace ns --dry-run)")
 	fmt.Println("  reembed          Force re-embedding of all observations (useful after model change)")
@@ -158,9 +163,10 @@ func printUsage() {
 	fmt.Println("Benchmark:")
 	fmt.Println("  benchmark        Run brain benchmark suite (--scale small|medium|large)")
 	fmt.Println()
-	fmt.Println("Export / Import:")
-	fmt.Println("  export           Export observations as Markdown files (--format markdown --output dir --namespace ns)")
-	fmt.Println("  import           Import .md observation files into the database (--source dir)")
+	fmt.Println("Export / Import / Backup:")
+	fmt.Println("  export           Export observations (--format md|json --output path --namespace ns)")
+	fmt.Println("  import           Import observations (--format md|json --source path)")
+	fmt.Println("  backup           Create a safe backup of the database (--output path)")
 	fmt.Println()
 	fmt.Println("Setup commands:")
 	fmt.Println("  install          Launch interactive installer")
@@ -201,6 +207,8 @@ func runSave(ctx context.Context, database *sql.DB, cfg config.Config) {
 		Confidence:      *confidence,
 		TopicKey:        *topicKey,
 		Namespace:       *namespace,
+		SourceSurface:   "cli",
+		SourceTool:      "save",
 	}
 	if *tags != "" {
 		obs.Tags = splitCSV(*tags)
@@ -226,6 +234,15 @@ func runSave(ctx context.Context, database *sql.DB, cfg config.Config) {
 		go d.factExtractor.ExtractAndSave(context.Background(), saved.ID, saved.Title, saved.Content, saved.Namespace)
 	}
 
+	// Enqueue embedding if embedder is available
+	if embed.IsAvailable(d.embedder) {
+		eq := embed.NewQueue(d.embedder, database)
+		eq.Start(ctx)
+		eq.Enqueue(saved.ID)
+		time.Sleep(2 * time.Second)
+		eq.Stop()
+	}
+
 	printJSON(map[string]any{
 		"id":        saved.ID,
 		"title":     saved.Title,
@@ -243,6 +260,7 @@ func runRecall(ctx context.Context, database *sql.DB, cfg config.Config) {
 	namespace := fs.String("namespace", "", "Filter by namespace")
 	filesFlag := fs.String("files", "", "Filter by file paths (comma-separated)")
 	includeStale := fs.Bool("include-stale", false, "Include stale/expired observations")
+	debug := fs.Bool("debug", false, "Include score breakdown per result")
 	limit := fs.Int("limit", 10, "Max results")
 	fs.Parse(os.Args[2:])
 
@@ -265,6 +283,7 @@ func runRecall(ctx context.Context, database *sql.DB, cfg config.Config) {
 		Kind:            observation.Kind(*kind),
 		Namespace:       *namespace,
 		IncludeStale:    *includeStale,
+		Debug:           *debug,
 		Limit:           *limit,
 	}
 	if *filesFlag != "" {
@@ -394,6 +413,291 @@ func runStatus(ctx context.Context, database *sql.DB, cfg config.Config) {
 	})
 }
 
+func runAudit(ctx context.Context, database *sql.DB) {
+	if len(os.Args) < 3 {
+		fmt.Fprintln(os.Stderr, "Usage: neurox audit <observation_id>")
+		os.Exit(1)
+	}
+	obsID := os.Args[2]
+
+	// 1. Fetch full observation row (all columns including ones not in Observation struct)
+	var (
+		id, title, content, obsType, kind, namespace                              string
+		layer, accessCount, repetitionCount, modifiedEpoch                        int
+		confidence, importance, activationLevel, consolidationStrength, decayRate float64
+		tags, source, topicKey, staleness, consolidationStatus                    sql.NullString
+		retention, sourceSurface, sourceSessionID, sourceTool                     sql.NullString
+		validFrom, validUntil, lastAccessed                                       sql.NullString
+		createdAt, updatedAt                                                      string
+		deletedAt                                                                 sql.NullString
+		rejectionEpoch                                                            sql.NullInt64
+		hasEmbedding                                                              bool
+	)
+
+	err := database.QueryRowContext(ctx, `
+		SELECT id, title, content, observation_type, kind, namespace,
+		       layer, confidence, importance, activation_level, consolidation_strength,
+		       access_count, last_accessed, repetition_count, decay_rate,
+		       COALESCE(tags, ''), source, topic_key,
+		       staleness, consolidation_status, rejection_epoch,
+		       retention, source_surface, source_session_id, source_tool,
+		       valid_from, valid_until,
+		       created_at, updated_at, deleted_at, modified_epoch,
+		       (embedding IS NOT NULL) AS has_embedding
+		FROM observations WHERE id = ?
+	`, obsID).Scan(
+		&id, &title, &content, &obsType, &kind, &namespace,
+		&layer, &confidence, &importance, &activationLevel, &consolidationStrength,
+		&accessCount, &lastAccessed, &repetitionCount, &decayRate,
+		&tags, &source, &topicKey,
+		&staleness, &consolidationStatus, &rejectionEpoch,
+		&retention, &sourceSurface, &sourceSessionID, &sourceTool,
+		&validFrom, &validUntil,
+		&createdAt, &updatedAt, &deletedAt, &modifiedEpoch,
+		&hasEmbedding,
+	)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			fmt.Fprintf(os.Stderr, "observation not found: %s\n", obsID)
+			os.Exit(1)
+		}
+		log.Fatalf("query observation: %v", err)
+	}
+
+	// Build creation section
+	creation := map[string]any{
+		"id":         id,
+		"title":      title,
+		"content":    content,
+		"type":       obsType,
+		"kind":       kind,
+		"namespace":  namespace,
+		"layer":      layer,
+		"created_at": createdAt,
+		"updated_at": updatedAt,
+	}
+	if deletedAt.Valid {
+		creation["deleted_at"] = deletedAt.String
+	}
+
+	// Build provenance section
+	provenance := map[string]any{}
+	if sourceSurface.Valid {
+		provenance["source_surface"] = sourceSurface.String
+	}
+	if sourceSessionID.Valid {
+		provenance["source_session_id"] = sourceSessionID.String
+	}
+	if sourceTool.Valid {
+		provenance["source_tool"] = sourceTool.String
+	}
+	if source.Valid {
+		provenance["source"] = source.String
+	}
+
+	// Build current state section
+	currentState := map[string]any{
+		"importance":             importance,
+		"confidence":             confidence,
+		"activation_level":       activationLevel,
+		"consolidation_strength": consolidationStrength,
+		"retention":              nullStr(retention),
+		"staleness":              nullStr(staleness),
+		"consolidation_status":   nullStr(consolidationStatus),
+		"layer":                  layer,
+		"modified_epoch":         modifiedEpoch,
+		"has_embedding":          hasEmbedding,
+	}
+	if tags.Valid && tags.String != "" {
+		currentState["tags"] = splitCSV(tags.String)
+	}
+	if topicKey.Valid {
+		currentState["topic_key"] = topicKey.String
+	}
+	if rejectionEpoch.Valid {
+		currentState["rejection_epoch"] = rejectionEpoch.Int64
+	}
+
+	// Build decay section
+	decayInfo := map[string]any{
+		"access_count":     accessCount,
+		"repetition_count": repetitionCount,
+		"decay_rate":       decayRate,
+	}
+	if lastAccessed.Valid {
+		decayInfo["last_accessed"] = lastAccessed.String
+	}
+	if validFrom.Valid {
+		decayInfo["valid_from"] = validFrom.String
+	}
+	if validUntil.Valid {
+		decayInfo["valid_until"] = validUntil.String
+	}
+
+	// 2. Query links (outgoing: this observation is source)
+	outgoingLinks, err := queryAuditLinks(ctx, database, "source_id", obsID)
+	if err != nil {
+		log.Fatalf("query outgoing links: %v", err)
+	}
+
+	// 3. Query links (incoming: this observation is target)
+	incomingLinks, err := queryAuditLinks(ctx, database, "target_id", obsID)
+	if err != nil {
+		log.Fatalf("query incoming links: %v", err)
+	}
+
+	linksSection := map[string]any{
+		"outgoing": outgoingLinks,
+		"incoming": incomingLinks,
+	}
+
+	// 4. Query file associations (all, including expired)
+	fileAssocs, err := queryAuditFiles(ctx, database, obsID)
+	if err != nil {
+		log.Fatalf("query file associations: %v", err)
+	}
+
+	// 5. Query temporal mentions
+	temporalMentions, err := queryAuditTemporal(ctx, database, obsID)
+	if err != nil {
+		log.Fatalf("query temporal mentions: %v", err)
+	}
+
+	// Assemble final output
+	result := map[string]any{
+		"creation":          creation,
+		"provenance":        provenance,
+		"current_state":     currentState,
+		"decay":             decayInfo,
+		"links":             linksSection,
+		"files":             fileAssocs,
+		"temporal_mentions": temporalMentions,
+	}
+
+	printJSON(result)
+}
+
+func queryAuditLinks(ctx context.Context, database *sql.DB, column, obsID string) ([]map[string]any, error) {
+	rows, err := database.QueryContext(ctx, fmt.Sprintf(`
+		SELECT id, source_id, target_id, relation_type, confidence, created_by, created_at
+		FROM observation_links
+		WHERE %s = ?
+		ORDER BY created_at ASC
+	`, column), obsID)
+	if err != nil {
+		return nil, fmt.Errorf("query links by %s: %w", column, err)
+	}
+	defer rows.Close()
+
+	var result []map[string]any
+	for rows.Next() {
+		var linkID, sourceID, targetID, relationType, createdBy, createdAt string
+		var linkConfidence float64
+		if err := rows.Scan(&linkID, &sourceID, &targetID, &relationType, &linkConfidence, &createdBy, &createdAt); err != nil {
+			return nil, fmt.Errorf("scan link: %w", err)
+		}
+		result = append(result, map[string]any{
+			"id":            linkID,
+			"source_id":     sourceID,
+			"target_id":     targetID,
+			"relation_type": relationType,
+			"confidence":    linkConfidence,
+			"created_by":    createdBy,
+			"created_at":    createdAt,
+		})
+	}
+	if result == nil {
+		result = []map[string]any{}
+	}
+	return result, rows.Err()
+}
+
+func queryAuditFiles(ctx context.Context, database *sql.DB, obsID string) ([]map[string]any, error) {
+	rows, err := database.QueryContext(ctx, `
+		SELECT id, file_path, created_at, valid_until
+		FROM file_observations
+		WHERE observation_id = ?
+		ORDER BY created_at ASC
+	`, obsID)
+	if err != nil {
+		return nil, fmt.Errorf("query file associations: %w", err)
+	}
+	defer rows.Close()
+
+	var result []map[string]any
+	for rows.Next() {
+		var fileID, filePath, fileCreatedAt string
+		var fileValidUntil sql.NullString
+		if err := rows.Scan(&fileID, &filePath, &fileCreatedAt, &fileValidUntil); err != nil {
+			return nil, fmt.Errorf("scan file association: %w", err)
+		}
+		entry := map[string]any{
+			"id":         fileID,
+			"file_path":  filePath,
+			"created_at": fileCreatedAt,
+			"active":     !fileValidUntil.Valid,
+		}
+		if fileValidUntil.Valid {
+			entry["valid_until"] = fileValidUntil.String
+		}
+		result = append(result, entry)
+	}
+	if result == nil {
+		result = []map[string]any{}
+	}
+	return result, rows.Err()
+}
+
+func queryAuditTemporal(ctx context.Context, database *sql.DB, obsID string) ([]map[string]any, error) {
+	rows, err := database.QueryContext(ctx, `
+		SELECT id, raw_text, mention_kind, normalized_start, normalized_end, anchor_time, confidence, created_at
+		FROM temporal_mentions
+		WHERE observation_id = ?
+		ORDER BY created_at ASC
+	`, obsID)
+	if err != nil {
+		return nil, fmt.Errorf("query temporal mentions: %w", err)
+	}
+	defer rows.Close()
+
+	var result []map[string]any
+	for rows.Next() {
+		var tmID, rawText, mentionKind, anchorTime, tmCreatedAt string
+		var normalizedStart, normalizedEnd sql.NullString
+		var tmConfidence float64
+		if err := rows.Scan(&tmID, &rawText, &mentionKind, &normalizedStart, &normalizedEnd, &anchorTime, &tmConfidence, &tmCreatedAt); err != nil {
+			return nil, fmt.Errorf("scan temporal mention: %w", err)
+		}
+		entry := map[string]any{
+			"id":          tmID,
+			"raw_text":    rawText,
+			"kind":        mentionKind,
+			"anchor_time": anchorTime,
+			"confidence":  tmConfidence,
+			"created_at":  tmCreatedAt,
+		}
+		if normalizedStart.Valid {
+			entry["normalized_start"] = normalizedStart.String
+		}
+		if normalizedEnd.Valid {
+			entry["normalized_end"] = normalizedEnd.String
+		}
+		result = append(result, entry)
+	}
+	if result == nil {
+		result = []map[string]any{}
+	}
+	return result, rows.Err()
+}
+
+// nullStr returns the string value from a NullString, or empty string if null.
+func nullStr(ns sql.NullString) string {
+	if ns.Valid {
+		return ns.String
+	}
+	return ""
+}
+
 func runConsolidate(ctx context.Context, database *sql.DB, cfg config.Config) {
 	d := initDeps(ctx, database, cfg)
 
@@ -508,36 +812,98 @@ func runReembed(ctx context.Context, database *sql.DB, cfg config.Config) {
 
 func runExport(ctx context.Context, database *sql.DB) {
 	fs := flag.NewFlagSet("export", flag.ExitOnError)
-	format := fs.String("format", "markdown", "Export format: markdown")
-	output := fs.String("output", "./neurox-export", "Output directory")
+	format := fs.String("format", "md", "Export format: md, json")
+	output := fs.String("output", "", "Output path (directory for md, file for json)")
 	namespace := fs.String("namespace", "", "Namespace to export (empty = all)")
 	fs.Parse(os.Args[2:])
 
-	if *format != "markdown" {
-		log.Fatalf("unsupported format: %s (only markdown supported)", *format)
-	}
+	switch *format {
+	case "md", "markdown":
+		if *output == "" {
+			*output = "./neurox-export"
+		}
+		count, err := exportpkg.ExportMarkdown(ctx, database, *namespace, *output)
+		if err != nil {
+			log.Fatalf("export: %v", err)
+		}
+		fmt.Printf("Exported %d observations to %s\n", count, *output)
 
-	count, err := exportpkg.ExportMarkdown(ctx, database, *namespace, *output)
-	if err != nil {
-		log.Fatalf("export: %v", err)
+	case "json":
+		if *output == "" {
+			*output = "neurox-export.json"
+		}
+		stats, err := exportpkg.ExportJSONWithStats(ctx, database, *namespace, *output)
+		if err != nil {
+			log.Fatalf("export: %v", err)
+		}
+		fmt.Printf("Exported to %s:\n", *output)
+		fmt.Printf("  Observations:       %d\n", stats.Observations)
+		fmt.Printf("  Links:              %d\n", stats.Links)
+		fmt.Printf("  File observations:  %d\n", stats.FileObservations)
+		fmt.Printf("  Facts:              %d\n", stats.Facts)
+		fmt.Printf("  Temporal mentions:  %d\n", stats.TemporalMentions)
+		fmt.Printf("  Sessions:           %d\n", stats.Sessions)
+		fmt.Printf("  Reflections:        %d\n", stats.Reflections)
+		fmt.Printf("  Consolidation runs: %d\n", stats.ConsolidationRuns)
+
+	default:
+		log.Fatalf("unsupported format: %s (supported: md, json)", *format)
 	}
-	fmt.Printf("Exported %d observations to %s\n", count, *output)
 }
 
 func runImport(ctx context.Context, database *sql.DB) {
 	fs := flag.NewFlagSet("import", flag.ExitOnError)
-	source := fs.String("source", "", "Source directory with .md files (required)")
+	format := fs.String("format", "md", "Import format: md, json")
+	source := fs.String("source", "", "Source path (directory for md, file for json) (required)")
 	fs.Parse(os.Args[2:])
 
 	if *source == "" {
 		log.Fatalf("--source is required")
 	}
 
-	count, err := exportpkg.ImportMarkdown(ctx, database, *source)
-	if err != nil {
-		log.Fatalf("import: %v", err)
+	switch *format {
+	case "md", "markdown":
+		count, err := exportpkg.ImportMarkdown(ctx, database, *source)
+		if err != nil {
+			log.Fatalf("import: %v", err)
+		}
+		fmt.Printf("Imported %d observations from %s\n", count, *source)
+
+	case "json":
+		stats, err := exportpkg.ImportJSONWithStats(ctx, database, *source)
+		if err != nil {
+			log.Fatalf("import: %v", err)
+		}
+		fmt.Printf("Imported from %s:\n", *source)
+		fmt.Printf("  Observations:       %d\n", stats.Observations)
+		fmt.Printf("  Links:              %d\n", stats.Links)
+		fmt.Printf("  File observations:  %d\n", stats.FileObservations)
+		fmt.Printf("  Facts:              %d\n", stats.Facts)
+		fmt.Printf("  Temporal mentions:  %d\n", stats.TemporalMentions)
+		fmt.Printf("  Sessions:           %d\n", stats.Sessions)
+		fmt.Printf("  Reflections:        %d\n", stats.Reflections)
+		fmt.Printf("  Consolidation runs: %d\n", stats.ConsolidationRuns)
+
+	default:
+		log.Fatalf("unsupported format: %s (supported: md, json)", *format)
 	}
-	fmt.Printf("Imported %d observations from %s\n", count, *source)
+}
+
+func runBackup(ctx context.Context, database *sql.DB, cfg config.Config) {
+	fs := flag.NewFlagSet("backup", flag.ExitOnError)
+	output := fs.String("output", "", "Destination path (default: <db_path>.backup)")
+	fs.Parse(os.Args[2:])
+
+	dest := *output
+	if dest == "" {
+		dest = db.DefaultBackupPath(cfg.Database.Path)
+	}
+
+	result, err := db.BackupWithResult(ctx, database, dest)
+	if err != nil {
+		log.Fatalf("backup: %v", err)
+	}
+	fmt.Printf("Backup completed: %s (%d bytes)\n", result.Path, result.SizeBytes)
 }
 
 func runGraph(ctx context.Context, database *sql.DB) {
@@ -665,13 +1031,22 @@ func runMCP(ctx context.Context, database *sql.DB, cfg config.Config) {
 		Tracker:          d.tracker,
 	}
 
-	srv := neuroxmcp.NewServer(mcpDeps)
+	srv := neuroxmcp.NewServer(mcpDeps, version)
 	if err := mcpserver.ServeStdio(srv); err != nil {
 		log.Fatalf("mcp server error: %v", err)
 	}
 }
 
 func runHTTP(ctx context.Context, database *sql.DB, cfg config.Config) {
+	fs := flag.NewFlagSet("serve", flag.ExitOnError)
+	host := fs.String("host", "127.0.0.1", "Bind address (e.g. 0.0.0.0 for all interfaces)")
+	fs.Parse(os.Args[2:])
+
+	// Allow env var override: NEUROX_HTTP_HOST
+	if envHost := strings.TrimSpace(os.Getenv("NEUROX_HTTP_HOST")); envHost != "" {
+		*host = envHost
+	}
+
 	d := initDeps(ctx, database, cfg)
 
 	d.pipeline.Start(ctx)
@@ -680,19 +1055,69 @@ func runHTTP(ctx context.Context, database *sql.DB, cfg config.Config) {
 		defer d.embedQueue.Stop()
 	}
 
-	apiDeps := &api.Deps{
-		ObservationStore: d.obsStore,
-		RecallEngine:     d.recallEngine,
-		LinkStore:        d.linkStore,
-		DB:               database,
-		LLMProvider:      d.llmProvider.Name(),
-		EmbedProvider:    d.embedder.Name(),
-		GateMode:         string(d.llmGate.Mode()),
-		EmbedQueue:       d.embedQueue,
-		Tracker:          d.tracker,
+	// Async save queue: decouple HTTP handler from SQLite writes,
+	// mirroring the MCP save queue setup.
+	saveQueue := observation.NewSaveQueue(d.obsStore)
+	if d.llmGate != nil {
+		gate := d.llmGate
+		saveQueue.OnPreSave(func(ctx context.Context, obs observation.Observation) bool {
+			decision, _ := gate.SaveGateDecide(ctx, llm.SaveInput{
+				Title:           obs.Title,
+				Content:         obs.Content,
+				ObservationType: string(obs.ObservationType),
+			})
+			return decision != llm.SaveReject
+		})
+	}
+	if d.factExtractor != nil {
+		fe := d.factExtractor
+		saveQueue.OnPostSave(func(_ context.Context, saved observation.Observation) {
+			go fe.ExtractAndSave(context.Background(), saved.ID, saved.Title, saved.Content, saved.Namespace)
+		})
+	}
+	if d.embedQueue != nil {
+		eq := d.embedQueue
+		saveQueue.OnPostSave(func(_ context.Context, saved observation.Observation) {
+			eq.Enqueue(saved.ID)
+		})
+	}
+	saveQueue.Start(ctx)
+	defer saveQueue.Stop()
+
+	var curateEngine *curate.Engine
+	if llm.IsAvailable(d.curatorProvider) {
+		priorities, prErr := curate.LoadPriorities(cfg.Curator.PrioritiesFile)
+		if prErr != nil {
+			log.Printf("load priorities: %v (curation will work without priorities)", prErr)
+		}
+		curateEngine = curate.NewEngine(database, d.curatorProvider, priorities, cfg.Curator.RemoteModel)
 	}
 
-	srv := api.NewServer(api.Config{Port: defaultHTTPPort}, apiDeps)
+	apiDeps := &api.Deps{
+		ObservationStore:  d.obsStore,
+		SaveQueue:         saveQueue,
+		RecallEngine:      d.recallEngine,
+		LinkStore:         d.linkStore,
+		FactStore:         d.factStore,
+		FactExtractor:     d.factExtractor,
+		ReflectEngine:     d.reflectEngine,
+		SessionManager:    d.sessionManager,
+		ProactiveEngine:   d.proactiveEngine,
+		Pipeline:          d.pipeline,
+		CurateEngine:      curateEngine,
+		DB:                database,
+		LLMProvider:       d.llmProvider,
+		LLMGate:           d.llmGate,
+		EmbedQueue:        d.embedQueue,
+		Embedder:          d.embedder,
+		Tracker:           d.tracker,
+		LLMProviderName:   d.llmProvider.Name(),
+		EmbedProviderName: d.embedder.Name(),
+		GateMode:          string(d.llmGate.Mode()),
+		Version:           version,
+	}
+
+	srv := api.NewServer(api.Config{Host: *host, Port: defaultHTTPPort}, apiDeps)
 
 	go func() {
 		<-ctx.Done()
@@ -912,8 +1337,9 @@ func runUpdate() {
 	yes := fs.Bool("yes", false, "skip confirmation prompt")
 	fs.BoolVar(yes, "y", false, "skip confirmation prompt (shorthand)")
 	_ = fs.Parse(os.Args[2:])
-	// Step 2 will add internal/installer/updater.go; Step 3 will replace this with:
-	// installer.RunUpdate(version, *yes)
-	fmt.Fprintln(os.Stderr, "neurox update: not yet implemented (coming in next step)")
-	os.Exit(1)
+
+	if err := installer.RunUpdate(version, *yes); err != nil {
+		fmt.Fprintf(os.Stderr, "update failed: %v\n", err)
+		os.Exit(1)
+	}
 }

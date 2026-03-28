@@ -75,7 +75,10 @@ func buildSearchQuery(options SearchOptions, intent TemporalIntent) (string, []a
 				bm25(observations_fts, 2.0, 1.0, 0.5) AS relevance,
 				o.created_at,
 				o.last_accessed,
-				o.access_count
+				o.access_count,
+				o.source_surface,
+				o.source_session_id,
+				o.source_tool
 			FROM observations_fts
 			JOIN observations o ON o.rowid = observations_fts.rowid
 			WHERE ` + strings.Join(clauses, " AND ") + `
@@ -99,7 +102,10 @@ func buildSearchQuery(options SearchOptions, intent TemporalIntent) (string, []a
 			matched.relevance,
 			matched.created_at,
 			matched.last_accessed,
-			matched.access_count
+			matched.access_count,
+			matched.source_surface,
+			matched.source_session_id,
+			matched.source_tool
 		FROM matched
 		LEFT JOIN file_observations f_output
 			ON f_output.observation_id = matched.id

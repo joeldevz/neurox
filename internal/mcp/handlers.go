@@ -72,6 +72,15 @@ func (d *Deps) handleSave(ctx context.Context, req mcp.CallToolRequest) (result 
 		Kind:            observation.Kind(req.GetString("kind", "")),
 		TopicKey:        req.GetString("topic_key", ""),
 		Namespace:       req.GetString("namespace", ""),
+		SourceSurface:   "mcp",
+		SourceTool:      "save",
+	}
+
+	// Attach active session ID if available.
+	if d.SessionManager != nil {
+		if sid, err := d.activeSessionID(ctx, obs.Namespace); err == nil && sid != "" {
+			obs.SourceSessionID = sid
+		}
 	}
 
 	if args := req.GetArguments(); args != nil {
@@ -162,7 +171,7 @@ func (d *Deps) handleRecall(ctx context.Context, req mcp.CallToolRequest) (resul
 			d.Tracker.Record(telemetry.CallRecord{
 				ToolName:   "recall",
 				Namespace:  req.GetString("namespace", ""),
-				ParamsUsed: nonEmptyParams(req, "query", "observation_type", "kind", "namespace", "files", "include_stale", "limit"),
+				ParamsUsed: nonEmptyParams(req, "query", "observation_type", "kind", "namespace", "files", "include_stale", "limit", "debug"),
 				Success:    err == nil && (result == nil || !result.IsError),
 				DurationMs: time.Since(start).Milliseconds(),
 			})
@@ -193,6 +202,11 @@ func (d *Deps) handleRecall(ctx context.Context, req mcp.CallToolRequest) (resul
 				opts.Limit = int(f)
 			}
 		}
+		if v, ok := args["debug"]; ok {
+			if b, ok := v.(bool); ok {
+				opts.Debug = b
+			}
+		}
 	}
 
 	results, err := d.RecallEngine.Search(ctx, opts)
@@ -202,7 +216,7 @@ func (d *Deps) handleRecall(ctx context.Context, req mcp.CallToolRequest) (resul
 
 	items := make([]recallResponseItem, 0, len(results))
 	for _, r := range results {
-		items = append(items, recallResponseItem{
+		item := recallResponseItem{
 			ID:              r.ID,
 			Title:           r.Title,
 			Content:         r.Content,
@@ -215,7 +229,14 @@ func (d *Deps) handleRecall(ctx context.Context, req mcp.CallToolRequest) (resul
 			Staleness:       r.Staleness,
 			Retention:       r.Retention,
 			LinkedFiles:     r.LinkedFiles,
-		})
+			SourceSurface:   r.SourceSurface,
+			SourceSessionID: r.SourceSessionID,
+			SourceTool:      r.SourceTool,
+		}
+		if r.Breakdown != nil {
+			item.ScoreBreakdown = r.Breakdown
+		}
+		items = append(items, item)
 	}
 
 	resp := recallResponse{
@@ -271,7 +292,7 @@ func (d *Deps) handleContext(ctx context.Context, req mcp.CallToolRequest) (resu
 	}
 
 	// Fallback: simple query if proactive engine not available
-	query := "SELECT id, title, content, observation_type, layer, confidence, importance, kind, tags, staleness, created_at FROM observations WHERE deleted_at IS NULL AND namespace = ? AND valid_until IS NULL ORDER BY layer DESC, importance DESC, created_at DESC LIMIT ?"
+	query := "SELECT id, title, content, observation_type, layer, confidence, importance, kind, tags, staleness, source_surface, source_session_id, source_tool, created_at FROM observations WHERE deleted_at IS NULL AND namespace = ? AND valid_until IS NULL ORDER BY layer DESC, importance DESC, created_at DESC LIMIT ?"
 	args := []any{namespace, limit}
 
 	rows, err := d.DB.QueryContext(ctx, query, args...)
@@ -283,14 +304,17 @@ func (d *Deps) handleContext(ctx context.Context, req mcp.CallToolRequest) (resu
 	var items []contextResponseItem
 	for rows.Next() {
 		var item contextResponseItem
-		var tags sql.NullString
+		var tags, sourceSurface, sourceSessionID, sourceTool sql.NullString
 		var createdAt string
-		if err := rows.Scan(&item.ID, &item.Title, &item.Content, &item.ObservationType, &item.Layer, &item.Confidence, &item.Importance, &item.Kind, &tags, &item.Staleness, &createdAt); err != nil {
+		if err := rows.Scan(&item.ID, &item.Title, &item.Content, &item.ObservationType, &item.Layer, &item.Confidence, &item.Importance, &item.Kind, &tags, &item.Staleness, &sourceSurface, &sourceSessionID, &sourceTool, &createdAt); err != nil {
 			return mcp.NewToolResultError(fmt.Sprintf("scan context row: %v", err)), nil
 		}
 		if tags.Valid {
 			item.Tags = observation.ParseTags(tags.String)
 		}
+		item.SourceSurface = sourceSurface.String
+		item.SourceSessionID = sourceSessionID.String
+		item.SourceTool = sourceTool.String
 		item.CreatedAt = createdAt
 		items = append(items, item)
 	}
@@ -420,6 +444,8 @@ func (d *Deps) handleInvalidate(ctx context.Context, req mcp.CallToolRequest) (r
 		Reason:             req.GetString("reason", ""),
 		ReplacementTitle:   req.GetString("replacement_title", ""),
 		ReplacementContent: req.GetString("replacement_content", ""),
+		SourceSurface:      "mcp",
+		SourceTool:         "invalidate",
 	}
 
 	invResult, invErr := d.ObservationStore.Invalidate(ctx, d.LinkStore, input)
@@ -616,16 +642,21 @@ func (d *Deps) handleSessionEnd(ctx context.Context, req mcp.CallToolRequest) (r
 	}
 
 	if d.SessionManager != nil {
-		endResult, endErr := d.SessionManager.End(ctx, sessionID, summary)
+		endResult, endErr := d.SessionManager.End(ctx, sessionID, summary, "mcp")
 		if endErr != nil {
 			return mcp.NewToolResultError(fmt.Sprintf("end session failed: %v", endErr)), nil
 		}
 
-		return toolResultJSON(map[string]any{
+		resp := map[string]any{
 			"session_id":             endResult.SessionID,
 			"observations_extracted": endResult.ObservationsExtracted,
 			"message":                "session completed",
-		})
+		}
+		if endResult.Warning != "" {
+			resp["warning"] = endResult.Warning
+		}
+
+		return toolResultJSON(resp)
 	}
 
 	// Fallback
@@ -877,6 +908,58 @@ func (d *Deps) handleHealthCheck(ctx context.Context, req mcp.CallToolRequest) (
 	return toolResultJSON(report)
 }
 
+func (d *Deps) handleBackup(ctx context.Context, req mcp.CallToolRequest) (result *mcp.CallToolResult, err error) {
+	start := time.Now()
+	defer func() {
+		if d.Tracker != nil {
+			d.Tracker.Record(telemetry.CallRecord{
+				ToolName:   "backup",
+				ParamsUsed: nonEmptyParams(req, "output"),
+				Success:    err == nil && (result == nil || !result.IsError),
+				DurationMs: time.Since(start).Milliseconds(),
+			})
+		}
+	}()
+
+	output := req.GetString("output", "")
+	if output == "" {
+		output = db.DefaultBackupPath(d.dbPath())
+	}
+
+	backupResult, backupErr := db.BackupWithResult(ctx, d.DB, output)
+	if backupErr != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("backup failed: %v", backupErr)), nil
+	}
+
+	return toolResultJSON(backupResult)
+}
+
+// dbPath returns the file path of the database by querying PRAGMA database_list.
+func (d *Deps) dbPath() string {
+	var seq int
+	var name, file string
+	if err := d.DB.QueryRow("PRAGMA database_list").Scan(&seq, &name, &file); err != nil {
+		return ""
+	}
+	return file
+}
+
+// activeSessionID returns the ID of the active session for the given namespace.
+// Returns ("", nil) if no active session exists or if the query fails.
+func (d *Deps) activeSessionID(ctx context.Context, namespace string) (string, error) {
+	if namespace == "" {
+		namespace = "default"
+	}
+	var id string
+	err := d.DB.QueryRowContext(ctx,
+		"SELECT id FROM sessions WHERE status = 'active' AND namespace = ? ORDER BY started_at DESC LIMIT 1",
+		namespace).Scan(&id)
+	if err != nil {
+		return "", err
+	}
+	return id, nil
+}
+
 // helpers
 
 // nonEmptyParams returns the names of request arguments that are present and non-empty.
@@ -948,18 +1031,22 @@ type recallResponse struct {
 }
 
 type recallResponseItem struct {
-	ID              string   `json:"id"`
-	Title           string   `json:"title"`
-	Content         string   `json:"content"`
-	Score           float64  `json:"score"`
-	Layer           int      `json:"layer"`
-	ObservationType string   `json:"observation_type"`
-	Kind            string   `json:"kind"`
-	Confidence      float64  `json:"confidence"`
-	Tags            []string `json:"tags,omitempty"`
-	Staleness       string   `json:"staleness"`
-	Retention       string   `json:"retention"`
-	LinkedFiles     []string `json:"linked_files,omitempty"`
+	ID              string                 `json:"id"`
+	Title           string                 `json:"title"`
+	Content         string                 `json:"content"`
+	Score           float64                `json:"score"`
+	Layer           int                    `json:"layer"`
+	ObservationType string                 `json:"observation_type"`
+	Kind            string                 `json:"kind"`
+	Confidence      float64                `json:"confidence"`
+	Tags            []string               `json:"tags,omitempty"`
+	Staleness       string                 `json:"staleness"`
+	Retention       string                 `json:"retention"`
+	LinkedFiles     []string               `json:"linked_files,omitempty"`
+	SourceSurface   string                 `json:"source_surface,omitempty"`
+	SourceSessionID string                 `json:"source_session_id,omitempty"`
+	SourceTool      string                 `json:"source_tool,omitempty"`
+	ScoreBreakdown  *recall.ScoreBreakdown `json:"score_breakdown,omitempty"`
 }
 
 type contextResponse struct {
@@ -979,6 +1066,9 @@ type contextResponseItem struct {
 	Kind            string   `json:"kind"`
 	Tags            []string `json:"tags,omitempty"`
 	Staleness       string   `json:"staleness"`
+	SourceSurface   string   `json:"source_surface,omitempty"`
+	SourceSessionID string   `json:"source_session_id,omitempty"`
+	SourceTool      string   `json:"source_tool,omitempty"`
 	CreatedAt       string   `json:"created_at"`
 }
 

@@ -69,6 +69,9 @@ type Observation struct {
 	Source                string
 	TopicKey              string
 	Retention             Retention
+	SourceSurface         string
+	SourceSessionID       string
+	SourceTool            string
 	Files                 []string
 	CreatedAt             time.Time
 	UpdatedAt             time.Time

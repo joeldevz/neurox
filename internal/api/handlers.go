@@ -1,24 +1,46 @@
 package api
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
-
 	"time"
 
 	"github.com/joeldevz/neurox/internal/classify"
+	"github.com/joeldevz/neurox/internal/db"
 	"github.com/joeldevz/neurox/internal/graph"
 	"github.com/joeldevz/neurox/internal/health"
+	"github.com/joeldevz/neurox/internal/llm"
 	"github.com/joeldevz/neurox/internal/observation"
 	"github.com/joeldevz/neurox/internal/recall"
 )
 
 func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func (s *Server) handleServerCard(w http.ResponseWriter, _ *http.Request) {
+	card := map[string]any{
+		"name":        "neurox",
+		"description": "Brain-inspired memory engine for AI coding agents",
+		"version":     s.deps.Version,
+		"homepage":    "https://github.com/joeldevz/neurox",
+		"repository":  "https://github.com/joeldevz/neurox",
+		"transport": map[string]any{
+			"stdio": map[string]any{
+				"command": "neurox",
+				"args":    []string{"mcp"},
+			},
+		},
+		"tools": []string{"save", "recall", "context", "update", "forget", "invalidate", "status", "session_start", "session_end", "git_hook", "reflect", "consolidate", "health_check", "curate", "backup"},
+		"tags":  []string{"memory", "coding-agents", "temporal", "sqlite", "local-first"},
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(card)
 }
 
 func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
@@ -45,7 +67,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		"total": total, "buffer": buffer, "working": working, "core": core,
 		"stale": stale, "expired": expired, "links": linkCount, "active_sessions": sessions,
 		"facts": factCount, "temporal_mentions": temporalCount,
-		"llm_provider": s.deps.LLMProvider, "embedding_provider": s.deps.EmbedProvider,
+		"llm_provider": s.deps.LLMProviderName, "embedding_provider": s.deps.EmbedProviderName,
 		"gate_mode":          s.deps.GateMode,
 		"embeddings_total":   embeddingsTotal,
 		"embeddings_pending": embeddingsPending,
@@ -79,6 +101,8 @@ func (s *Server) handleSave(w http.ResponseWriter, r *http.Request) {
 		Tags:            req.Tags,
 		Files:           req.Files,
 		Namespace:       req.Namespace,
+		SourceSurface:   "http",
+		SourceTool:      "save",
 	}
 
 	// Retention: use explicit value if provided, otherwise auto-classify.
@@ -88,12 +112,57 @@ func (s *Server) handleSave(w http.ResponseWriter, r *http.Request) {
 		obs.Retention = classify.InferRetention(obs.Title, obs.ObservationType, obs.Source)
 	}
 
+	// Fast path: enqueue and return immediately so the HTTP client never
+	// blocks on SQLite writes or LLM gate calls.  The SaveQueue's PreSave
+	// hooks (LLM gate) and PostSave hooks (fact extraction + embed enqueue)
+	// run in the background worker — same flow as MCP handleSave.
+	if s.deps.SaveQueue != nil {
+		result, qErr := s.deps.SaveQueue.Enqueue(r.Context(), obs)
+		if qErr != nil {
+			writeError(w, http.StatusBadRequest, fmt.Sprintf("save failed: %v", qErr))
+			return
+		}
+		writeJSON(w, http.StatusCreated, map[string]any{
+			"id":        result.ID,
+			"title":     result.Title,
+			"layer":     0,
+			"namespace": result.Namespace,
+			"topic_key": result.TopicKey,
+			"message":   "observation queued for persistence",
+		})
+		return
+	}
+
+	// Fallback: synchronous write (no queue configured).
+
+	// Quality gate: check if worth saving (only in sync path, mirrors MCP).
+	if s.deps.LLMGate != nil {
+		decision, _ := s.deps.LLMGate.SaveGateDecide(r.Context(), llm.SaveInput{
+			Title:           obs.Title,
+			Content:         obs.Content,
+			ObservationType: string(obs.ObservationType),
+		})
+		if decision == llm.SaveReject {
+			writeJSON(w, http.StatusOK, map[string]string{
+				"message": "observation rejected by quality gate (not worth persisting)",
+				"title":   obs.Title,
+			})
+			return
+		}
+	}
+
 	saved, err := s.deps.ObservationStore.Save(r.Context(), obs)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
+	// Extract facts in background if LLM available (mirrors MCP sync path).
+	if s.deps.FactExtractor != nil {
+		go s.deps.FactExtractor.ExtractAndSave(context.Background(), saved.ID, saved.Title, saved.Content, saved.Namespace)
+	}
+
+	// Enqueue for embedding.
 	if s.deps.EmbedQueue != nil {
 		s.deps.EmbedQueue.Enqueue(saved.ID)
 	}
@@ -109,6 +178,8 @@ func (s *Server) handleRecall(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	debug := q.Get("debug") == "true"
+
 	opts := recall.SearchOptions{
 		Query:           query,
 		ObservationType: observation.ObservationType(q.Get("type")),
@@ -116,6 +187,7 @@ func (s *Server) handleRecall(w http.ResponseWriter, r *http.Request) {
 		Namespace:       q.Get("namespace"),
 		Staleness:       q.Get("staleness"),
 		IncludeStale:    q.Get("include_stale") == "true",
+		Debug:           debug,
 	}
 
 	if files := q.Get("files"); files != "" {
@@ -135,14 +207,18 @@ func (s *Server) handleRecall(w http.ResponseWriter, r *http.Request) {
 
 	items := make([]map[string]any, 0, len(results))
 	for _, res := range results {
-		items = append(items, map[string]any{
+		item := map[string]any{
 			"id": res.ID, "title": res.Title, "content": res.Content,
 			"score": res.Score, "layer": res.Layer,
 			"observation_type": res.ObservationType, "kind": res.Kind,
 			"confidence": res.Confidence, "tags": res.Tags,
 			"staleness": res.Staleness, "linked_files": res.LinkedFiles,
 			"retention": res.Retention,
-		})
+		}
+		if res.Breakdown != nil {
+			item["score_breakdown"] = res.Breakdown
+		}
+		items = append(items, item)
 	}
 
 	resp := map[string]any{
@@ -169,13 +245,37 @@ func (s *Server) handleContext(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	var files []string
+	if f := q.Get("files"); f != "" {
+		files = splitCSV(f)
+	}
+
+	// Use ProactiveEngine when available (same as MCP handleContext).
+	if s.deps.ProactiveEngine != nil {
+		result, err := s.deps.ProactiveEngine.GetContext(r.Context(), namespace, files, limit)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		resp := map[string]any{
+			"namespace": result.Namespace,
+			"count":     result.Count,
+			"items":     result.Items,
+		}
+		if len(result.Reflections) > 0 {
+			resp["reflections"] = result.Reflections
+		}
+		writeJSON(w, http.StatusOK, resp)
+		return
+	}
+
+	// Fallback: raw SQL if ProactiveEngine is not available.
 	query := "SELECT id, title, content, observation_type, layer, confidence, importance, kind, staleness, created_at FROM observations WHERE deleted_at IS NULL AND namespace = ?"
 	args := []any{namespace}
 
-	if files := q.Get("files"); files != "" {
-		fileList := splitCSV(files)
-		placeholders := make([]string, len(fileList))
-		for i, f := range fileList {
+	if len(files) > 0 {
+		placeholders := make([]string, len(files))
+		for i, f := range files {
 			placeholders[i] = "?"
 			args = append(args, f)
 		}
@@ -313,6 +413,8 @@ func (s *Server) handleInvalidate(w http.ResponseWriter, r *http.Request) {
 		Reason:             req.Reason,
 		ReplacementTitle:   req.ReplacementTitle,
 		ReplacementContent: req.ReplacementContent,
+		SourceSurface:      "http",
+		SourceTool:         "invalidate",
 	})
 	if err != nil {
 		if err == sql.ErrNoRows {
@@ -348,6 +450,38 @@ func (s *Server) handleSessionStart(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
+
+	if s.deps.SessionManager != nil {
+		startResult, err := s.deps.SessionManager.Start(ctx, req.Title, req.Directory, req.Branch, namespace)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, fmt.Sprintf("start session failed: %v", err))
+			return
+		}
+
+		resp := map[string]any{
+			"session_id": startResult.SessionID,
+			"namespace":  startResult.Namespace,
+			"abandoned":  startResult.Abandoned,
+			"message":    "session started",
+		}
+
+		// Get proactive context for this session
+		if s.deps.ProactiveEngine != nil {
+			cr, err := s.deps.ProactiveEngine.GetSessionContext(ctx, namespace, req.Title, req.Directory, req.Branch, 15)
+			if err == nil && cr.Count > 0 {
+				resp["context"] = cr.Items
+				resp["context_count"] = cr.Count
+				if len(cr.Reflections) > 0 {
+					resp["reflections"] = cr.Reflections
+				}
+			}
+		}
+
+		writeJSON(w, http.StatusCreated, resp)
+		return
+	}
+
+	// Fallback without session manager (raw SQL)
 	s.deps.DB.ExecContext(ctx, `
 		UPDATE sessions SET status = 'abandoned', ended_at = datetime('now')
 		WHERE status = 'active' AND namespace = ?
@@ -383,6 +517,27 @@ func (s *Server) handleSessionEnd(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if s.deps.SessionManager != nil {
+		endResult, err := s.deps.SessionManager.End(r.Context(), id, req.Summary, "http")
+		if err != nil {
+			writeError(w, http.StatusBadRequest, fmt.Sprintf("end session failed: %v", err))
+			return
+		}
+
+		resp := map[string]any{
+			"session_id":             endResult.SessionID,
+			"observations_extracted": endResult.ObservationsExtracted,
+			"message":                "session completed",
+		}
+		if endResult.Warning != "" {
+			resp["warning"] = endResult.Warning
+		}
+
+		writeJSON(w, http.StatusOK, resp)
+		return
+	}
+
+	// Fallback without session manager (raw SQL)
 	result, err := s.deps.DB.ExecContext(r.Context(), `
 		UPDATE sessions SET status = 'completed', summary = ?, ended_at = datetime('now')
 		WHERE id = ? AND status = 'active'
@@ -681,10 +836,95 @@ func (s *Server) handleGraph(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (s *Server) handleReflect(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]string{
-		"message": "reflection requires LLM provider (not yet implemented)",
+func (s *Server) handleReflect(w http.ResponseWriter, r *http.Request) {
+	if s.deps.ReflectEngine == nil {
+		writeError(w, http.StatusNotImplemented, "reflection engine not configured")
+		return
+	}
+
+	var req struct {
+		Namespace string `json:"namespace"`
+	}
+	// Accept optional JSON body; if empty or invalid, use defaults.
+	_ = json.NewDecoder(r.Body).Decode(&req)
+
+	namespace := req.Namespace
+	if namespace == "" {
+		namespace = r.URL.Query().Get("namespace")
+	}
+	if namespace == "" {
+		namespace = "default"
+	}
+
+	result, err := s.deps.ReflectEngine.ForceReflect(r.Context(), namespace)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("reflection failed: %v", err))
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"namespace":           namespace,
+		"source_observations": result.SourceCount,
+		"reflections_created": result.ReflectionsCreated,
+		"message":             "reflection completed",
 	})
+}
+
+func (s *Server) handleConsolidate(w http.ResponseWriter, r *http.Request) {
+	if s.deps.Pipeline == nil {
+		writeError(w, http.StatusNotImplemented, "consolidation pipeline not available")
+		return
+	}
+
+	if err := s.deps.Pipeline.ForceRun(r.Context()); err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("consolidation failed: %v", err))
+		return
+	}
+
+	// Run a passive WAL checkpoint after consolidation to keep the WAL file
+	// small and prevent write contention when multiple instances share the DB.
+	_, _ = db.WALCheckpoint(r.Context(), s.deps.DB)
+
+	ctx := r.Context()
+	var buffer, working, core int
+	s.deps.DB.QueryRowContext(ctx, "SELECT COUNT(*) FROM observations WHERE deleted_at IS NULL AND layer = 0").Scan(&buffer)
+	s.deps.DB.QueryRowContext(ctx, "SELECT COUNT(*) FROM observations WHERE deleted_at IS NULL AND layer = 1").Scan(&working)
+	s.deps.DB.QueryRowContext(ctx, "SELECT COUNT(*) FROM observations WHERE deleted_at IS NULL AND layer = 2").Scan(&core)
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"message": "consolidation completed",
+		"buffer":  buffer,
+		"working": working,
+		"core":    core,
+	})
+}
+
+func (s *Server) handleCurate(w http.ResponseWriter, r *http.Request) {
+	if s.deps.CurateEngine == nil {
+		writeError(w, http.StatusNotImplemented, "curator not configured; set curator.provider, curator.remote_url, curator.remote_api_key, and curator.remote_model in config.yaml")
+		return
+	}
+
+	q := r.URL.Query()
+	namespace := q.Get("namespace")
+	dryRun := q.Get("dry_run") == "true"
+
+	if namespace != "" {
+		report, err := s.deps.CurateEngine.CurateNamespace(r.Context(), namespace, dryRun)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, fmt.Sprintf("curate namespace %q: %v", namespace, err))
+			return
+		}
+		writeJSON(w, http.StatusOK, report)
+		return
+	}
+
+	report, err := s.deps.CurateEngine.CurateAll(r.Context(), dryRun)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("curate all: %v", err))
+		return
+	}
+	writeJSON(w, http.StatusOK, report)
 }
 
 func (s *Server) handleDecayTimeline(w http.ResponseWriter, r *http.Request) {
@@ -817,6 +1057,31 @@ func (s *Server) handleActivity(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (s *Server) handleBackup(w http.ResponseWriter, r *http.Request) {
+	output := r.URL.Query().Get("output")
+	if output == "" {
+		output = db.DefaultBackupPath(s.dbPath())
+	}
+
+	result, err := db.BackupWithResult(r.Context(), s.deps.DB, output)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("backup failed: %v", err))
+		return
+	}
+
+	writeJSON(w, http.StatusOK, result)
+}
+
+// dbPath returns the file path of the database by querying PRAGMA database_list.
+func (s *Server) dbPath() string {
+	var seq int
+	var name, file string
+	if err := s.deps.DB.QueryRow("PRAGMA database_list").Scan(&seq, &name, &file); err != nil {
+		return ""
+	}
+	return file
+}
+
 func (s *Server) handleHealthCheck(w http.ResponseWriter, r *http.Request) {
 	days := 7
 	if d := r.URL.Query().Get("days"); d != "" {
@@ -826,8 +1091,8 @@ func (s *Server) handleHealthCheck(w http.ResponseWriter, r *http.Request) {
 	}
 	hdeps := health.Deps{
 		DB:              s.deps.DB,
-		EmbedderName:    s.deps.EmbedProvider,
-		LLMProviderName: s.deps.LLMProvider,
+		EmbedderName:    s.deps.EmbedProviderName,
+		LLMProviderName: s.deps.LLMProviderName,
 		Tracker:         s.deps.Tracker,
 		UsageDays:       days,
 	}

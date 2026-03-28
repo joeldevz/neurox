@@ -1,11 +1,10 @@
 <p align="center">
-  <!-- <img src="assets/neurox-banner.png" alt="Neurox" width="800"> -->
   <h1 align="center">Neurox</h1>
   <p align="center">
     <strong>Motor de memoria inspirado en el cerebro para agentes de IA</strong>
   </p>
   <p align="center">
-    Memoria en tres capas &bull; Busqueda hibrida &bull; Razonamiento temporal &bull; Decaimiento Ebbinghaus &bull; Pipelines de consolidacion
+    Memoria en tres capas &bull; Busqueda hibrida &bull; Razonamiento temporal &bull; Decaimiento por activacion &bull; Pipelines de consolidacion
   </p>
   <p align="center">
     <a href="#resultados-del-benchmark">98% Recall en LongMemEval</a> &bull;
@@ -82,12 +81,13 @@ Inspirado en los sistemas de memoria humana, Neurox organiza el conocimiento en 
  |  filtrar           |         |                    |         |  Alta confianza    |
  |                    |         |                    |         |                    |
  |  Capacidad: 200    |         |  Dedup + Reflexion |         |  Permanente        |
- |  Decay: rapido     |         |  Decay: moderado   |         |  Decay: lento      |
+ |  Decay: rapido     |         |  Decay: moderado   |         |  Decay: ninguno    |
  +-------------------+         +-------------------+         +-------------------+
          |                              |                              |
          +------------------------------+------------------------------+
                                         |
-                              Decay de Ebbinghaus
+                              Decay por Activacion
+                     (half-life exponencial para scoring, lineal para reduccion periodica de activacion)
                      (episodico: rapido, semantico: medio, procedural: lento)
 ```
 
@@ -148,18 +148,20 @@ Score = (Recencia x 0.3) + (Importancia x 0.3) + (Relevancia x 0.4)
 
 | Senal | Fuente | Que captura |
 |---|---|---|
-| **Relevancia** | FTS5 BM25 + coseno semantico | Que tan bien matchea el contenido con la query |
+| **Relevancia** | FTS5 BM25 (requerido) + coseno semantico (reranker) | Que tan bien matchea el contenido con la query |
 | **Recencia** | Curva de decay Ebbinghaus (half-life 30 dias) | Que tan reciente fue creado o accedido |
 | **Importancia** | Peso inicial + boosts por acceso | Que tan valioso es el recuerdo |
 | **Temporal** | Deteccion de intent + matching de menciones | Si este recuerdo encaja en el contexto temporal |
 | **Cross-signal** | Overlap FTS n Semantico | Boost de confianza cuando ambos metodos coinciden |
+
+> FTS5 provee el set inicial de candidatos — cada resultado debe matchear el indice de texto. La similitud semantica luego re-rankea los candidatos, boosteando aquellos donde la similitud coseno del embedding supera el score de relevancia FTS.
 
 ## Pipeline de Consolidacion
 
 Se ejecuta automaticamente cada 30 minutos (o bajo demanda con la tool `consolidate`):
 
 ```
- 1. Decay         Aplicar curvas de Ebbinghaus a todas las observaciones
+ 1. Decay         Aplicar decay de activacion a observaciones (tasas por kind)
        |
  2. Retry         Re-evaluar observaciones previamente rechazadas (sistema 3-strikes)
        |
@@ -306,6 +308,8 @@ Nota: el ejecutable resultante es portable, pero no totalmente estatico; con SQL
 ./neurox serve  # localhost:7438
 ```
 
+El servidor HTTP se enlaza a `127.0.0.1` (solo localhost) por defecto. Para permitir acceso de red (ej. para dashboard remoto), usa `neurox serve --host 0.0.0.0` o define `NEUROX_HTTP_HOST=0.0.0.0`.
+
 El hook `post-commit` envia eventos al servidor HTTP en `POST /api/v1/hooks/git`. El puerto por defecto del hook es `7438`; si tu servidor escucha en otro puerto, define `NEUROX_PORT` antes de instalar o ejecutar el hook.
 
 ### CLI
@@ -347,6 +351,12 @@ neurox benchmark --scale medium --output report.json
 neurox curate --namespace miproyecto --dry-run
 neurox curate --namespace miproyecto
 
+# Auditar el ciclo de vida completo de una observacion
+neurox audit 01KM60RSD27Y1Y4Y54ACTVQAEW
+
+# Buscar con desglose de scoring (modo debug)
+neurox recall "autenticacion" --namespace miproyecto --debug
+
 # Re-embeddear tras cambio de modelo de embeddings
 neurox reembed
 ```
@@ -358,12 +368,13 @@ La mayoria de los comandos CLI imprimen JSON, asi que se integran bien con scrip
 | Comando | Que hace | Flags utiles |
 |---|---|---|
 | `neurox mcp` | Inicia el servidor MCP por stdio | ninguna |
-| `neurox serve` | Inicia el servidor HTTP en el puerto `7438` | ninguna |
+| `neurox serve` | Inicia el servidor HTTP en el puerto `7438` | `--host` |
 | `neurox save "title"` | Guarda una observacion en Buffer | `--content`, `--type`, `--kind`, `--confidence`, `--topic-key`, `--tags`, `--files`, `--namespace` |
-| `neurox recall "query"` | Busca memoria con ranking temporal-aware | `--type`, `--kind`, `--namespace`, `--files`, `--include-stale`, `--limit` |
+| `neurox recall "query"` | Busca memoria con ranking temporal-aware | `--type`, `--kind`, `--namespace`, `--files`, `--include-stale`, `--limit`, `--debug` |
 | `neurox context` | Devuelve contexto proactivo por namespace o archivos | `--namespace`, `--files`, `--limit` |
 | `neurox invalidate <id>` | Marca una observacion como incorrecta y puede crear reemplazo | `--reason`, `--replacement-title`, `--replacement-content` |
 | `neurox status` | Muestra stats del cerebro, providers y DB | ninguna |
+| `neurox audit <id>` | Muestra el ciclo de vida completo de una observacion: creacion, provenance, links, staleness, menciones temporales | ninguna |
 | `neurox consolidate` | Fuerza un ciclo completo de consolidacion | ninguna |
 | `neurox graph` | Genera una vista HTML interactiva del grafo | `--namespace`, `--type`, `--tags`, `--min-importance`, `--limit`, `--linked-only`, `--output`, `--no-browser` |
 | `neurox config` | Imprime la configuracion resuelta en runtime | ninguna |
@@ -377,7 +388,9 @@ La mayoria de los comandos CLI imprimen JSON, asi que se integran bien con scrip
 
 ### Notas CLI
 
-- `save`, `recall`, `context`, `invalidate`, `status` y `config` devuelven JSON por stdout.
+- `save`, `recall`, `context`, `invalidate`, `status`, `audit` y `config` devuelven JSON por stdout.
+- `recall --debug` incluye un `score_breakdown` por resultado mostrando como cada senal de scoring contribuyo.
+- `audit <id>` muestra creacion, provenance, promociones de capa, links, eventos de staleness, menciones temporales y estado actual.
 - `graph` escribe `neurox-graph.html` por defecto y abre el navegador salvo que uses `--no-browser`.
 - `install-hook` no sobreescribe un hook existente; elimina `.git/hooks/post-commit` primero si quieres reemplazarlo.
 - `curate` requiere un curator provider configurado (ver Configuracion).
@@ -454,7 +467,7 @@ neurox serve  # API REST en puerto 7438
 | Tool | Inputs clave |
 |---|---|
 | `save` | `title`, `content`, `observation_type`, `kind`, `confidence`, `topic_key`, `tags`, `files`, `namespace`, `retention` |
-| `recall` | `query`, `observation_type`, `kind`, `namespace`, `files`, `include_stale`, `limit` |
+| `recall` | `query`, `observation_type`, `kind`, `namespace`, `files`, `include_stale`, `limit`, `debug` |
 | `context` | `namespace`, `files`, `limit` |
 | `update` | `id`, `title`, `content`, `observation_type`, `kind`, `confidence`, `tags`, `files`, `retention` |
 | `forget` | `id` |
@@ -467,6 +480,34 @@ neurox serve  # API REST en puerto 7438
 | `consolidate` | sin inputs |
 | `health_check` | `days` |
 | `curate` | `namespace`, `dry_run` |
+
+### Campos de respuesta MCP
+
+**Campos de provenance** — cada observacion devuelta por `save`, `recall` y `context` incluye metadatos de provenance:
+
+| Campo | Descripcion | Valores de ejemplo |
+|---|---|---|
+| `source_surface` | Superficie que creo la observacion | `mcp`, `http`, `cli`, `consolidator` |
+| `source_session_id` | ID de sesion al momento de creacion (si existe) | `01KM...` o vacio |
+| `source_tool` | Herramienta/operacion que la creo | `save`, `invalidate`, `session_end`, `reflect`, `curate`, `consolidate` |
+
+**Modo debug** — pasa `debug: true` a `recall` para obtener un objeto `score_breakdown` por resultado:
+
+```json
+{
+  "score_breakdown": {
+    "recency": 0.85,
+    "importance": 0.70,
+    "relevance": 0.92,
+    "semantic_score": 0.88,
+    "temporal_multiplier": 1.2,
+    "cross_signal_boost": 1.0,
+    "final_score": 0.83
+  }
+}
+```
+
+Sin `debug: true`, las respuestas no cambian (sin breaking change).
 
 La superficie MCP es la mejor opcion para agentes de codigo; la CLI y la API HTTP exponen el mismo motor para scripts locales, dashboards y debugging.
 
@@ -492,13 +533,15 @@ PUT    /api/v1/sessions/{id}/end            Terminar sesion
 POST   /api/v1/hooks/git                    Git hook
 GET    /api/v1/graph                        Vista interactiva del grafo (o JSON con ?format=json)
 POST   /api/v1/reflect                      Disparar reflexion
+POST   /api/v1/consolidate                   Forzar ciclo completo de consolidacion
+POST   /api/v1/curate                        Curacion profunda (opcional ?namespace=X&dry_run=true)
 ```
 
 ### Query Params REST
 
 | Ruta | Query params soportados |
 |---|---|
-| `GET /api/v1/observations/search` | `q`, `type`, `kind`, `namespace`, `files`, `staleness`, `include_stale`, `limit` |
+| `GET /api/v1/observations/search` | `q`, `type`, `kind`, `namespace`, `files`, `staleness`, `include_stale`, `limit`, `debug` |
 | `GET /api/v1/observations/context` | `namespace`, `files`, `limit` |
 | `GET /api/v1/observations/browse` | `limit`, `offset`, `type`, `layer`, `namespace`, `kind`, `staleness` |
 | `GET /api/v1/graph` | `namespace`, `type`, `tags`, `min_importance`, `limit`, `linked_only`, `format=json` |
@@ -531,7 +574,7 @@ POST /api/v1/hooks/git
 }
 ```
 
-`POST /api/v1/reflect` hoy devuelve una respuesta placeholder; la sintesis reflectiva completa esta mejor expuesta via MCP y el motor interno, mientras que la entrada REST sigue minima.
+`POST /api/v1/reflect` dispara una reflexion real sobre las observaciones de capa Working en el namespace indicado.
 
 ## Configuracion
 
@@ -590,6 +633,7 @@ Overrides comunes:
 | `NEUROX_CONFIG_DIR` | Cambia el directorio de configuracion por defecto |
 | `NEUROX_CONFIG_PATH` | Carga config desde otro YAML |
 | `NEUROX_DATABASE_PATH` | Apunta a otra base SQLite |
+| `NEUROX_HTTP_HOST` | Direccion de enlace del servidor HTTP (default: `127.0.0.1`) |
 | `NEUROX_LLM_PROVIDER` | Define `ollama`, `remote` o vacio para auto-detect |
 | `NEUROX_LLM_GATE_MODE` | Define `auto`, `full` u `off` |
 | `NEUROX_LLM_OLLAMA_URL` / `NEUROX_LLM_OLLAMA_MODEL` | Override del endpoint/modelo Ollama para LLM |
@@ -641,7 +685,7 @@ neurox/
 |   +-- contradiction/         Deteccion de conflictos + supersesion temporal
 |   +-- curate/                Curacion profunda de memoria con LLM externo
 |   +-- db/                    Schema SQLite, migraciones, modo WAL
-|   +-- decay/                 Curvas de Ebbinghaus, garbage collection
+|   +-- decay/                 Decay por activacion, garbage collection
 |   +-- embed/                 Embeddings Ollama + compatible OpenAI
 |   +-- export/                Exportacion e importacion Markdown
 |   +-- facts/                 Tripletas de conocimiento, extraccion LLM
@@ -697,4 +741,8 @@ neurox/
 
 ## Licencia
 
-MIT
+[BSL 1.1](LICENSE) (Business Source License 1.1)
+
+Puedes usar, modificar y distribuir Neurox para cualquier proposito **excepto** ofrecerlo como un servicio comercial hospedado que compita con las ofertas pagas del Licenciante. El **2030-03-28**, la licencia se convierte automaticamente a **Apache 2.0**.
+
+Consulta el archivo [LICENSE](LICENSE) para el texto completo.

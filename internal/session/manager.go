@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"log"
 	"strings"
 
 	"github.com/joeldevz/neurox/internal/filelink"
@@ -13,10 +14,10 @@ import (
 
 // Manager handles session lifecycle with LLM-based extraction.
 type Manager struct {
-	db        *sql.DB
-	llm       llm.Provider
-	idGen     filelink.IDGenerator
-	temporal  *temporal.Extractor
+	db       *sql.DB
+	llm      llm.Provider
+	idGen    filelink.IDGenerator
+	temporal *temporal.Extractor
 }
 
 // NewManager creates a session manager.
@@ -68,13 +69,16 @@ func (m *Manager) Start(ctx context.Context, title, directory, branch, namespace
 
 // EndResult holds the result of ending a session.
 type EndResult struct {
-	SessionID            string
+	SessionID             string
 	ObservationsExtracted int
+	Warning               string
 }
 
 // End completes a session. If LLM is available, extracts atomic observations
 // from the summary. Otherwise, just saves the summary.
-func (m *Manager) End(ctx context.Context, sessionID, summary string) (EndResult, error) {
+// The surface parameter identifies the calling surface (e.g. "mcp", "http")
+// and is propagated as provenance on any extracted observations.
+func (m *Manager) End(ctx context.Context, sessionID, summary, surface string) (EndResult, error) {
 	if strings.TrimSpace(sessionID) == "" {
 		return EndResult{}, fmt.Errorf("session_id is required")
 	}
@@ -106,17 +110,20 @@ func (m *Manager) End(ctx context.Context, sessionID, summary string) (EndResult
 
 	// Extract atomic observations if LLM available
 	if llm.IsAvailable(m.llm) {
-		extracted, extractErr := m.extractObservations(ctx, summary, namespace)
+		extracted, extractErr := m.extractObservations(ctx, summary, namespace, sessionID, surface)
 		if extractErr == nil {
 			endResult.ObservationsExtracted = extracted
 		}
+	} else {
+		endResult.Warning = "no LLM configured — session summary was saved but observations were not extracted. Configure an LLM provider to enable automatic observation extraction."
+		log.Printf("[WARN] session_end %s: %s", sessionID, endResult.Warning)
 	}
 
 	return endResult, nil
 }
 
 // extractObservations uses LLM to extract atomic observations from a session summary.
-func (m *Manager) extractObservations(ctx context.Context, summary, namespace string) (int, error) {
+func (m *Manager) extractObservations(ctx context.Context, summary, namespace, sessionID, surface string) (int, error) {
 	prompt := fmt.Sprintf(`You are a memory extraction engine. From the following session summary, extract atomic observations — individual facts, decisions, discoveries, or patterns that are worth remembering.
 
 Session summary:
@@ -143,9 +150,9 @@ Output observations (one per line, pipe-separated):`, summary)
 	for _, obs := range observations {
 		id := m.idGen.New()
 		_, err := m.db.ExecContext(ctx, `
-			INSERT INTO observations(id, title, content, observation_type, layer, confidence, importance, kind, namespace, source)
-			VALUES(?, ?, ?, ?, 0, 0.6, 0.5, 'semantic', ?, 'consolidator')
-		`, id, obs.title, obs.content, obs.obsType, namespace)
+			INSERT INTO observations(id, title, content, observation_type, layer, confidence, importance, kind, namespace, source, source_surface, source_session_id, source_tool)
+			VALUES(?, ?, ?, ?, 0, 0.6, 0.5, 'semantic', ?, 'consolidator', ?, ?, 'session_end')
+		`, id, obs.title, obs.content, obs.obsType, namespace, nullStr(surface), nullStr(sessionID))
 		if err == nil {
 			saved++
 			// Best-effort temporal extraction — do not block on failure.

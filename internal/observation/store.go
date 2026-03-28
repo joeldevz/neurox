@@ -110,10 +110,13 @@ func (s *Store) Update(ctx context.Context, input Observation) (Observation, err
 		    importance = ?,
 		    activation_level = ?,
 		    consolidation_strength = ?,
+		    source_surface = ?,
+		    source_session_id = ?,
+		    source_tool = ?,
 		    updated_at = datetime('now'),
 		    modified_epoch = modified_epoch + 1
 		WHERE id = ? AND deleted_at IS NULL
-	`, input.Title, input.Content, input.ObservationType, input.Kind, input.Confidence, TagsValue(input.Tags), input.Namespace, nullableString(input.TopicKey), input.Layer, input.Retention, input.Importance, input.ActivationLevel, input.ConsolidationStrength, input.ID)
+	`, input.Title, input.Content, input.ObservationType, input.Kind, input.Confidence, TagsValue(input.Tags), input.Namespace, nullableString(input.TopicKey), input.Layer, input.Retention, input.Importance, input.ActivationLevel, input.ConsolidationStrength, nullableString(input.SourceSurface), nullableString(input.SourceSessionID), nullableString(input.SourceTool), input.ID)
 	if err != nil {
 		_ = tx.Rollback()
 		return Observation{}, fmt.Errorf("update observation: %w", err)
@@ -195,10 +198,12 @@ func (s *Store) saveTx(ctx context.Context, tx *sql.Tx, input Observation) (Obse
 	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO observations(
 			id, title, content, observation_type, layer, confidence, kind, tags, namespace, topic_key, retention,
-			importance, activation_level, consolidation_strength
-		) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			importance, activation_level, consolidation_strength,
+			source_surface, source_session_id, source_tool
+		) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`, input.ID, input.Title, input.Content, input.ObservationType, input.Layer, input.Confidence, input.Kind, TagsValue(input.Tags), input.Namespace, nullableString(input.TopicKey), input.Retention,
-		input.Importance, input.ActivationLevel, input.ConsolidationStrength); err != nil {
+		input.Importance, input.ActivationLevel, input.ConsolidationStrength,
+		nullableString(input.SourceSurface), nullableString(input.SourceSessionID), nullableString(input.SourceTool)); err != nil {
 		return Observation{}, fmt.Errorf("insert observation: %w", err)
 	}
 
@@ -227,10 +232,13 @@ func (s *Store) updateTx(ctx context.Context, tx *sql.Tx, input Observation) (Ob
 		    importance = ?,
 		    activation_level = ?,
 		    consolidation_strength = ?,
+		    source_surface = ?,
+		    source_session_id = ?,
+		    source_tool = ?,
 		    updated_at = datetime('now'),
 		    modified_epoch = modified_epoch + 1
 		WHERE id = ? AND deleted_at IS NULL
-	`, input.Title, input.Content, input.ObservationType, input.Kind, input.Confidence, TagsValue(input.Tags), input.Namespace, nullableString(input.TopicKey), LayerBuffer, input.Retention, input.Importance, input.ActivationLevel, input.ConsolidationStrength, input.ID)
+	`, input.Title, input.Content, input.ObservationType, input.Kind, input.Confidence, TagsValue(input.Tags), input.Namespace, nullableString(input.TopicKey), LayerBuffer, input.Retention, input.Importance, input.ActivationLevel, input.ConsolidationStrength, nullableString(input.SourceSurface), nullableString(input.SourceSessionID), nullableString(input.SourceTool), input.ID)
 	if err != nil {
 		return Observation{}, fmt.Errorf("upsert observation by topic_key: %w", err)
 	}
@@ -261,12 +269,15 @@ func (s *Store) getTx(ctx context.Context, querier rowQueryer, id string) (Obser
 	var tags sql.NullString
 	var source sql.NullString
 	var topicKey sql.NullString
+	var sourceSurface sql.NullString
+	var sourceSessionID sql.NullString
+	var sourceTool sql.NullString
 	var deletedAt sql.NullString
 	var createdAt string
 	var updatedAt string
 
 	err := querier.QueryRowContext(ctx, `
-		SELECT id, title, content, observation_type, layer, confidence, importance, activation_level, consolidation_strength, kind, tags, namespace, source, topic_key, retention, created_at, updated_at, deleted_at
+		SELECT id, title, content, observation_type, layer, confidence, importance, activation_level, consolidation_strength, kind, tags, namespace, source, topic_key, retention, source_surface, source_session_id, source_tool, created_at, updated_at, deleted_at
 		FROM observations
 		WHERE id = ?
 	`, id).Scan(
@@ -285,6 +296,9 @@ func (s *Store) getTx(ctx context.Context, querier rowQueryer, id string) (Obser
 		&source,
 		&topicKey,
 		&observation.Retention,
+		&sourceSurface,
+		&sourceSessionID,
+		&sourceTool,
 		&createdAt,
 		&updatedAt,
 		&deletedAt,
@@ -296,6 +310,9 @@ func (s *Store) getTx(ctx context.Context, querier rowQueryer, id string) (Obser
 	observation.Tags = ParseTags(tags.String)
 	observation.Source = source.String
 	observation.TopicKey = topicKey.String
+	observation.SourceSurface = sourceSurface.String
+	observation.SourceSessionID = sourceSessionID.String
+	observation.SourceTool = sourceTool.String
 	parsedCreatedAt, err := parseSQLiteTime(createdAt)
 	if err != nil {
 		return Observation{}, fmt.Errorf("parse observation created_at: %w", err)

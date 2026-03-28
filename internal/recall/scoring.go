@@ -29,7 +29,7 @@ func (w ScoreWeights) withDefaults() ScoreWeights {
 	return w
 }
 
-func applyScores(items []candidate, weights ScoreWeights, now time.Time, intent TemporalIntent, mentionMap map[string][]mentionInfo) {
+func applyScores(items []candidate, weights ScoreWeights, now time.Time, intent TemporalIntent, mentionMap map[string][]mentionInfo, debug bool) {
 	if len(items) == 0 {
 		return
 	}
@@ -59,8 +59,10 @@ func applyScores(items []candidate, weights ScoreWeights, now time.Time, intent 
 		items[index].Score = (weights.Recency * recency) + (weights.Importance * items[index].Importance) + (weights.Relevance * relevance)
 
 		// Cross-signal boost: if appears in both FTS and semantic, boost score
+		csBoost := 1.0
 		if items[index].SemanticScore > 0 && ftsRelevance > 0 {
-			items[index].Score *= crossSignalBoost
+			csBoost = crossSignalBoost
+			items[index].Score *= csBoost
 		}
 
 		// Temporal multiplier: boost/penalize based on temporal intent match
@@ -68,7 +70,21 @@ func applyScores(items []candidate, weights ScoreWeights, now time.Time, intent 
 		if mentionMap != nil {
 			mentions = mentionMap[items[index].ID]
 		}
-		items[index].Score *= temporalMultiplier(items[index], intent, mentions)
+		tempMult := temporalMultiplier(items[index], intent, mentions)
+		items[index].Score *= tempMult
+
+		// Populate score breakdown when debug mode is enabled
+		if debug {
+			items[index].Breakdown = &ScoreBreakdown{
+				Recency:            recency,
+				Importance:         items[index].Importance,
+				Relevance:          relevance,
+				SemanticScore:      items[index].SemanticScore,
+				TemporalMultiplier: tempMult,
+				CrossSignalBoost:   csBoost,
+				FinalScore:         items[index].Score,
+			}
+		}
 	}
 }
 

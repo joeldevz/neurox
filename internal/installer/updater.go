@@ -158,8 +158,9 @@ func downloadFile(url, dst string) error {
 	return nil
 }
 
-// extractBinary opens a .tar.gz file, walks its entries, finds the one whose
-// base name is "neurox", and writes it to dst.
+// extractBinary opens a .tar.gz file, walks its entries, finds the first entry
+// whose base name starts with "neurox" (e.g. "neurox", "neurox_linux_amd64",
+// "neurox.exe"), and writes it to dst.
 func extractBinary(tarPath, dst string) error {
 	f, err := os.Open(tarPath)
 	if err != nil {
@@ -186,7 +187,7 @@ func extractBinary(tarPath, dst string) error {
 		}
 
 		baseName := filepath.Base(hdr.Name)
-		if baseName != "neurox" && baseName != "neurox.exe" {
+		if !strings.HasPrefix(baseName, "neurox") {
 			continue
 		}
 
@@ -209,7 +210,9 @@ func extractBinary(tarPath, dst string) error {
 	return nil
 }
 
-// extractBinaryFromZip opens a .zip file, finds the neurox binary, and writes it to dst.
+// extractBinaryFromZip opens a .zip file, finds the first entry whose base
+// name starts with "neurox" (e.g. "neurox.exe", "neurox_windows_amd64.exe"),
+// and writes it to dst.
 func extractBinaryFromZip(zipPath, dst string) error {
 	r, err := zip.OpenReader(zipPath)
 	if err != nil {
@@ -217,13 +220,8 @@ func extractBinaryFromZip(zipPath, dst string) error {
 	}
 	defer r.Close()
 
-	binaryName := "neurox"
-	if runtime.GOOS == "windows" {
-		binaryName = "neurox.exe"
-	}
-
 	for _, f := range r.File {
-		if filepath.Base(f.Name) != binaryName {
+		if !strings.HasPrefix(filepath.Base(f.Name), "neurox") {
 			continue
 		}
 
@@ -245,7 +243,7 @@ func extractBinaryFromZip(zipPath, dst string) error {
 		return nil
 	}
 
-	return fmt.Errorf("%s not found in zip", binaryName)
+	return fmt.Errorf("neurox binary not found in zip")
 }
 
 // RunUpdate orchestrates the full self-update flow:

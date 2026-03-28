@@ -45,7 +45,7 @@ func newTestDeps(t *testing.T) *Deps {
 
 func initServer(t *testing.T, deps *Deps) *mcpTestHelper {
 	t.Helper()
-	s := NewServer(deps)
+	s := NewServer(deps, "test")
 	ctx := context.Background()
 
 	s.HandleMessage(ctx, mustMarshal(t, map[string]any{
@@ -223,7 +223,7 @@ func TestInvalidateTool(t *testing.T) {
 func TestToolsList(t *testing.T) {
 	deps := newTestDeps(t)
 	ctx := context.Background()
-	s := NewServer(deps)
+	s := NewServer(deps, "test")
 
 	// Initialize first
 	s.HandleMessage(ctx, mustMarshal(t, map[string]any{
@@ -260,6 +260,7 @@ func TestToolsList(t *testing.T) {
 		"save", "recall", "context", "update", "forget",
 		"invalidate", "status", "session_start", "session_end",
 		"git_hook", "reflect", "consolidate", "health_check", "curate",
+		"backup",
 	}
 
 	toolNames := make(map[string]bool)

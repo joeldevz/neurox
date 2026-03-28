@@ -437,6 +437,134 @@ func TestActivationSignalsUpdate(t *testing.T) {
 	}
 }
 
+func TestProvenanceRoundTrip(t *testing.T) {
+	store, database := newTestStore(t)
+	defer database.Close()
+
+	ctx := context.Background()
+
+	// Save with provenance fields set
+	saved, err := store.Save(ctx, Observation{
+		Title:           "Provenance test",
+		Content:         "Testing provenance fields round-trip",
+		SourceSurface:   "mcp",
+		SourceSessionID: "session-abc-123",
+		SourceTool:      "save",
+	})
+	if err != nil {
+		t.Fatalf("Save returned error: %v", err)
+	}
+
+	if saved.SourceSurface != "mcp" {
+		t.Fatalf("saved.SourceSurface = %q, want %q", saved.SourceSurface, "mcp")
+	}
+	if saved.SourceSessionID != "session-abc-123" {
+		t.Fatalf("saved.SourceSessionID = %q, want %q", saved.SourceSessionID, "session-abc-123")
+	}
+	if saved.SourceTool != "save" {
+		t.Fatalf("saved.SourceTool = %q, want %q", saved.SourceTool, "save")
+	}
+
+	// Verify via Get
+	got, err := store.Get(ctx, saved.ID)
+	if err != nil {
+		t.Fatalf("Get returned error: %v", err)
+	}
+	if got.SourceSurface != "mcp" {
+		t.Fatalf("Get().SourceSurface = %q, want %q", got.SourceSurface, "mcp")
+	}
+	if got.SourceSessionID != "session-abc-123" {
+		t.Fatalf("Get().SourceSessionID = %q, want %q", got.SourceSessionID, "session-abc-123")
+	}
+	if got.SourceTool != "save" {
+		t.Fatalf("Get().SourceTool = %q, want %q", got.SourceTool, "save")
+	}
+}
+
+func TestProvenanceUpdateRoundTrip(t *testing.T) {
+	store, database := newTestStore(t)
+	defer database.Close()
+
+	ctx := context.Background()
+
+	// Save without provenance
+	saved, err := store.Save(ctx, Observation{
+		Title:   "Update provenance test",
+		Content: "Initially no provenance",
+	})
+	if err != nil {
+		t.Fatalf("Save returned error: %v", err)
+	}
+
+	if saved.SourceSurface != "" {
+		t.Fatalf("initial SourceSurface = %q, want empty", saved.SourceSurface)
+	}
+
+	// Update with provenance
+	saved.SourceSurface = "http"
+	saved.SourceSessionID = "session-xyz-789"
+	saved.SourceTool = "invalidate"
+	updated, err := store.Update(ctx, saved)
+	if err != nil {
+		t.Fatalf("Update returned error: %v", err)
+	}
+
+	if updated.SourceSurface != "http" {
+		t.Fatalf("updated.SourceSurface = %q, want %q", updated.SourceSurface, "http")
+	}
+	if updated.SourceSessionID != "session-xyz-789" {
+		t.Fatalf("updated.SourceSessionID = %q, want %q", updated.SourceSessionID, "session-xyz-789")
+	}
+	if updated.SourceTool != "invalidate" {
+		t.Fatalf("updated.SourceTool = %q, want %q", updated.SourceTool, "invalidate")
+	}
+
+	// Verify via Get
+	got, err := store.Get(ctx, saved.ID)
+	if err != nil {
+		t.Fatalf("Get returned error: %v", err)
+	}
+	if got.SourceSurface != "http" {
+		t.Fatalf("Get().SourceSurface = %q, want %q", got.SourceSurface, "http")
+	}
+	if got.SourceSessionID != "session-xyz-789" {
+		t.Fatalf("Get().SourceSessionID = %q, want %q", got.SourceSessionID, "session-xyz-789")
+	}
+	if got.SourceTool != "invalidate" {
+		t.Fatalf("Get().SourceTool = %q, want %q", got.SourceTool, "invalidate")
+	}
+}
+
+func TestProvenanceEmptyFieldsRoundTrip(t *testing.T) {
+	store, database := newTestStore(t)
+	defer database.Close()
+
+	ctx := context.Background()
+
+	// Save without provenance fields — they should remain empty strings
+	saved, err := store.Save(ctx, Observation{
+		Title:   "No provenance test",
+		Content: "Testing empty provenance fields",
+	})
+	if err != nil {
+		t.Fatalf("Save returned error: %v", err)
+	}
+
+	got, err := store.Get(ctx, saved.ID)
+	if err != nil {
+		t.Fatalf("Get returned error: %v", err)
+	}
+	if got.SourceSurface != "" {
+		t.Fatalf("Get().SourceSurface = %q, want empty", got.SourceSurface)
+	}
+	if got.SourceSessionID != "" {
+		t.Fatalf("Get().SourceSessionID = %q, want empty", got.SourceSessionID)
+	}
+	if got.SourceTool != "" {
+		t.Fatalf("Get().SourceTool = %q, want empty", got.SourceTool)
+	}
+}
+
 func TestActivationSignalsDefaults(t *testing.T) {
 	store, database := newTestStore(t)
 	defer database.Close()

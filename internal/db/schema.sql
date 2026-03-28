@@ -28,13 +28,18 @@ CREATE TABLE observations (
     consolidation_status TEXT NOT NULL DEFAULT 'pending'
         CHECK (consolidation_status IN ('pending', 'promoted', 'rejected', 'rejected-2', 'rejected-final')),
     rejection_epoch INTEGER,
+    retention TEXT NOT NULL DEFAULT 'durable'
+        CHECK (retention IN ('operational', 'durable')),
     embedding BLOB,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now')),
     deleted_at TEXT,
     modified_epoch INTEGER NOT NULL DEFAULT 0,
     activation_level REAL NOT NULL DEFAULT 0.5 CHECK (activation_level BETWEEN 0.0 AND 1.0),
-    consolidation_strength REAL NOT NULL DEFAULT 0.0 CHECK (consolidation_strength BETWEEN 0.0 AND 1.0)
+    consolidation_strength REAL NOT NULL DEFAULT 0.0 CHECK (consolidation_strength BETWEEN 0.0 AND 1.0),
+    source_surface TEXT,
+    source_session_id TEXT,
+    source_tool TEXT
 );
 
 CREATE UNIQUE INDEX uq_active_topic_key

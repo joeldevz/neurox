@@ -23,6 +23,7 @@ import (
 //go:embed 009_reconcile_active_reflections.sql
 //go:embed 010_activation_signals.sql
 //go:embed 011_reconcile_scores.sql
+//go:embed 012_provenance.sql
 var schemaFS embed.FS
 
 type migration struct {
@@ -86,6 +87,11 @@ var migrations = []migration{
 		version: 11,
 		name:    "reconcile_scores",
 		path:    "011_reconcile_scores.sql",
+	},
+	{
+		version: 12,
+		name:    "provenance",
+		path:    "012_provenance.sql",
 	},
 }
 

@@ -10,8 +10,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/joeldevz/neurox/internal/consolidate"
 	"github.com/joeldevz/neurox/internal/db"
+	"github.com/joeldevz/neurox/internal/decay"
 	"github.com/joeldevz/neurox/internal/links"
+	"github.com/joeldevz/neurox/internal/llm"
 	"github.com/joeldevz/neurox/internal/observation"
 	"github.com/joeldevz/neurox/internal/recall"
 )
@@ -345,5 +348,92 @@ func TestBrowseSortParameter(t *testing.T) {
 	w = doJSON(t, s, "GET", "/api/v1/observations/browse?sort=invalid", nil)
 	if w.Code != http.StatusOK {
 		t.Fatalf("browse invalid sort: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestReflectEndpoint_NilEngine(t *testing.T) {
+	s := newTestServer(t)
+	// ReflectEngine is nil in the default test server.
+	w := doJSON(t, s, "POST", "/api/v1/reflect", map[string]any{
+		"namespace": "test",
+	})
+	if w.Code != http.StatusNotImplemented {
+		t.Fatalf("reflect without engine: expected 501, got %d: %s", w.Code, w.Body.String())
+	}
+	var resp map[string]string
+	decodeResp(t, w, &resp)
+	if resp["error"] == "" {
+		t.Error("expected error message")
+	}
+}
+
+func TestConsolidateEndpoint_NilPipeline(t *testing.T) {
+	s := newTestServer(t)
+	// Pipeline is nil in the default test server.
+	w := doJSON(t, s, "POST", "/api/v1/consolidate", nil)
+	if w.Code != http.StatusNotImplemented {
+		t.Fatalf("consolidate without pipeline: expected 501, got %d: %s", w.Code, w.Body.String())
+	}
+	var resp map[string]string
+	decodeResp(t, w, &resp)
+	if resp["error"] == "" {
+		t.Error("expected error message")
+	}
+}
+
+func TestCurateEndpoint_NilEngine(t *testing.T) {
+	s := newTestServer(t)
+	// CurateEngine is nil in the default test server.
+	w := doJSON(t, s, "POST", "/api/v1/curate", nil)
+	if w.Code != http.StatusNotImplemented {
+		t.Fatalf("curate without engine: expected 501, got %d: %s", w.Code, w.Body.String())
+	}
+	var resp map[string]string
+	decodeResp(t, w, &resp)
+	if resp["error"] == "" {
+		t.Error("expected error message")
+	}
+}
+
+func TestCurateEndpoint_NilEngine_WithParams(t *testing.T) {
+	s := newTestServer(t)
+	// CurateEngine is nil — should still return 501 even with query params.
+	w := doJSON(t, s, "POST", "/api/v1/curate?namespace=test&dry_run=true", nil)
+	if w.Code != http.StatusNotImplemented {
+		t.Fatalf("curate with params without engine: expected 501, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestConsolidateEndpoint_WithPipeline(t *testing.T) {
+	s := newTestServer(t)
+
+	// Create a Pipeline with the test database so ForceRun can execute.
+	// We need a decay engine, which Pipeline uses internally.
+	decayEngine := decay.NewEngine(s.deps.DB)
+	pipeline := consolidate.NewPipeline(
+		s.deps.DB, decayEngine, nil, nil, llm.NewGate(nil, llm.GateModeOff),
+		s.deps.LinkStore, nil, nil,
+		observation.NewULIDGenerator(), consolidate.Config{},
+	)
+	s.deps.Pipeline = pipeline
+
+	// Seed an observation so consolidation has something to process.
+	doJSON(t, s, "POST", "/api/v1/observations", map[string]any{
+		"title": "Test obs", "content": "For consolidation",
+	})
+
+	w := doJSON(t, s, "POST", "/api/v1/consolidate", nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("consolidate: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var resp map[string]any
+	decodeResp(t, w, &resp)
+	if resp["message"] != "consolidation completed" {
+		t.Errorf("unexpected message: %v", resp["message"])
+	}
+	// After forced consolidation, buffer should be 0 (everything promoted).
+	if resp["buffer"].(float64) != 0 {
+		t.Errorf("expected buffer=0 after forced consolidation, got %v", resp["buffer"])
 	}
 }

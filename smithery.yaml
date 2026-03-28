@@ -1,0 +1,7 @@
+name: neurox
+description: "Brain-inspired memory engine for AI coding agents — three-layer memory, temporal reasoning, hybrid search"
+startCommand:
+  type: stdio
+  command: neurox
+  args:
+    - mcp

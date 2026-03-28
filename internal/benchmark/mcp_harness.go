@@ -73,7 +73,7 @@ func NewMCPHarness(env *BenchEnv) (*MCPHarness, error) {
 		Tracker:         tracker,
 	}
 
-	srv := internalmcp.NewServer(deps)
+	srv := internalmcp.NewServer(deps, "bench")
 	ctx := context.Background()
 
 	// Send the required MCP initialize handshake.

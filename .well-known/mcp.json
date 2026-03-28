@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "neurox": {
+      "command": "neurox",
+      "args": ["mcp"],
+      "description": "Brain-inspired memory engine for AI coding agents — three-layer memory, temporal reasoning, hybrid search, consolidation pipelines"
+    }
+  }
+}

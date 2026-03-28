@@ -9,14 +9,22 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/joeldevz/neurox/internal/consolidate"
+	curatepkg "github.com/joeldevz/neurox/internal/curate"
 	"github.com/joeldevz/neurox/internal/embed"
+	"github.com/joeldevz/neurox/internal/facts"
 	"github.com/joeldevz/neurox/internal/links"
+	"github.com/joeldevz/neurox/internal/llm"
 	"github.com/joeldevz/neurox/internal/observation"
+	"github.com/joeldevz/neurox/internal/proactive"
 	"github.com/joeldevz/neurox/internal/recall"
+	reflectpkg "github.com/joeldevz/neurox/internal/reflect"
+	"github.com/joeldevz/neurox/internal/session"
 	"github.com/joeldevz/neurox/internal/telemetry"
 )
 
 type Config struct {
+	Host string
 	Port int
 }
 
@@ -27,14 +35,27 @@ type Server struct {
 
 type Deps struct {
 	ObservationStore *observation.Store
+	SaveQueue        *observation.SaveQueue
 	RecallEngine     *recall.Engine
 	LinkStore        *links.Store
+	FactStore        *facts.Store
+	FactExtractor    *facts.Extractor
+	ReflectEngine    *reflectpkg.Engine
+	SessionManager   *session.Manager
+	ProactiveEngine  *proactive.Engine
+	Pipeline         *consolidate.Pipeline
+	CurateEngine     *curatepkg.Engine
 	DB               *sql.DB
-	LLMProvider      string
-	EmbedProvider    string
-	GateMode         string
+	LLMProvider      llm.Provider
+	LLMGate          *llm.Gate
 	EmbedQueue       *embed.Queue
+	Embedder         embed.Provider
 	Tracker          *telemetry.Tracker
+	// Display-only fields used by dashboard/status handlers.
+	LLMProviderName   string
+	EmbedProviderName string
+	GateMode          string
+	Version           string
 }
 
 func NewServer(cfg Config, deps *Deps) *Server {
@@ -42,7 +63,7 @@ func NewServer(cfg Config, deps *Deps) *Server {
 	s := &Server{
 		deps: deps,
 		httpServer: &http.Server{
-			Addr:         fmt.Sprintf(":%d", cfg.Port),
+			Addr:         fmt.Sprintf("%s:%d", cfg.Host, cfg.Port),
 			Handler:      corsMiddleware(mux),
 			ReadTimeout:  10 * time.Second,
 			WriteTimeout: 10 * time.Second,
@@ -87,10 +108,16 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 
 	mux.HandleFunc("POST /api/v1/hooks/git", s.handleGitHook)
 	mux.HandleFunc("POST /api/v1/reflect", s.handleReflect)
+	mux.HandleFunc("POST /api/v1/consolidate", s.handleConsolidate)
+	mux.HandleFunc("POST /api/v1/curate", s.handleCurate)
 	mux.HandleFunc("GET /api/v1/graph", s.handleGraph)
 	mux.HandleFunc("GET /api/v1/health-check", s.handleHealthCheck)
+	mux.HandleFunc("POST /api/v1/backup", s.handleBackup)
 	mux.HandleFunc("GET /api/v1/decay-timeline", s.handleDecayTimeline)
 	mux.HandleFunc("GET /api/v1/stats/activity", s.handleActivity)
+
+	// MCP registry discovery
+	mux.HandleFunc("GET /.well-known/mcp/server-card.json", s.handleServerCard)
 }
 
 func corsMiddleware(next http.Handler) http.Handler {

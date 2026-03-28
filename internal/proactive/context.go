@@ -35,6 +35,9 @@ type ContextItem struct {
 	Staleness       string   `json:"staleness"`
 	Source          string   `json:"source,omitempty"`
 	Retention       string   `json:"retention,omitempty"`
+	SourceSurface   string   `json:"source_surface,omitempty"`
+	SourceSessionID string   `json:"source_session_id,omitempty"`
+	SourceTool      string   `json:"source_tool,omitempty"`
 	CreatedAt       string   `json:"created_at"`
 }
 
@@ -148,7 +151,7 @@ func (e *Engine) getFileLinked(ctx context.Context, namespace string, files []st
 	args = append(args, limit)
 
 	rows, err := e.db.QueryContext(ctx, fmt.Sprintf(`
-		SELECT DISTINCT o.id, o.title, o.content, o.observation_type, o.layer, o.confidence, o.importance, o.kind, o.tags, o.staleness, COALESCE(o.source, ''), o.created_at, o.retention
+		SELECT DISTINCT o.id, o.title, o.content, o.observation_type, o.layer, o.confidence, o.importance, o.kind, o.tags, o.staleness, COALESCE(o.source, ''), o.created_at, o.retention, o.source_surface, o.source_session_id, o.source_tool
 		FROM observations o
 		JOIN file_observations fo ON fo.observation_id = o.id AND fo.valid_until IS NULL
 		WHERE o.deleted_at IS NULL AND o.namespace = ? AND o.valid_until IS NULL
@@ -181,7 +184,7 @@ func (e *Engine) getTopActivation(ctx context.Context, namespace string, limit i
 	excludeIDs = append(excludeIDs, limit)
 
 	rows, err := e.db.QueryContext(ctx, fmt.Sprintf(`
-		SELECT o.id, o.title, o.content, o.observation_type, o.layer, o.confidence, o.importance, o.kind, o.tags, o.staleness, COALESCE(o.source, ''), o.created_at, o.retention
+		SELECT o.id, o.title, o.content, o.observation_type, o.layer, o.confidence, o.importance, o.kind, o.tags, o.staleness, COALESCE(o.source, ''), o.created_at, o.retention, o.source_surface, o.source_session_id, o.source_tool
 		FROM observations o
 		WHERE o.deleted_at IS NULL AND o.namespace = ? AND o.valid_until IS NULL
 		  AND o.staleness <> 'expired'
@@ -205,7 +208,7 @@ func (e *Engine) getTopActivation(ctx context.Context, namespace string, limit i
 
 func (e *Engine) getReflections(ctx context.Context, namespace string, limit int) ([]ContextItem, error) {
 	rows, err := e.db.QueryContext(ctx, `
-		SELECT o.id, o.title, o.content, o.observation_type, o.layer, o.confidence, o.importance, o.kind, o.tags, o.staleness, COALESCE(o.source, ''), o.created_at, o.retention
+		SELECT o.id, o.title, o.content, o.observation_type, o.layer, o.confidence, o.importance, o.kind, o.tags, o.staleness, COALESCE(o.source, ''), o.created_at, o.retention, o.source_surface, o.source_session_id, o.source_tool
 		FROM observations o
 		WHERE o.deleted_at IS NULL AND o.namespace = ? AND o.source = 'reflection' AND o.valid_until IS NULL
 		  AND o.content != '' AND LENGTH(o.content) > 50
@@ -227,7 +230,7 @@ func (e *Engine) semanticContext(ctx context.Context, namespace, queryText strin
 	}
 
 	rows, err := e.db.QueryContext(ctx, `
-		SELECT id, title, content, observation_type, layer, confidence, importance, kind, tags, staleness, COALESCE(source, ''), created_at, retention, embedding
+		SELECT id, title, content, observation_type, layer, confidence, importance, kind, tags, staleness, COALESCE(source, ''), created_at, retention, source_surface, source_session_id, source_tool, embedding
 		FROM observations
 		WHERE deleted_at IS NULL AND namespace = ? AND embedding IS NOT NULL AND valid_until IS NULL
 		ORDER BY layer DESC, importance DESC
@@ -246,14 +249,18 @@ func (e *Engine) semanticContext(ctx context.Context, namespace, queryText strin
 	for rows.Next() {
 		var item ContextItem
 		var tags, source sql.NullString
+		var sourceSurface, sourceSessionID, sourceTool sql.NullString
 		var blob []byte
-		if err := rows.Scan(&item.ID, &item.Title, &item.Content, &item.ObservationType, &item.Layer, &item.Confidence, &item.Importance, &item.Kind, &tags, &item.Staleness, &source, &item.CreatedAt, &item.Retention, &blob); err != nil {
+		if err := rows.Scan(&item.ID, &item.Title, &item.Content, &item.ObservationType, &item.Layer, &item.Confidence, &item.Importance, &item.Kind, &tags, &item.Staleness, &source, &item.CreatedAt, &item.Retention, &sourceSurface, &sourceSessionID, &sourceTool, &blob); err != nil {
 			continue
 		}
 		if tags.Valid {
 			item.Tags = observation.ParseTags(tags.String)
 		}
 		item.Source = source.String
+		item.SourceSurface = sourceSurface.String
+		item.SourceSessionID = sourceSessionID.String
+		item.SourceTool = sourceTool.String
 
 		vec := embed.DeserializeF32(blob)
 		if vec == nil {
@@ -286,13 +293,17 @@ func scanContextItems(rows *sql.Rows) ([]ContextItem, error) {
 	for rows.Next() {
 		var item ContextItem
 		var tags, source sql.NullString
-		if err := rows.Scan(&item.ID, &item.Title, &item.Content, &item.ObservationType, &item.Layer, &item.Confidence, &item.Importance, &item.Kind, &tags, &item.Staleness, &source, &item.CreatedAt, &item.Retention); err != nil {
+		var sourceSurface, sourceSessionID, sourceTool sql.NullString
+		if err := rows.Scan(&item.ID, &item.Title, &item.Content, &item.ObservationType, &item.Layer, &item.Confidence, &item.Importance, &item.Kind, &tags, &item.Staleness, &source, &item.CreatedAt, &item.Retention, &sourceSurface, &sourceSessionID, &sourceTool); err != nil {
 			return nil, err
 		}
 		if tags.Valid {
 			item.Tags = observation.ParseTags(tags.String)
 		}
 		item.Source = source.String
+		item.SourceSurface = sourceSurface.String
+		item.SourceSessionID = sourceSessionID.String
+		item.SourceTool = sourceTool.String
 		items = append(items, item)
 	}
 	return items, rows.Err()

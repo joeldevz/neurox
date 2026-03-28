@@ -6,14 +6,13 @@ import (
 )
 
 const (
-	ServerName    = "neurox"
-	ServerVersion = "0.1.17"
+	ServerName = "neurox"
 )
 
-func NewServer(deps *Deps) *server.MCPServer {
+func NewServer(deps *Deps, version string) *server.MCPServer {
 	s := server.NewMCPServer(
 		ServerName,
-		ServerVersion,
+		version,
 		server.WithToolCapabilities(false),
 		server.WithRecovery(),
 	)
@@ -41,4 +40,5 @@ func register(s *server.MCPServer, deps *Deps) {
 	add(consolidateTool(), deps.handleConsolidate)
 	add(healthCheckTool(), deps.handleHealthCheck)
 	add(curateTool(), deps.handleCurate)
+	add(backupTool(), deps.handleBackup)
 }

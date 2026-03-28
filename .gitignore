@@ -13,3 +13,11 @@ benchmarks/longmemeval/*.jsonl
 benchmarks/longmemeval/*_metrics.json
 .claude
 .ruff_cache
+
+# Compiled binaries
+longmemeval
+
+# Config files that may contain secrets
+config.yaml
+.env
+priorities.yaml

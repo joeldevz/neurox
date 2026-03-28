@@ -14,6 +14,10 @@ type InvalidateInput struct {
 	Reason             string
 	ReplacementTitle   string
 	ReplacementContent string
+	// Provenance fields propagated to the replacement observation (if any).
+	SourceSurface   string
+	SourceSessionID string
+	SourceTool      string
 }
 
 func (input InvalidateInput) Validate() error {
@@ -90,6 +94,9 @@ func (s *Store) Invalidate(ctx context.Context, linkStore *links.Store, input In
 			Kind:            original.Kind,
 			Namespace:       original.Namespace,
 			Source:          "agent",
+			SourceSurface:   input.SourceSurface,
+			SourceSessionID: input.SourceSessionID,
+			SourceTool:      input.SourceTool,
 		}
 		replacement.ApplyDefaults()
 

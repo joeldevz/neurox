@@ -30,10 +30,23 @@ type SearchOptions struct {
 	Staleness       string
 	Retention       string // optional filter: "operational" or "durable"
 	IncludeStale    bool
+	Debug           bool // when true, results include ScoreBreakdown
 	Files           []string
 	Limit           int
 	Weights         ScoreWeights
 	Now             time.Time
+}
+
+// ScoreBreakdown exposes the individual scoring components for a recall result.
+// Only populated when Debug mode is enabled in SearchOptions.
+type ScoreBreakdown struct {
+	Recency            float64 `json:"recency"`
+	Importance         float64 `json:"importance"`
+	Relevance          float64 `json:"relevance"`
+	SemanticScore      float64 `json:"semantic_score"`
+	TemporalMultiplier float64 `json:"temporal_multiplier"`
+	CrossSignalBoost   float64 `json:"cross_signal_boost"`
+	FinalScore         float64 `json:"final_score"`
 }
 
 type Result struct {
@@ -49,6 +62,10 @@ type Result struct {
 	Staleness       string
 	Retention       string
 	LinkedFiles     []string
+	SourceSurface   string
+	SourceSessionID string
+	SourceTool      string
+	Breakdown       *ScoreBreakdown // non-nil only when debug mode is enabled
 }
 
 type candidate struct {
@@ -120,7 +137,12 @@ func (e *Engine) Search(ctx context.Context, options SearchOptions) ([]Result, e
 
 	// Hybrid: if embeddings available, boost candidates that also appear in semantic search
 	if embed.IsAvailable(e.embedder) {
-		semScores, semErr := semanticSearch(ctx, e.db, e.embedder, normalized.Query, normalized.Limit*2)
+		semFilter := semanticFilter{
+			Namespace:    normalized.Namespace,
+			IncludeStale: normalized.IncludeStale,
+			Staleness:    normalized.Staleness,
+		}
+		semScores, semErr := semanticSearch(ctx, e.db, e.embedder, normalized.Query, normalized.Limit*2, semFilter)
 		if semErr == nil && len(semScores) > 0 {
 			for i := range candidates {
 				if semScore, ok := semScores[candidates[i].ID]; ok {
@@ -139,7 +161,7 @@ func (e *Engine) Search(ctx context.Context, options SearchOptions) ([]Result, e
 	}
 	mentionMap, _ := loadCandidateMentions(ctx, e.db, candidateIDs)
 
-	applyScores(candidates, normalized.Weights, normalized.Now, intent, mentionMap)
+	applyScores(candidates, normalized.Weights, normalized.Now, intent, mentionMap, normalized.Debug)
 	sort.SliceStable(candidates, func(i int, j int) bool {
 		if candidates[i].Score == candidates[j].Score {
 			if candidates[i].RawRelevance == candidates[j].RawRelevance {
@@ -208,6 +230,7 @@ func scanCandidate(scanner interface{ Scan(dest ...any) error }) (candidate, err
 	var linkedFiles sql.NullString
 	var lastAccessed sql.NullString
 	var createdAt string
+	var sourceSurface, sourceSessionID, sourceTool sql.NullString
 
 	err := scanner.Scan(
 		&item.rowID,
@@ -227,6 +250,9 @@ func scanCandidate(scanner interface{ Scan(dest ...any) error }) (candidate, err
 		&createdAt,
 		&lastAccessed,
 		&item.AccessCount,
+		&sourceSurface,
+		&sourceSessionID,
+		&sourceTool,
 	)
 	if err != nil {
 		return candidate{}, fmt.Errorf("scan recall row: %w", err)
@@ -246,6 +272,9 @@ func scanCandidate(scanner interface{ Scan(dest ...any) error }) (candidate, err
 	}
 	item.Tags = observation.ParseTags(tags.String)
 	item.LinkedFiles = splitCSV(linkedFiles.String)
+	item.SourceSurface = sourceSurface.String
+	item.SourceSessionID = sourceSessionID.String
+	item.SourceTool = sourceTool.String
 	return item, nil
 }
 

@@ -375,8 +375,8 @@ func (e *Engine) saveReflection(ctx context.Context, content string, sources []s
 	// Also save as a Core-layer observation for recall
 	obsID := e.idGen.New()
 	_, err = tx.ExecContext(ctx, `
-		INSERT INTO observations(id, title, content, observation_type, layer, confidence, importance, kind, namespace, source, retention)
-		VALUES(?, ?, ?, 'pattern', 2, 0.9, 0.9, 'semantic', ?, 'reflection', 'durable')
+		INSERT INTO observations(id, title, content, observation_type, layer, confidence, importance, kind, namespace, source, retention, source_surface, source_tool)
+		VALUES(?, ?, ?, 'pattern', 2, 0.9, 0.9, 'semantic', ?, 'reflection', 'durable', 'consolidator', 'reflect')
 	`, obsID, title, body, namespace)
 	if err != nil {
 		return fmt.Errorf("insert reflection observation: %w", err)

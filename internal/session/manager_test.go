@@ -82,7 +82,7 @@ func TestEndSession(t *testing.T) {
 
 	start, _ := mgr.Start(ctx, "Test", "", "", "ns")
 
-	result, err := mgr.End(ctx, start.SessionID, "We implemented feature X. Discovered that Y works better.")
+	result, err := mgr.End(ctx, start.SessionID, "We implemented feature X. Discovered that Y works better.", "test")
 	if err != nil {
 		t.Fatalf("end: %v", err)
 	}
@@ -92,6 +92,10 @@ func TestEndSession(t *testing.T) {
 	// No LLM → no extraction
 	if result.ObservationsExtracted != 0 {
 		t.Errorf("extracted = %d, want 0 (no LLM)", result.ObservationsExtracted)
+	}
+	// No LLM → warning should be set
+	if result.Warning == "" {
+		t.Error("expected warning when LLM is disabled")
 	}
 }
 
@@ -111,12 +115,16 @@ discovery | Redis caching improves latency | What: Adding Redis cache reduced AP
 	ctx := context.Background()
 
 	start, _ := mgr.Start(ctx, "Test", "", "", "ns")
-	result, err := mgr.End(ctx, start.SessionID, "We chose React and added Redis caching.")
+	result, err := mgr.End(ctx, start.SessionID, "We chose React and added Redis caching.", "test")
 	if err != nil {
 		t.Fatalf("end: %v", err)
 	}
 	if result.ObservationsExtracted != 2 {
 		t.Errorf("extracted = %d, want 2", result.ObservationsExtracted)
+	}
+	// LLM available → no warning
+	if result.Warning != "" {
+		t.Errorf("expected no warning when LLM is available, got %q", result.Warning)
 	}
 
 	// Verify observations were created
@@ -147,7 +155,7 @@ func TestEndSessionWithLLMExtractsTemporalMentions(t *testing.T) {
 
 	ctx := context.Background()
 	start, _ := mgr.Start(ctx, "Test", "", "", "ns")
-	result, err := mgr.End(ctx, start.SessionID, "We migrated to SQLite yesterday and it is currently working.")
+	result, err := mgr.End(ctx, start.SessionID, "We migrated to SQLite yesterday and it is currently working.", "test")
 	if err != nil {
 		t.Fatalf("end: %v", err)
 	}
@@ -182,7 +190,7 @@ func TestEndSessionWithoutTemporalExtractorStillWorks(t *testing.T) {
 
 	ctx := context.Background()
 	start, _ := mgr.Start(ctx, "Test", "", "", "ns")
-	result, err := mgr.End(ctx, start.SessionID, "We decided on Redis.")
+	result, err := mgr.End(ctx, start.SessionID, "We decided on Redis.", "test")
 	if err != nil {
 		t.Fatalf("end: %v", err)
 	}
@@ -193,7 +201,7 @@ func TestEndSessionWithoutTemporalExtractorStillWorks(t *testing.T) {
 
 func TestEndSessionNotFound(t *testing.T) {
 	mgr, _ := setupTest(t)
-	_, err := mgr.End(context.Background(), "nonexistent", "summary")
+	_, err := mgr.End(context.Background(), "nonexistent", "summary", "test")
 	if err == nil {
 		t.Error("expected error for nonexistent session")
 	}

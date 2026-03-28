@@ -72,6 +72,9 @@ func recallTool() mcp.Tool {
 		mcp.WithNumber("limit",
 			mcp.Description("Max results to return (default: 10, max: 50)"),
 		),
+		mcp.WithBoolean("debug",
+			mcp.Description("Include score breakdown per result showing recency, importance, relevance, semantic, temporal, and cross-signal components (default: false)"),
+		),
 	)
 }
 
@@ -243,5 +246,14 @@ func curateTool() mcp.Tool {
 		mcp.WithDescription("Deep memory curation: review a namespace with a large model to delete noise, recalibrate importance weights, and improve memory quality. Uses the curator LLM provider (e.g. Gemini Flash)."),
 		mcp.WithString("namespace", mcp.Description("Namespace to curate (default: all)")),
 		mcp.WithBoolean("dry_run", mcp.Description("Preview changes without executing (default: false)")),
+	)
+}
+
+func backupTool() mcp.Tool {
+	return mcp.NewTool("backup",
+		mcp.WithDescription("Create a safe, consistent backup of the Neurox database using SQLite's online backup API. Works while the server is running. Returns the backup file path and size."),
+		mcp.WithString("output",
+			mcp.Description("Destination path for the backup file. Defaults to <db_path>.backup"),
+		),
 	)
 }

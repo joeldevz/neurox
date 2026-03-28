@@ -1,11 +1,10 @@
 <p align="center">
-  <!-- <img src="assets/neurox-banner.png" alt="Neurox" width="800"> -->
   <h1 align="center">Neurox</h1>
   <p align="center">
     <strong>A brain-inspired memory engine for AI coding agents</strong>
   </p>
   <p align="center">
-    Three-layer memory &bull; Hybrid search &bull; Temporal reasoning &bull; Ebbinghaus decay &bull; Consolidation pipelines
+    Three-layer memory &bull; Hybrid search &bull; Temporal reasoning &bull; Activation decay &bull; Consolidation pipelines
   </p>
   <p align="center">
     <a href="#benchmark-results">98% Recall on LongMemEval</a> &bull;
@@ -118,12 +117,13 @@ Inspired by human memory systems, Neurox organizes knowledge into three layers w
  │  Unfiltered      │          │  Accessed often   │          │  High confidence │
  │                  │           │                  │           │                  │
  │  Capacity: 200   │           │  Dedup + Reflect │           │  Permanent       │
- │  Decay: fast     │           │  Decay: moderate │           │  Decay: slow     │
+ │  Decay: fast     │           │  Decay: moderate │           │  Decay: none     │
  └─────────────────┘           └─────────────────┘           └─────────────────┘
          │                              │                              │
          └──────────────────────────────┴──────────────────────────────┘
                                         │
-                              Ebbinghaus Decay
+                              Activation Decay
+                         (exponential half-life for scoring, linear for periodic activation reduction)
                          (episodic: fast, semantic: medium, procedural: slow)
 ```
 
@@ -184,18 +184,20 @@ Score = (Recency × 0.3) + (Importance × 0.3) + (Relevance × 0.4)
 
 | Signal | Source | What it captures |
 |---|---|---|
-| **Relevance** | FTS5 BM25 + semantic cosine | How well content matches the query |
+| **Relevance** | FTS5 BM25 (required) + semantic cosine (reranker) | How well content matches the query |
 | **Recency** | Ebbinghaus decay curve (30-day half-life) | How recently created or accessed |
 | **Importance** | Initial weight + access boosts | How valuable the observation is |
 | **Temporal** | Intent detection + mention matching | Whether this memory fits the time context |
 | **Cross-signal** | FTS ∩ Semantic overlap | Confidence boost when both methods agree |
+
+> FTS5 provides the initial candidate set — every result must match the text index. Semantic similarity then re-ranks candidates, boosting those where embedding cosine similarity exceeds the FTS relevance score.
 
 ## Consolidation Pipeline
 
 Runs automatically every 30 minutes (or on demand via `consolidate` tool):
 
 ```
- 1. Decay         Apply Ebbinghaus curves to all observations
+ 1. Decay         Apply activation decay to observations (kind-specific rates)
        ↓
  2. Retry         Re-evaluate previously rejected observations (3-strike system)
        ↓
@@ -340,6 +342,8 @@ Note: the resulting executable is portable, but not fully static; with CGO-enabl
 ./neurox serve  # localhost:7438
 ```
 
+The HTTP server binds to `127.0.0.1` (localhost only) by default. To allow network access (e.g., for remote dashboard), use `neurox serve --host 0.0.0.0` or set `NEUROX_HTTP_HOST=0.0.0.0`.
+
 The git post-commit hook sends events to the HTTP server at `POST /api/v1/hooks/git`. The default hook port is `7438`; if your server listens elsewhere, set `NEUROX_PORT` before installing or running the hook.
 
 ### CLI
@@ -381,6 +385,12 @@ neurox benchmark --scale medium --output report.json
 neurox curate --namespace myproject --dry-run
 neurox curate --namespace myproject
 
+# Audit an observation's full lifecycle
+neurox audit 01KM60RSD27Y1Y4Y54ACTVQAEW
+
+# Search with scoring breakdown (debug mode)
+neurox recall "authentication" --namespace myproject --debug
+
 # Re-embed after changing embedding model
 neurox reembed
 ```
@@ -392,12 +402,13 @@ Most CLI commands print JSON, which makes them easy to pipe into other tools or 
 | Command | What it does | Useful flags |
 |---|---|---|
 | `neurox mcp` | Starts the MCP server over stdio | none |
-| `neurox serve` | Starts the HTTP server on port `7438` | none |
+| `neurox serve` | Starts the HTTP server on port `7438` | `--host` |
 | `neurox save "title"` | Saves an observation into Buffer | `--content`, `--type`, `--kind`, `--confidence`, `--topic-key`, `--tags`, `--files`, `--namespace` |
-| `neurox recall "query"` | Searches memory with temporal-aware ranking | `--type`, `--kind`, `--namespace`, `--files`, `--include-stale`, `--limit` |
+| `neurox recall "query"` | Searches memory with temporal-aware ranking | `--type`, `--kind`, `--namespace`, `--files`, `--include-stale`, `--limit`, `--debug` |
 | `neurox context` | Returns proactive context for a namespace or files | `--namespace`, `--files`, `--limit` |
 | `neurox invalidate <id>` | Marks an observation incorrect and can create a replacement | `--reason`, `--replacement-title`, `--replacement-content` |
 | `neurox status` | Shows brain, provider, and database stats | none |
+| `neurox audit <id>` | Shows full lifecycle of an observation: creation, provenance, links, staleness, temporal mentions | none |
 | `neurox consolidate` | Forces a full consolidation run immediately | none |
 | `neurox graph` | Generates an interactive HTML graph view | `--namespace`, `--type`, `--tags`, `--min-importance`, `--limit`, `--linked-only`, `--output`, `--no-browser` |
 | `neurox config` | Prints the resolved runtime config | none |
@@ -411,7 +422,9 @@ Most CLI commands print JSON, which makes them easy to pipe into other tools or 
 
 ### CLI Notes
 
-- `save`, `recall`, `context`, `invalidate`, `status`, and `config` return JSON to stdout.
+- `save`, `recall`, `context`, `invalidate`, `status`, `audit`, and `config` return JSON to stdout.
+- `recall --debug` includes a `score_breakdown` per result showing how each scoring signal contributed.
+- `audit <id>` shows creation, provenance, layer promotions, links, staleness events, temporal mentions, and current state.
 - `graph` writes `neurox-graph.html` by default and opens the browser unless `--no-browser` is set.
 - `install-hook` does not overwrite an existing hook; remove `.git/hooks/post-commit` first if you want to replace it.
 - `curate` requires a configured curator provider (see Configuration).
@@ -464,7 +477,7 @@ neurox serve  # REST API on port 7438
 | Tool | Key inputs |
 |---|---|
 | `save` | `title`, `content`, `observation_type`, `kind`, `confidence`, `topic_key`, `tags`, `files`, `namespace`, `retention` |
-| `recall` | `query`, `observation_type`, `kind`, `namespace`, `files`, `include_stale`, `limit` |
+| `recall` | `query`, `observation_type`, `kind`, `namespace`, `files`, `include_stale`, `limit`, `debug` |
 | `context` | `namespace`, `files`, `limit` |
 | `update` | `id`, `title`, `content`, `observation_type`, `kind`, `confidence`, `tags`, `files`, `retention` |
 | `forget` | `id` |
@@ -477,6 +490,34 @@ neurox serve  # REST API on port 7438
 | `consolidate` | no inputs |
 | `health_check` | `days` |
 | `curate` | `namespace`, `dry_run` |
+
+### MCP Response Fields
+
+**Provenance fields** — every observation returned by `save`, `recall`, and `context` includes provenance metadata:
+
+| Field | Description | Example values |
+|---|---|---|
+| `source_surface` | Which surface created this observation | `mcp`, `http`, `cli`, `consolidator` |
+| `source_session_id` | Session ID at time of creation (if any) | `01KM...` or empty |
+| `source_tool` | Which tool/operation created it | `save`, `invalidate`, `session_end`, `reflect`, `curate`, `consolidate` |
+
+**Debug mode** — pass `debug: true` to `recall` to get a `score_breakdown` object per result:
+
+```json
+{
+  "score_breakdown": {
+    "recency": 0.85,
+    "importance": 0.70,
+    "relevance": 0.92,
+    "semantic_score": 0.88,
+    "temporal_multiplier": 1.2,
+    "cross_signal_boost": 1.0,
+    "final_score": 0.83
+  }
+}
+```
+
+Without `debug: true`, responses are unchanged (no breaking change).
 
 The MCP surface is the best choice for coding agents; the CLI and HTTP API expose the same core engine for local scripts, dashboards, and debugging.
 
@@ -502,13 +543,15 @@ PUT    /api/v1/sessions/{id}/end             End session
 POST   /api/v1/hooks/git                     Git hook
 GET    /api/v1/graph                         Interactive graph view (or JSON with ?format=json)
 POST   /api/v1/reflect                       Trigger reflection
+POST   /api/v1/consolidate                    Force full consolidation cycle
+POST   /api/v1/curate                         Deep curation (optional ?namespace=X&dry_run=true)
 ```
 
 ### REST Query Parameters
 
 | Route | Supported query params |
 |---|---|
-| `GET /api/v1/observations/search` | `q`, `type`, `kind`, `namespace`, `files`, `staleness`, `include_stale`, `limit` |
+| `GET /api/v1/observations/search` | `q`, `type`, `kind`, `namespace`, `files`, `staleness`, `include_stale`, `limit`, `debug` |
 | `GET /api/v1/observations/context` | `namespace`, `files`, `limit` |
 | `GET /api/v1/observations/browse` | `limit`, `offset`, `type`, `layer`, `namespace`, `kind`, `staleness` |
 | `GET /api/v1/graph` | `namespace`, `type`, `tags`, `min_importance`, `limit`, `linked_only`, `format=json` |
@@ -541,7 +584,7 @@ POST /api/v1/hooks/git
 }
 ```
 
-`POST /api/v1/reflect` currently returns a placeholder response; reflective synthesis is fully exposed through MCP and the internal engine, while the REST entry point is still minimal.
+`POST /api/v1/reflect` triggers a real reflection on Working-layer observations in the specified namespace.
 
 ## Configuration
 
@@ -600,6 +643,7 @@ Common overrides:
 | `NEUROX_CONFIG_DIR` | Override the default config directory |
 | `NEUROX_CONFIG_PATH` | Load config from a custom YAML path |
 | `NEUROX_DATABASE_PATH` | Point Neurox to a custom SQLite database |
+| `NEUROX_HTTP_HOST` | HTTP server bind address (default: `127.0.0.1`) |
 | `NEUROX_LLM_PROVIDER` | Set `ollama`, `remote`, or leave empty for auto-detect |
 | `NEUROX_LLM_GATE_MODE` | Set `auto`, `full`, or `off` |
 | `NEUROX_LLM_OLLAMA_URL` / `NEUROX_LLM_OLLAMA_MODEL` | Override the Ollama LLM endpoint/model |
@@ -651,7 +695,7 @@ neurox/
 │   ├── contradiction/         Conflict detection + temporal supersession
 │   ├── curate/                Deep memory curation with external LLM
 │   ├── db/                    SQLite schema, migrations, WAL mode
-│   ├── decay/                 Ebbinghaus curves, garbage collection
+│   ├── decay/                 Activation decay, garbage collection
 │   ├── embed/                 Ollama + OpenAI-compatible embeddings
 │   ├── export/                Markdown export and import
 │   ├── facts/                 Knowledge triples, LLM extraction
@@ -707,4 +751,8 @@ neurox/
 
 ## License
 
-MIT
+[BSL 1.1](LICENSE) (Business Source License 1.1)
+
+You can use, modify, and distribute Neurox for any purpose **except** offering it as a commercial hosted service that competes with the Licensor's paid offerings. On **2030-03-28**, the license automatically converts to **Apache 2.0**.
+
+See the [LICENSE](LICENSE) file for the full text.

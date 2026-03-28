@@ -153,16 +153,32 @@ func parseMarkdown(raw string) (*parsedObs, error) {
 }
 
 func upsertObservation(ctx context.Context, db *sql.DB, obs *parsedObs) error {
-	// Use INSERT OR REPLACE to preserve IDs from exported files
+	// Use INSERT ... ON CONFLICT to preserve scoring metadata for existing observations.
+	// New observations: insert with all available fields from the Markdown parse.
+	// Existing observations: update content-related fields but preserve accumulated
+	// scoring metadata (activation_level, consolidation_strength, access_count,
+	// decay_rate, has_embedding, source_surface, source_session_id, source_tool,
+	// layer, staleness, consolidation_status).
+	// For importance: only update if imported value is higher than existing.
 	_, err := db.ExecContext(ctx, `
-        INSERT OR REPLACE INTO observations
+        INSERT INTO observations
             (id, title, content, observation_type, kind, layer, importance, confidence,
-             tags, namespace, staleness, retention, created_at, valid_from, valid_until,
+             tags, namespace, staleness, created_at, valid_from, valid_until,
              updated_at, deleted_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), NULL)`,
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, datetime('now')), COALESCE(?, datetime('now')), ?, datetime('now'), NULL)
+        ON CONFLICT(id) DO UPDATE SET
+            title = excluded.title,
+            content = excluded.content,
+            observation_type = excluded.observation_type,
+            kind = excluded.kind,
+            tags = excluded.tags,
+            namespace = excluded.namespace,
+            confidence = excluded.confidence,
+            importance = MAX(observations.importance, excluded.importance),
+            updated_at = datetime('now')`,
 		obs.id, obs.title, obs.content, obs.obsType, obs.kind, obs.layer,
 		obs.importance, obs.confidence, obs.tags, obs.namespace,
-		obs.staleness, obs.retention,
+		obs.staleness,
 		nullStr(obs.createdAt), nullStr(obs.validFrom), nullStr(obs.validUntil),
 	)
 	return err

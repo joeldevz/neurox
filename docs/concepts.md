@@ -104,6 +104,26 @@ A reference guide to the core concepts behind persistent memory in AI coding age
 
 ---
 
+## Provenance
+
+**Definition:** Structured metadata attached to every observation that records its origin — which surface created it, during which session, and through which operation — enabling users to trace any memory back to its source and understand how it entered the system.
+
+**In practice:** An observation saying "We use SQLite" might have been saved by a human via the CLI, extracted from a session summary by the LLM, or synthesized during a reflection cycle. Without provenance, all three look identical. With provenance, you can answer "where did this come from?" and "should I trust it?" — a session-extracted observation created by an LLM deserves different scrutiny than a direct human save.
+
+**In Neurox:** Every observation carries three provenance fields: `source_surface` (which entry point: `mcp`, `http`, `cli`, or `consolidator`), `source_session_id` (the session active at creation, if any), and `source_tool` (which operation created it: `save`, `invalidate`, `session_end`, `reflect`, `curate`, or `consolidate`). These fields are set at creation time by the surface that creates the observation — they are never backfilled or inferred. Provenance appears in `recall` and `context` responses across all surfaces (MCP, HTTP, CLI), and the `audit` command shows the full provenance alongside the observation's lifecycle.
+
+---
+
+## Memory Debugging
+
+**Definition:** The ability to inspect *why* a memory was returned in a particular position — breaking down the composite score into its component signals so users and developers can understand, verify, and tune recall behavior.
+
+**In practice:** When your agent asks "what database are we using?" and gets an unexpected result, you need to know: was it ranked high because of keyword match? Semantic similarity? Recency? Temporal intent? Without score visibility, recall is a black box — you can see the output but not the reasoning. Memory debugging makes the scoring transparent, turning "that's wrong" into "the temporal multiplier penalized this correctly, but the relevance score is too high because of a keyword overlap."
+
+**In Neurox:** Pass `debug: true` to the `recall` tool (MCP), `--debug` flag (CLI), or `?debug=true` query parameter (HTTP). When enabled, each result includes a `score_breakdown` object with seven component scores: `recency` (Ebbinghaus decay signal), `importance` (durable value weight), `relevance` (FTS5 BM25 match), `semantic_score` (cosine similarity from embeddings), `temporal_multiplier` (intent-based boost or penalty), `cross_signal_boost` (confidence boost when FTS and semantic agree), and `final_score` (the composite result). The `audit <id>` command complements this by showing an observation's full lifecycle: creation timestamp, provenance, layer promotions, links (supersedes, contradicts, relates_to), staleness transitions, file associations, and temporal mentions.
+
+---
+
 ## Further Reading
 
 - [docs/quickstart.md](quickstart.md) — Get Neurox running with your AI client in under 5 minutes

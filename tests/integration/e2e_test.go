@@ -372,7 +372,7 @@ pattern | Always use transactions for multi-table updates | What: Wrap related u
 	}
 
 	// End session with summary
-	endResult, err := mgr.End(ctx, startResult.SessionID, "Implemented JWT auth. Chose React for frontend. Added Redis caching.")
+	endResult, err := mgr.End(ctx, startResult.SessionID, "Implemented JWT auth. Chose React for frontend. Added Redis caching.", "test")
 	if err != nil {
 		t.Fatalf("end: %v", err)
 	}
@@ -495,7 +495,7 @@ func TestE2E_DegradedMode(t *testing.T) {
 
 	// Session should work (no extraction without LLM)
 	startResult, _ := sessionMgr.Start(ctx, "Test", "", "", "degraded")
-	endResult, err := sessionMgr.End(ctx, startResult.SessionID, "Did some testing")
+	endResult, err := sessionMgr.End(ctx, startResult.SessionID, "Did some testing", "test")
 	if err != nil {
 		t.Fatalf("session end: %v", err)
 	}

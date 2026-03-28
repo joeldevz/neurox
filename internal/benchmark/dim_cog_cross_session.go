@@ -521,6 +521,7 @@ func (d CogCrossSession) scenarioD(ctx context.Context, env *BenchEnv, errs *[]s
 		ctx,
 		startResult.SessionID,
 		"Implemented JWT authentication with refresh tokens. Added middleware for token validation. Configured Redis for session storage.",
+		"benchmark",
 	)
 
 	// D3: Verify the session has the correct namespace in the DB.
