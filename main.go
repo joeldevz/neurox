@@ -314,7 +314,9 @@ func runRecall(ctx context.Context, database *sql.DB, cfg config.Config) {
 		URL: cfg.Embeddings.RemoteURL, APIKey: cfg.Embeddings.RemoteKey,
 		Model: cfg.Embeddings.RemoteModel, Dimensions: cfg.Embeddings.Dimensions,
 	})
-	engine := recall.NewEngine(database, recall.WithEmbedder(embedder))
+	idGen := observation.NewULIDGenerator()
+	factStore := facts.NewStore(database, idGen)
+	engine := recall.NewEngine(database, recall.WithEmbedder(embedder), recall.WithFactStore(factStore))
 
 	opts := recall.SearchOptions{
 		Query:           query,
@@ -1212,9 +1214,9 @@ func initDeps(ctx context.Context, database *sql.DB, cfg config.Config) *deps {
 
 	idGen := observation.NewULIDGenerator()
 	obsStore := observation.NewStore(database, nil)
-	recallEngine := recall.NewEngine(database, recall.WithEmbedder(embedder))
 	linkStore := links.NewStore(database, idGen)
 	factStore := facts.NewStore(database, idGen)
+	recallEngine := recall.NewEngine(database, recall.WithEmbedder(embedder), recall.WithFactStore(factStore))
 	factExtractor := facts.NewExtractor(llmProvider, factStore)
 
 	// Use curator provider for reflections when available; fall back to llmProvider.

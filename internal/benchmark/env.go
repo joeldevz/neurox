@@ -85,14 +85,18 @@ func NewBenchEnv(ctx context.Context, scale ScaleConfig) (*BenchEnv, error) {
 	temporalExtractor := temporal.NewExtractor(temporalParser, temporalStore)
 	obsStore.SetTemporalExtractor(temporalExtractor)
 
+	// --- facts ---
+	factStore := facts.NewStore(database, idGen)
+
 	// --- recall engine ---
-	recallEngine := recall.NewEngine(database, recall.WithEmbedder(fakeEmbedder))
+	recallEngine := recall.NewEngine(
+		database,
+		recall.WithEmbedder(fakeEmbedder),
+		recall.WithFactStore(factStore),
+	)
 
 	// --- links ---
 	linkStore := links.NewStore(database, idGen)
-
-	// --- facts ---
-	factStore := facts.NewStore(database, idGen)
 
 	// --- session manager (disabled LLM → no extraction from summaries) ---
 	sessionMgr := session.NewManager(database, llm.Disabled{}, idGen)
@@ -106,15 +110,11 @@ func NewBenchEnv(ctx context.Context, scale ScaleConfig) (*BenchEnv, error) {
 	disabledLLM := llm.Disabled{}
 	gate := llm.NewGate(disabledLLM, llm.GateModeOff)
 
-	// Embedding queue is required by the pipeline but we pass nil — the
-	// pipeline handles a nil queue gracefully (no async embedding).
-	embedQueue := embed.NewQueue(fakeEmbedder, database)
-
 	pipeline := consolidate.NewPipeline(
 		database,
 		decayEngine,
 		fakeEmbedder,
-		embedQueue,
+		nil, // benchmark embeddings are persisted synchronously via PersistPendingEmbeddings
 		gate,
 		linkStore,
 		disabledLLM,
@@ -154,6 +154,88 @@ func (e *BenchEnv) Close() {
 	if e.tempDir != "" {
 		_ = os.RemoveAll(e.tempDir)
 	}
+}
+
+// PersistPendingEmbeddings synchronously embeds all observations that do not yet
+// have a persisted embedding. This keeps benchmark execution deterministic and
+// avoids relying on the production background queue timing.
+func (e *BenchEnv) PersistPendingEmbeddings(ctx context.Context) error {
+	if e == nil {
+		return fmt.Errorf("bench env is nil")
+	}
+	if e.DB == nil {
+		return fmt.Errorf("bench env database is not initialized")
+	}
+	if e.Embedder == nil {
+		return fmt.Errorf("bench env embedder is not initialized")
+	}
+
+	type pendingObservation struct{ id string }
+
+	rows, err := e.DB.QueryContext(ctx, `
+		SELECT id, title, content
+		FROM observations
+		WHERE deleted_at IS NULL AND embedding IS NULL
+		ORDER BY importance DESC, created_at ASC, id ASC
+	`)
+	if err != nil {
+		return fmt.Errorf("query pending benchmark embeddings: %w", err)
+	}
+	defer rows.Close()
+
+	pending := make([]pendingObservation, 0)
+	texts := make([]string, 0)
+	for rows.Next() {
+		var id string
+		var title string
+		var content string
+		if err := rows.Scan(&id, &title, &content); err != nil {
+			return fmt.Errorf("scan pending benchmark embedding: %w", err)
+		}
+		pending = append(pending, pendingObservation{id: id})
+		texts = append(texts, title+" "+content)
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("iterate pending benchmark embeddings: %w", err)
+	}
+	if len(pending) == 0 {
+		return nil
+	}
+
+	vectors, err := e.Embedder.EmbedBatch(ctx, texts)
+	if err != nil {
+		return fmt.Errorf("embed pending benchmark observations: %w", err)
+	}
+	if len(vectors) != len(pending) {
+		return fmt.Errorf("embed pending benchmark observations: got %d vectors for %d observations", len(vectors), len(pending))
+	}
+
+	tx, err := e.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin benchmark embedding tx: %w", err)
+	}
+	defer func() {
+		if tx != nil {
+			_ = tx.Rollback()
+		}
+	}()
+
+	for i, item := range pending {
+		if _, err := tx.ExecContext(ctx,
+			"UPDATE observations SET embedding = ? WHERE id = ?",
+			embed.SerializeF32(vectors[i]),
+			item.id,
+		); err != nil {
+			return fmt.Errorf("persist benchmark embedding for %s: %w", item.id, err)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit benchmark embeddings: %w", err)
+	}
+	tx = nil
+
+	return nil
 }
 
 // MockLLM is a canned-response LLM provider for dimensions that need

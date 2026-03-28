@@ -178,6 +178,9 @@ func (d CogCrossSession) scenarioA(ctx context.Context, env *BenchEnv, errs *[]s
 			*errs = append(*errs, fmt.Sprintf("A: pipeline epoch %d warning: %v", i+1, err))
 		}
 	}
+	if err := env.PersistPendingEmbeddings(ctx); err != nil {
+		*errs = append(*errs, fmt.Sprintf("A: persist embeddings before recall failed: %v", err))
+	}
 
 	// Search for preferences.
 	results, err := env.RecallEngine.Search(ctx, recall.SearchOptions{
@@ -311,6 +314,10 @@ func (d CogCrossSession) scenarioB(ctx context.Context, env *BenchEnv, errs *[]s
 			})
 		}
 		return checks
+	}
+
+	if err := env.PersistPendingEmbeddings(ctx); err != nil {
+		*errs = append(*errs, fmt.Sprintf("B: persist embeddings before recall failed: %v", err))
 	}
 
 	results, err := env.RecallEngine.Search(ctx, recall.SearchOptions{

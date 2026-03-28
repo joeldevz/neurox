@@ -4,11 +4,13 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"log"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/joeldevz/neurox/internal/embed"
+	"github.com/joeldevz/neurox/internal/facts"
 	"github.com/joeldevz/neurox/internal/observation"
 )
 
@@ -18,8 +20,9 @@ const (
 )
 
 type Engine struct {
-	db       *sql.DB
-	embedder embed.Provider
+	db        *sql.DB
+	embedder  embed.Provider
+	factStore *facts.Store
 }
 
 type SearchOptions struct {
@@ -46,6 +49,7 @@ type ScoreBreakdown struct {
 	SemanticScore      float64 `json:"semantic_score"`
 	TemporalMultiplier float64 `json:"temporal_multiplier"`
 	CrossSignalBoost   float64 `json:"cross_signal_boost"`
+	TypeIntentBoost    float64 `json:"type_intent_boost"`
 	FinalScore         float64 `json:"final_score"`
 }
 
@@ -70,14 +74,15 @@ type Result struct {
 
 type candidate struct {
 	Result
-	Importance    float64
-	RawRelevance  float64
-	SemanticScore float64
-	CreatedAt     time.Time
-	LastAccessed  *time.Time
-	AccessCount   int
-	rowID         int64
-	index         int
+	Importance        float64
+	RawRelevance      float64
+	SemanticScore     float64
+	NamespaceBackfill bool
+	CreatedAt         time.Time
+	LastAccessed      *time.Time
+	AccessCount       int
+	rowID             int64
+	index             int
 }
 
 func NewEngine(database *sql.DB, opts ...EngineOption) *Engine {
@@ -95,6 +100,15 @@ func WithEmbedder(p embed.Provider) EngineOption {
 		if p != nil {
 			e.embedder = p
 		}
+	}
+}
+
+// WithFactStore sets an optional fact store on the recall engine. When configured,
+// Search() also queries the knowledge graph for matching facts and merges their
+// source observations into the result set (deduplicated by observation ID).
+func WithFactStore(s *facts.Store) EngineOption {
+	return func(e *Engine) {
+		e.factStore = s
 	}
 }
 
@@ -135,7 +149,8 @@ func (e *Engine) Search(ctx context.Context, options SearchOptions) ([]Result, e
 		return nil, fmt.Errorf("iterate recall rows: %w", err)
 	}
 
-	// Hybrid: if embeddings available, boost candidates that also appear in semantic search
+	// Hybrid: if embeddings available, boost FTS candidates with semantic scores
+	// and fill remaining slots with semantic-only results when FTS returns few.
 	if embed.IsAvailable(e.embedder) {
 		semFilter := semanticFilter{
 			Namespace:    normalized.Namespace,
@@ -144,13 +159,89 @@ func (e *Engine) Search(ctx context.Context, options SearchOptions) ([]Result, e
 		}
 		semScores, semErr := semanticSearch(ctx, e.db, e.embedder, normalized.Query, normalized.Limit*2, semFilter)
 		if semErr == nil && len(semScores) > 0 {
+			// Boost existing FTS candidates that also appear in semantic results
+			ftsIDs := make(map[string]struct{}, len(candidates))
 			for i := range candidates {
+				ftsIDs[candidates[i].ID] = struct{}{}
 				if semScore, ok := semScores[candidates[i].ID]; ok {
 					if semScore > 0 {
 						candidates[i].SemanticScore = semScore
 					}
 				}
 			}
+
+			// Fill remaining slots with semantic-only results when FTS returned fewer than limit
+			if len(candidates) < normalized.Limit {
+				remaining := normalized.Limit - len(candidates)
+				semanticOnlyIDs := make([]string, 0, remaining)
+				semanticOnlyScores := make(map[string]float64, remaining)
+
+				// Collect semantic results NOT already in FTS candidates, sorted by score desc
+				type idScore struct {
+					id    string
+					score float64
+				}
+				var semOnly []idScore
+				for id, score := range semScores {
+					if _, inFTS := ftsIDs[id]; !inFTS {
+						semOnly = append(semOnly, idScore{id: id, score: score})
+					}
+				}
+				sort.Slice(semOnly, func(i, j int) bool {
+					return semOnly[i].score > semOnly[j].score
+				})
+				for i := 0; i < remaining && i < len(semOnly); i++ {
+					semanticOnlyIDs = append(semanticOnlyIDs, semOnly[i].id)
+					semanticOnlyScores[semOnly[i].id] = semOnly[i].score
+				}
+
+				if len(semanticOnlyIDs) > 0 {
+					semCandidates, loadErr := loadObservationsByIDs(ctx, e.db, semanticOnlyIDs, normalized)
+					if loadErr == nil {
+						for i := range semCandidates {
+							semCandidates[i].SemanticScore = semanticOnlyScores[semCandidates[i].ID]
+							semCandidates[i].RawRelevance = 0 // no FTS match
+						}
+						candidates = append(candidates, semCandidates...)
+					}
+				}
+			}
+		}
+	}
+
+	// Integrate fact-sourced observations into the candidate list.
+	// Facts are queried by LIKE matching on subject/object/predicate; when a fact
+	// references an observation that is NOT already in the candidate set, load it
+	// and add it as a candidate with a [fact] title prefix.
+	if e.factStore != nil {
+		factCandidates, factErr := e.searchFacts(ctx, normalized)
+		if factErr != nil {
+			log.Printf("fact search: %v", factErr)
+		} else if len(factCandidates) > 0 {
+			existingIDs := make(map[string]struct{}, len(candidates))
+			for _, c := range candidates {
+				existingIDs[c.ID] = struct{}{}
+			}
+			for _, fc := range factCandidates {
+				if _, exists := existingIDs[fc.ID]; !exists {
+					existingIDs[fc.ID] = struct{}{}
+					candidates = append(candidates, fc)
+				}
+			}
+		}
+	}
+
+	if shouldNamespaceBackfill(normalized, len(candidates)) {
+		existingIDs := make(map[string]struct{}, len(candidates))
+		for _, c := range candidates {
+			existingIDs[c.ID] = struct{}{}
+		}
+
+		backfill, backfillErr := loadNamespaceBackfill(ctx, e.db, normalized, existingIDs)
+		if backfillErr != nil {
+			log.Printf("namespace backfill: %v", backfillErr)
+		} else if len(backfill) > 0 {
+			candidates = append(candidates, backfill...)
 		}
 	}
 
@@ -161,7 +252,7 @@ func (e *Engine) Search(ctx context.Context, options SearchOptions) ([]Result, e
 	}
 	mentionMap, _ := loadCandidateMentions(ctx, e.db, candidateIDs)
 
-	applyScores(candidates, normalized.Weights, normalized.Now, intent, mentionMap, normalized.Debug)
+	applyScores(candidates, normalized.Weights, normalized.Now, intent, mentionMap, normalized.Debug, normalized.Query)
 	sort.SliceStable(candidates, func(i int, j int) bool {
 		if candidates[i].Score == candidates[j].Score {
 			if candidates[i].RawRelevance == candidates[j].RawRelevance {
@@ -222,6 +313,16 @@ func normalizeLimit(limit int) int {
 		return maxLimit
 	}
 	return limit
+}
+
+func shouldNamespaceBackfill(options SearchOptions, currentCount int) bool {
+	if options.Namespace == "" || currentCount >= options.Limit {
+		return false
+	}
+	if len(options.Files) > 0 {
+		return false
+	}
+	return len(strings.Fields(options.Query)) >= 3
 }
 
 func scanCandidate(scanner interface{ Scan(dest ...any) error }) (candidate, error) {
@@ -296,6 +397,57 @@ func (e *Engine) bumpAccess(ctx context.Context, ids []string) error {
 		return fmt.Errorf("update recall access metrics: %w", err)
 	}
 	return nil
+}
+
+// searchFacts queries the knowledge graph for facts matching the search query,
+// then loads the source observations as candidates. Facts contribute results
+// with a [fact] prefix in the title and RawRelevance=0 (no FTS match), allowing
+// the scoring formula to rank them via importance and recency.
+func (e *Engine) searchFacts(ctx context.Context, options SearchOptions) ([]candidate, error) {
+	matchedFacts, err := e.factStore.Search(ctx, options.Query, options.Namespace, options.Limit)
+	if err != nil {
+		return nil, fmt.Errorf("fact store search: %w", err)
+	}
+	if len(matchedFacts) == 0 {
+		return nil, nil
+	}
+
+	// Collect unique observation IDs from matching facts. A fact may have
+	// no observation_id if it was manually inserted; skip those.
+	seen := make(map[string]struct{}, len(matchedFacts))
+	var obsIDs []string
+	// Keep a map of obsID → best fact for title prefix.
+	factByObs := make(map[string]facts.Fact, len(matchedFacts))
+	for _, f := range matchedFacts {
+		if f.ObservationID == "" {
+			continue
+		}
+		if _, dup := seen[f.ObservationID]; dup {
+			continue
+		}
+		seen[f.ObservationID] = struct{}{}
+		obsIDs = append(obsIDs, f.ObservationID)
+		factByObs[f.ObservationID] = f
+	}
+	if len(obsIDs) == 0 {
+		return nil, nil
+	}
+
+	// Load the full observation data for these IDs, applying the same filters
+	// as the main search pipeline (type, kind, staleness, retention, files).
+	loaded, err := loadObservationsByIDs(ctx, e.db, obsIDs, options)
+	if err != nil {
+		return nil, fmt.Errorf("load fact observations: %w", err)
+	}
+
+	// Prefix titles with [fact] and set minimal relevance so scoring works.
+	for i := range loaded {
+		f := factByObs[loaded[i].ID]
+		loaded[i].Title = fmt.Sprintf("[fact] %s | %s | %s", f.Subject, f.Predicate, f.Object)
+		loaded[i].RawRelevance = 0 // no FTS match
+	}
+
+	return loaded, nil
 }
 
 func normalizeFiles(files []string) []string {

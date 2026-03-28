@@ -7,10 +7,12 @@ import (
 	"math"
 	"path/filepath"
 	"sort"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/joeldevz/neurox/internal/db"
+	"github.com/joeldevz/neurox/internal/facts"
 	"github.com/joeldevz/neurox/internal/observation"
 )
 
@@ -691,7 +693,7 @@ func searchWithoutActivation(ctx context.Context, database *sql.DB, options Sear
 		return nil, err
 	}
 
-	applyScores(candidates, normalized.Weights, normalized.Now, intent, nil, false)
+	applyScores(candidates, normalized.Weights, normalized.Now, intent, nil, false, normalized.Query)
 	sort.SliceStable(candidates, func(i int, j int) bool {
 		if candidates[i].Score == candidates[j].Score {
 			if candidates[i].RawRelevance == candidates[j].RawRelevance {
@@ -1255,6 +1257,1802 @@ func TestSemanticSearchHardCap(t *testing.T) {
 	if maxEmbeddingsPerSearch != 10000 {
 		t.Fatalf("maxEmbeddingsPerSearch = %d, want 10000", maxEmbeddingsPerSearch)
 	}
+}
+
+// ============================================================================
+// TESTS: Semantic fallback — fill remaining slots with semantic-only results
+// When FTS returns few or zero results, semantic-only matches are loaded from
+// the DB and added as candidates with RawRelevance=0.
+// ============================================================================
+
+// TestSemanticFallbackWhenFTSReturnsEmpty verifies that when FTS returns 0 results
+// (query uses completely different wording), semantic search results are returned
+// instead of an empty result set.
+func TestSemanticFallbackWhenFTSReturnsEmpty(t *testing.T) {
+	ctx := context.Background()
+	databasePath := filepath.Join(t.TempDir(), "neurox.db")
+	database, err := db.Open(ctx, databasePath)
+	if err != nil {
+		t.Fatalf("db.Open: %v", err)
+	}
+	defer database.Close()
+
+	store := observation.NewStore(database, nil)
+
+	// Save observation with specific keywords
+	obs, err := store.Save(ctx, observation.Observation{
+		Title:   "Database preference",
+		Content: "We prefer PostgreSQL over MySQL for production",
+	})
+	if err != nil {
+		t.Fatalf("save observation: %v", err)
+	}
+
+	// Set a deterministic embedding on this observation
+	obsVec := makeTestVector(42, 4)
+	setEmbedding(t, database, obs.ID, obsVec)
+
+	// Create a provider that returns a vector very similar to the observation's vector
+	// (simulates "what database do we use" being semantically close to "PostgreSQL over MySQL")
+	queryVec := makeTestVector(42, 4) // same vector = cosine sim ≈ 1.0
+	provider := &testEmbedProvider{dims: 4, queryVector: queryVec}
+
+	// Create engine with embedder
+	engine := NewEngine(database, WithEmbedder(provider))
+
+	// Search with words that do NOT appear in the observation (FTS will return 0)
+	results, err := engine.Search(ctx, SearchOptions{
+		Query: "xyzzy nonsense words", // guaranteed not to match FTS
+		Limit: 10,
+	})
+	if err != nil {
+		t.Fatalf("Search returned error: %v", err)
+	}
+
+	// Should find the observation via semantic fallback
+	if len(results) == 0 {
+		t.Fatal("expected at least 1 result from semantic fallback, got 0")
+	}
+
+	found := false
+	for _, r := range results {
+		if r.ID == obs.ID {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("semantic fallback should have returned observation %q, got IDs: %v",
+			obs.ID, resultIDs(results))
+	}
+
+	// The result should have a positive score (from semantic component)
+	if results[0].Score <= 0 {
+		t.Fatalf("semantic-only result should have positive score, got %f", results[0].Score)
+	}
+
+	t.Logf("Semantic fallback: FTS=0 results, semantic fallback found %d results (score=%.4f)",
+		len(results), results[0].Score)
+}
+
+// TestSemanticFillsRemainingSlots verifies that when FTS returns some results but
+// fewer than the limit, remaining slots are filled with semantic-only matches.
+func TestSemanticFillsRemainingSlots(t *testing.T) {
+	ctx := context.Background()
+	databasePath := filepath.Join(t.TempDir(), "neurox.db")
+	database, err := db.Open(ctx, databasePath)
+	if err != nil {
+		t.Fatalf("db.Open: %v", err)
+	}
+	defer database.Close()
+
+	store := observation.NewStore(database, nil)
+
+	// Save an observation that matches FTS for "auth"
+	ftsObs, err := store.Save(ctx, observation.Observation{
+		Title:   "Auth config",
+		Content: "auth uses JWT tokens for authentication",
+	})
+	if err != nil {
+		t.Fatalf("save fts observation: %v", err)
+	}
+	ftsVec := makeTestVector(10, 4)
+	setEmbedding(t, database, ftsObs.ID, ftsVec)
+
+	// Save an observation that does NOT match FTS for "auth" but IS semantically similar
+	// (different words entirely — "login mechanism")
+	semObs, err := store.Save(ctx, observation.Observation{
+		Title:   "Login mechanism",
+		Content: "The login mechanism uses session cookies for user verification",
+	})
+	if err != nil {
+		t.Fatalf("save semantic observation: %v", err)
+	}
+	semVec := makeTestVector(10, 4) // same vector = high cosine sim
+	setEmbedding(t, database, semObs.ID, semVec)
+
+	// Provider returns a vector close to both (same seed)
+	provider := &testEmbedProvider{dims: 4, queryVector: makeTestVector(10, 4)}
+	engine := NewEngine(database, WithEmbedder(provider))
+
+	// Search for "auth" with limit=5
+	results, err := engine.Search(ctx, SearchOptions{
+		Query: "auth",
+		Limit: 5,
+	})
+	if err != nil {
+		t.Fatalf("Search returned error: %v", err)
+	}
+
+	// Should have at least 2 results: FTS match + semantic fill
+	if len(results) < 2 {
+		t.Fatalf("expected at least 2 results (FTS + semantic fill), got %d", len(results))
+	}
+
+	// The FTS match should be present
+	foundFTS := false
+	foundSem := false
+	for _, r := range results {
+		if r.ID == ftsObs.ID {
+			foundFTS = true
+		}
+		if r.ID == semObs.ID {
+			foundSem = true
+		}
+	}
+	if !foundFTS {
+		t.Error("FTS-matched observation should be in results")
+	}
+	if !foundSem {
+		t.Error("semantic-only observation should fill remaining slots")
+	}
+
+	// FTS result should score higher (cross-signal boost applies)
+	if foundFTS && foundSem {
+		ftsScore := findResultScore(t, results, ftsObs.ID)
+		semScore := findResultScore(t, results, semObs.ID)
+		if ftsScore <= semScore {
+			t.Errorf("FTS result (score=%.4f) should rank higher than semantic-only (score=%.4f) due to cross-signal boost",
+				ftsScore, semScore)
+		}
+		t.Logf("FTS result score=%.4f, semantic-only score=%.4f — FTS preferred as expected",
+			ftsScore, semScore)
+	}
+}
+
+// TestSemanticFallbackRespectsFilters verifies that semantic-only fallback results
+// respect the same filters (observation_type, namespace, staleness) as FTS results.
+func TestSemanticFallbackRespectsFilters(t *testing.T) {
+	ctx := context.Background()
+	databasePath := filepath.Join(t.TempDir(), "neurox.db")
+	database, err := db.Open(ctx, databasePath)
+	if err != nil {
+		t.Fatalf("db.Open: %v", err)
+	}
+	defer database.Close()
+
+	store := observation.NewStore(database, nil)
+
+	// Save a bugfix observation (should NOT match type filter for "decision")
+	bugfixObs, err := store.Save(ctx, observation.Observation{
+		Title:           "Bugfix note",
+		Content:         "Fixed the critical rendering pipeline",
+		ObservationType: observation.ObservationTypeBugfix,
+		Namespace:       "project-x",
+	})
+	if err != nil {
+		t.Fatalf("save bugfix: %v", err)
+	}
+	setEmbedding(t, database, bugfixObs.ID, makeTestVector(5, 4))
+
+	// Save a decision observation (should match type filter for "decision")
+	decisionObs, err := store.Save(ctx, observation.Observation{
+		Title:           "Architecture decision",
+		Content:         "Use microservices for the backend infrastructure",
+		ObservationType: observation.ObservationTypeDecision,
+		Namespace:       "project-x",
+	})
+	if err != nil {
+		t.Fatalf("save decision: %v", err)
+	}
+	setEmbedding(t, database, decisionObs.ID, makeTestVector(5, 4))
+
+	provider := &testEmbedProvider{dims: 4, queryVector: makeTestVector(5, 4)}
+	engine := NewEngine(database, WithEmbedder(provider))
+
+	// Search with type filter — only "decision" type
+	results, err := engine.Search(ctx, SearchOptions{
+		Query:           "xyzzy unmatched", // no FTS match → all from semantic fallback
+		ObservationType: observation.ObservationTypeDecision,
+		Namespace:       "project-x",
+		Limit:           10,
+	})
+	if err != nil {
+		t.Fatalf("Search returned error: %v", err)
+	}
+
+	// Should only find the decision observation, not the bugfix
+	for _, r := range results {
+		if r.ID == bugfixObs.ID {
+			t.Error("semantic fallback should respect observation_type filter — bugfix should be excluded")
+		}
+	}
+
+	foundDecision := false
+	for _, r := range results {
+		if r.ID == decisionObs.ID {
+			foundDecision = true
+		}
+	}
+	if !foundDecision {
+		t.Error("semantic fallback should include decision observation matching the type filter")
+	}
+
+	t.Logf("Semantic fallback respects filters: returned %d results, decision found=%v", len(results), foundDecision)
+}
+
+// TestSemanticFallbackDisabledWithoutEmbedder verifies that when no embedding
+// provider is configured, behavior is unchanged (FTS-only).
+func TestSemanticFallbackDisabledWithoutEmbedder(t *testing.T) {
+	engine, store, database := newTestEngine(t) // no embedder
+	defer database.Close()
+
+	ctx := context.Background()
+	_, err := store.Save(ctx, observation.Observation{
+		Title:   "Database preference",
+		Content: "We prefer PostgreSQL over MySQL",
+	})
+	if err != nil {
+		t.Fatalf("save observation: %v", err)
+	}
+
+	// Search with words that don't match FTS — should return 0 results (no semantic fallback)
+	results, err := engine.Search(ctx, SearchOptions{
+		Query: "xyzzy nonsense",
+		Limit: 10,
+	})
+	if err != nil {
+		t.Fatalf("Search returned error: %v", err)
+	}
+	if len(results) != 0 {
+		t.Fatalf("without embedder, should return 0 results for non-matching query, got %d", len(results))
+	}
+
+	t.Log("Without embedder: FTS-only returns 0 results for non-matching query — correct")
+}
+
+// TestNamespaceBackfillFillsBroadNamespaceQueries verifies that broad namespace
+// queries can be conservatively backfilled with durable observations when direct
+// candidate generation underfills the requested limit.
+func TestNamespaceBackfillFillsBroadNamespaceQueries(t *testing.T) {
+	engine, store, database := newTestEngine(t)
+	defer database.Close()
+
+	ctx := context.Background()
+	ids := make([]string, 0, 3)
+	for _, obs := range []observation.Observation{
+		{
+			Title:           "Tabs over spaces",
+			Content:         "Always use tabs for indentation in editor settings.",
+			Namespace:       "team-memory",
+			ObservationType: observation.ObservationTypePreference,
+			Retention:       observation.RetentionDurable,
+		},
+		{
+			Title:           "Use conventional commits",
+			Content:         "Commit messages should follow feat/fix/chore style.",
+			Namespace:       "team-memory",
+			ObservationType: observation.ObservationTypePreference,
+			Retention:       observation.RetentionDurable,
+		},
+		{
+			Title:           "Prefer named exports",
+			Content:         "Export modules with named exports for consistency.",
+			Namespace:       "team-memory",
+			ObservationType: observation.ObservationTypePreference,
+			Retention:       observation.RetentionDurable,
+		},
+	} {
+		saved, err := store.Save(ctx, obs)
+		if err != nil {
+			t.Fatalf("save observation: %v", err)
+		}
+		ids = append(ids, saved.ID)
+	}
+
+	results, err := engine.Search(ctx, SearchOptions{
+		Query:     "user preferences coding style conventions",
+		Namespace: "team-memory",
+		Limit:     5,
+	})
+	if err != nil {
+		t.Fatalf("Search returned error: %v", err)
+	}
+	if len(results) != 3 {
+		t.Fatalf("len(results) = %d, want 3", len(results))
+	}
+
+	resultSet := make(map[string]struct{}, len(results))
+	for _, result := range results {
+		resultSet[result.ID] = struct{}{}
+	}
+	for _, id := range ids {
+		if _, ok := resultSet[id]; !ok {
+			t.Fatalf("expected namespace backfill result %q in results %v", id, resultIDs(results))
+		}
+	}
+}
+
+// TestNamespaceBackfillKeepsDirectMatchesAhead verifies that namespace backfill
+// only fills empty slots and does not outrank direct FTS matches.
+func TestNamespaceBackfillKeepsDirectMatchesAhead(t *testing.T) {
+	engine, store, database := newTestEngine(t)
+	defer database.Close()
+
+	ctx := context.Background()
+	direct, err := store.Save(ctx, observation.Observation{
+		Title:           "Coding style conventions",
+		Content:         "Document the coding style conventions for the project.",
+		Namespace:       "project-memory",
+		ObservationType: observation.ObservationTypePattern,
+		Retention:       observation.RetentionDurable,
+	})
+	if err != nil {
+		t.Fatalf("save direct match: %v", err)
+	}
+
+	backfill, err := store.Save(ctx, observation.Observation{
+		Title:           "Redis deployment note",
+		Content:         "Redis cluster runs in three availability zones.",
+		Namespace:       "project-memory",
+		ObservationType: observation.ObservationTypeDecision,
+		Retention:       observation.RetentionDurable,
+	})
+	if err != nil {
+		t.Fatalf("save backfill candidate: %v", err)
+	}
+	setObservationFields(t, database, backfill.ID, map[string]any{"importance": 1.0})
+
+	results, err := engine.Search(ctx, SearchOptions{
+		Query:     "project coding style conventions",
+		Namespace: "project-memory",
+		Limit:     5,
+	})
+	if err != nil {
+		t.Fatalf("Search returned error: %v", err)
+	}
+	if len(results) < 2 {
+		t.Fatalf("len(results) = %d, want at least 2", len(results))
+	}
+	if results[0].ID != direct.ID {
+		t.Fatalf("top result = %q, want direct match %q", results[0].ID, direct.ID)
+	}
+	if findResultScore(t, results, direct.ID) <= findResultScore(t, results, backfill.ID) {
+		t.Fatalf("direct match should score higher than namespace backfill")
+	}
+}
+
+// TestNamespaceBackfillIsConservative verifies that backfill only applies to
+// broad queries and only returns durable observations by default.
+func TestNamespaceBackfillIsConservative(t *testing.T) {
+	engine, store, database := newTestEngine(t)
+	defer database.Close()
+
+	ctx := context.Background()
+	durable, err := store.Save(ctx, observation.Observation{
+		Title:           "Architecture overview",
+		Content:         "Services communicate over a message bus.",
+		Namespace:       "summary-ns",
+		ObservationType: observation.ObservationTypeDecision,
+		Retention:       observation.RetentionDurable,
+	})
+	if err != nil {
+		t.Fatalf("save durable: %v", err)
+	}
+	operational, err := store.Save(ctx, observation.Observation{
+		Title:           "Temporary task status",
+		Content:         "Step 2 is in progress.",
+		Namespace:       "summary-ns",
+		ObservationType: observation.ObservationTypeDiscovery,
+		Retention:       observation.RetentionOperational,
+	})
+	if err != nil {
+		t.Fatalf("save operational: %v", err)
+	}
+
+	narrowResults, err := engine.Search(ctx, SearchOptions{
+		Query:     "platform stack",
+		Namespace: "summary-ns",
+		Limit:     5,
+	})
+	if err != nil {
+		t.Fatalf("narrow Search returned error: %v", err)
+	}
+	if len(narrowResults) != 0 {
+		t.Fatalf("narrow query should not backfill, got %d results", len(narrowResults))
+	}
+
+	broadResults, err := engine.Search(ctx, SearchOptions{
+		Query:     "project architecture infrastructure stack",
+		Namespace: "summary-ns",
+		Limit:     5,
+	})
+	if err != nil {
+		t.Fatalf("broad Search returned error: %v", err)
+	}
+	if len(broadResults) != 1 {
+		t.Fatalf("len(broadResults) = %d, want 1 durable result", len(broadResults))
+	}
+	if broadResults[0].ID != durable.ID {
+		t.Fatalf("broad result = %q, want durable %q", broadResults[0].ID, durable.ID)
+	}
+	for _, result := range broadResults {
+		if result.ID == operational.ID {
+			t.Fatal("operational observation should not be included in default namespace backfill")
+		}
+	}
+}
+
+// ============================================================================
+// TESTS: FTS5 prefix matching
+// Tokens with 4+ characters get a wildcard suffix so "auth" matches
+// "authentication", "authorize", etc. Short tokens (≤3 chars) stay exact.
+// ============================================================================
+
+// TestBuildFTSMatchQueryPrefix verifies the FTS match string generation.
+func TestBuildFTSMatchQueryPrefix(t *testing.T) {
+	tests := []struct {
+		name  string
+		query string
+		want  string
+	}{
+		{
+			name:  "long token gets prefix",
+			query: "auth",
+			want:  `"auth" OR "auth"*`,
+		},
+		{
+			name:  "short token stays exact",
+			query: "db",
+			want:  `"db"`,
+		},
+		{
+			name:  "3-char token stays exact",
+			query: "api",
+			want:  `"api"`,
+		},
+		{
+			name:  "mixed tokens",
+			query: "db config",
+			want:  `"db" OR "config" OR "config"*`,
+		},
+		{
+			name:  "multiple long tokens",
+			query: "auth config setup",
+			want:  `"auth" OR "auth"* OR "config" OR "config"* OR "setup" OR "setup"*`,
+		},
+		{
+			name:  "single word exact boundary",
+			query: "yes",
+			want:  `"yes"`,
+		},
+		{
+			name:  "exactly 4 chars gets prefix",
+			query: "test",
+			want:  `"test" OR "test"*`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := buildFTSMatchQuery(tt.query)
+			if got != tt.want {
+				t.Errorf("buildFTSMatchQuery(%q) =\n  %q\nwant:\n  %q", tt.query, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestFTSPrefixMatching verifies that FTS5 prefix matching works end-to-end:
+// "auth" finds "authentication"/"authorize", "config" finds "configuration",
+// and short tokens like "db" do NOT prefix-expand.
+func TestFTSPrefixMatching(t *testing.T) {
+	engine, store, database := newTestEngine(t)
+	defer database.Close()
+
+	ctx := context.Background()
+
+	// --- seed observations ---
+
+	// Should be found by searching "auth" (prefix match on "authentication")
+	authenticationObs, err := store.Save(ctx, observation.Observation{
+		Title:   "Login flow",
+		Content: "the authentication system uses JWT tokens",
+	})
+	if err != nil {
+		t.Fatalf("save authentication: %v", err)
+	}
+
+	// Should be found by searching "auth" (prefix match on "authorize")
+	authorizeObs, err := store.Save(ctx, observation.Observation{
+		Title:   "Permission check",
+		Content: "authorize user before accessing resources",
+	})
+	if err != nil {
+		t.Fatalf("save authorize: %v", err)
+	}
+
+	// Should be found by searching "auth" (prefix match on "auth-token", hyphenated)
+	authTokenObs, err := store.Save(ctx, observation.Observation{
+		Title:   "Token management",
+		Content: "refresh the auth-token every 30 minutes",
+	})
+	if err != nil {
+		t.Fatalf("save auth-token: %v", err)
+	}
+
+	// Should be found by searching "config" (prefix match on "configuration")
+	configurationObs, err := store.Save(ctx, observation.Observation{
+		Title:   "Setup notes",
+		Content: "the configuration file uses YAML format",
+	})
+	if err != nil {
+		t.Fatalf("save configuration: %v", err)
+	}
+
+	// Should be found by searching "config" (prefix match on "configuring")
+	configuringObs, err := store.Save(ctx, observation.Observation{
+		Title:   "DevOps note",
+		Content: "guide for configuring the production environment",
+	})
+	if err != nil {
+		t.Fatalf("save configuring: %v", err)
+	}
+
+	// Should NOT be found by searching "db" (≤3 chars, no prefix expansion)
+	// Only exact "db" should match, not "database" via prefix.
+	databaseOnlyObs, err := store.Save(ctx, observation.Observation{
+		Title:   "Storage layer",
+		Content: "the database layer handles persistence",
+	})
+	if err != nil {
+		t.Fatalf("save database-only: %v", err)
+	}
+
+	// Should be found by searching "db" (exact match on "db")
+	dbExactObs, err := store.Save(ctx, observation.Observation{
+		Title:   "DB connection",
+		Content: "configure the db connection pool",
+	})
+	if err != nil {
+		t.Fatalf("save db-exact: %v", err)
+	}
+
+	// --- subtest: "auth" prefix matching ---
+	t.Run("auth prefix matches authentication/authorize/auth-token", func(t *testing.T) {
+		results, err := engine.Search(ctx, SearchOptions{Query: "auth", Limit: 20})
+		if err != nil {
+			t.Fatalf("Search returned error: %v", err)
+		}
+
+		foundIDs := make(map[string]bool, len(results))
+		for _, r := range results {
+			foundIDs[r.ID] = true
+		}
+
+		if !foundIDs[authenticationObs.ID] {
+			t.Errorf("search 'auth' should find 'authentication' observation %s", authenticationObs.ID)
+		}
+		if !foundIDs[authorizeObs.ID] {
+			t.Errorf("search 'auth' should find 'authorize' observation %s", authorizeObs.ID)
+		}
+		if !foundIDs[authTokenObs.ID] {
+			t.Errorf("search 'auth' should find 'auth-token' observation %s", authTokenObs.ID)
+		}
+
+		t.Logf("auth prefix: found %d results, authentication=%v authorize=%v auth-token=%v",
+			len(results), foundIDs[authenticationObs.ID], foundIDs[authorizeObs.ID], foundIDs[authTokenObs.ID])
+	})
+
+	// --- subtest: "config" prefix matching ---
+	t.Run("config prefix matches configuration/configuring", func(t *testing.T) {
+		results, err := engine.Search(ctx, SearchOptions{Query: "config", Limit: 20})
+		if err != nil {
+			t.Fatalf("Search returned error: %v", err)
+		}
+
+		foundIDs := make(map[string]bool, len(results))
+		for _, r := range results {
+			foundIDs[r.ID] = true
+		}
+
+		if !foundIDs[configurationObs.ID] {
+			t.Errorf("search 'config' should find 'configuration' observation %s", configurationObs.ID)
+		}
+		if !foundIDs[configuringObs.ID] {
+			t.Errorf("search 'config' should find 'configuring' observation %s", configuringObs.ID)
+		}
+
+		t.Logf("config prefix: found %d results, configuration=%v configuring=%v",
+			len(results), foundIDs[configurationObs.ID], foundIDs[configuringObs.ID])
+	})
+
+	// --- subtest: "db" does NOT prefix expand ---
+	t.Run("db short token no prefix expansion", func(t *testing.T) {
+		results, err := engine.Search(ctx, SearchOptions{Query: "db", Limit: 20})
+		if err != nil {
+			t.Fatalf("Search returned error: %v", err)
+		}
+
+		foundIDs := make(map[string]bool, len(results))
+		for _, r := range results {
+			foundIDs[r.ID] = true
+		}
+
+		// "db" exact match should be found
+		if !foundIDs[dbExactObs.ID] {
+			t.Errorf("search 'db' should find exact-match observation %s", dbExactObs.ID)
+		}
+
+		// "database" should NOT be found via prefix (short token protection)
+		if foundIDs[databaseOnlyObs.ID] {
+			t.Errorf("search 'db' should NOT find 'database' observation %s (short token, no prefix expansion)",
+				databaseOnlyObs.ID)
+		}
+
+		t.Logf("db short token: found %d results, exact-db=%v database=%v",
+			len(results), foundIDs[dbExactObs.ID], foundIDs[databaseOnlyObs.ID])
+	})
+
+	_ = authenticationObs
+	_ = authorizeObs
+	_ = authTokenObs
+	_ = configurationObs
+	_ = configuringObs
+	_ = databaseOnlyObs
+	_ = dbExactObs
+}
+
+// ============================================================================
+// TESTS: Facts integration into recall results
+// When a FactStore is configured, Search() also queries the knowledge graph
+// for matching facts and merges their source observations into results.
+// ============================================================================
+
+// TestFactsIntegratedInRecall verifies the core fact integration:
+// 1. A fact matching the query returns its source observation in results
+// 2. If the observation is already in FTS results, it is NOT duplicated
+// 3. Fact-sourced results have a [fact] title prefix
+// 4. Without a fact store, behavior is unchanged
+func TestFactsIntegratedInRecall(t *testing.T) {
+	ctx := context.Background()
+	databasePath := filepath.Join(t.TempDir(), "neurox.db")
+	database, err := db.Open(ctx, databasePath)
+	if err != nil {
+		t.Fatalf("db.Open: %v", err)
+	}
+	defer database.Close()
+
+	store := observation.NewStore(database, nil)
+	idGen := observation.NewULIDGenerator()
+	factStore := facts.NewStore(database, idGen)
+
+	// --- Seed: create an observation about database preference ---
+	obs, err := store.Save(ctx, observation.Observation{
+		Title:     "Database config",
+		Content:   "We use PostgreSQL for production",
+		Namespace: "test-ns",
+	})
+	if err != nil {
+		t.Fatalf("save observation: %v", err)
+	}
+
+	// --- Seed: create a fact linking to this observation ---
+	_, err = factStore.Save(ctx, facts.Fact{
+		Subject:       "database",
+		Predicate:     "current",
+		Object:        "PostgreSQL",
+		ObservationID: obs.ID,
+		Namespace:     "test-ns",
+	})
+	if err != nil {
+		t.Fatalf("save fact: %v", err)
+	}
+
+	// --- Seed: create another observation NOT linked by facts ---
+	otherObs, err := store.Save(ctx, observation.Observation{
+		Title:     "Auth system",
+		Content:   "Using JWT for auth",
+		Namespace: "test-ns",
+	})
+	if err != nil {
+		t.Fatalf("save other observation: %v", err)
+	}
+	_ = otherObs
+
+	// --- Subtest: fact query finds source observation ---
+	t.Run("fact query returns source observation", func(t *testing.T) {
+		// Search for "database" — the word appears in the observation itself (FTS match)
+		// AND in the fact (subject="database"). The observation should appear exactly once.
+		engine := NewEngine(database, WithFactStore(factStore))
+		results, err := engine.Search(ctx, SearchOptions{
+			Query:     "database",
+			Namespace: "test-ns",
+			Limit:     10,
+		})
+		if err != nil {
+			t.Fatalf("Search returned error: %v", err)
+		}
+		if len(results) == 0 {
+			t.Fatal("expected at least 1 result")
+		}
+
+		// Should find the observation exactly once (deduplicated: FTS already found it)
+		count := 0
+		for _, r := range results {
+			if r.ID == obs.ID {
+				count++
+			}
+		}
+		if count != 1 {
+			t.Fatalf("observation %q should appear exactly once, appeared %d times", obs.ID, count)
+		}
+	})
+
+	// --- Subtest: fact-only match (query words not in observation) ---
+	t.Run("fact-only match uses fact title prefix", func(t *testing.T) {
+		// Search "PostgreSQL" — appears in fact object and in observation content.
+		// With a query that matches ONLY the fact and NOT the observation title/tags,
+		// we can test the [fact] prefix. Let's create a fresh scenario.
+		factOnlyObs, err := store.Save(ctx, observation.Observation{
+			Title:     "Infrastructure choice",
+			Content:   "Selected after extensive testing of alternatives",
+			Namespace: "test-ns",
+		})
+		if err != nil {
+			t.Fatalf("save fact-only observation: %v", err)
+		}
+
+		_, err = factStore.Save(ctx, facts.Fact{
+			Subject:       "cache",
+			Predicate:     "technology",
+			Object:        "Redis",
+			ObservationID: factOnlyObs.ID,
+			Namespace:     "test-ns",
+		})
+		if err != nil {
+			t.Fatalf("save fact: %v", err)
+		}
+
+		// Query "Redis" — FTS should NOT find factOnlyObs (neither "Redis" nor "cache"
+		// appear in its title/content). But the fact matches ("Redis" in object).
+		engine := NewEngine(database, WithFactStore(factStore))
+		results, err := engine.Search(ctx, SearchOptions{
+			Query:     "Redis",
+			Namespace: "test-ns",
+			Limit:     10,
+		})
+		if err != nil {
+			t.Fatalf("Search returned error: %v", err)
+		}
+
+		found := false
+		for _, r := range results {
+			if r.ID == factOnlyObs.ID {
+				found = true
+				if !strings.HasPrefix(r.Title, "[fact]") {
+					t.Errorf("fact-sourced result title should have [fact] prefix, got %q", r.Title)
+				}
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("fact-sourced observation %q should appear in results", factOnlyObs.ID)
+		}
+	})
+
+	// --- Subtest: without fact store, no fact results ---
+	t.Run("no fact store unchanged behavior", func(t *testing.T) {
+		// Create engine WITHOUT fact store
+		engine := NewEngine(database)
+
+		// Search "Redis" — should NOT find the factOnlyObs since fact search is disabled
+		results, err := engine.Search(ctx, SearchOptions{
+			Query:     "Redis",
+			Namespace: "test-ns",
+			Limit:     10,
+		})
+		if err != nil {
+			t.Fatalf("Search returned error: %v", err)
+		}
+
+		for _, r := range results {
+			if strings.HasPrefix(r.Title, "[fact]") {
+				t.Errorf("without fact store, no [fact]-prefixed results should appear, got %q", r.Title)
+			}
+		}
+	})
+
+	// --- Subtest: facts with no observation_id are skipped ---
+	t.Run("facts without observation_id are skipped", func(t *testing.T) {
+		// Insert a fact with no observation_id
+		_, err := factStore.Save(ctx, facts.Fact{
+			Subject:   "orphan",
+			Predicate: "status",
+			Object:    "unknown",
+			Namespace: "test-ns",
+		})
+		if err != nil {
+			t.Fatalf("save orphan fact: %v", err)
+		}
+
+		engine := NewEngine(database, WithFactStore(factStore))
+		// Should not panic or error
+		results, err := engine.Search(ctx, SearchOptions{
+			Query:     "orphan",
+			Namespace: "test-ns",
+			Limit:     10,
+		})
+		if err != nil {
+			t.Fatalf("Search returned error: %v", err)
+		}
+
+		// The orphan fact has no observation to load, so it should produce 0 additional results
+		// (unless "orphan" also matches something in FTS)
+		_ = results
+	})
+}
+
+// ============================================================================
+// TESTS: Observation type intent boost
+// When query keywords map to an observation type (e.g. "gotcha", "decision"),
+// matching candidates receive a 1.3x multiplicative boost.
+// ============================================================================
+
+// TestDetectTypeIntent verifies the keyword-to-type mapping for all 8 types.
+func TestDetectTypeIntent(t *testing.T) {
+	tests := []struct {
+		name  string
+		query string
+		want  observation.ObservationType
+	}{
+		// gotcha
+		{name: "gotcha singular", query: "what gotchas should I know", want: observation.ObservationTypeGotcha},
+		{name: "pitfall", query: "any pitfalls here", want: observation.ObservationTypeGotcha},
+		{name: "trap", query: "are there traps", want: observation.ObservationTypeGotcha},
+		{name: "watch out", query: "watch out for this", want: observation.ObservationTypeGotcha},
+		// decision
+		{name: "decision", query: "architecture decisions", want: observation.ObservationTypeDecision},
+		{name: "decided", query: "what we decided", want: observation.ObservationTypeDecision},
+		{name: "chose", query: "why we chose this", want: observation.ObservationTypeDecision},
+		{name: "chosen", query: "the chosen approach", want: observation.ObservationTypeDecision},
+		// bugfix
+		{name: "bug", query: "any bugs found", want: observation.ObservationTypeBugfix},
+		{name: "bugfix", query: "recent bugfix notes", want: observation.ObservationTypeBugfix},
+		{name: "fix", query: "how did we fix it", want: observation.ObservationTypeBugfix},
+		{name: "broke", query: "what broke yesterday", want: observation.ObservationTypeBugfix},
+		{name: "broken", query: "is it broken", want: observation.ObservationTypeBugfix},
+		// pattern
+		{name: "pattern", query: "coding patterns", want: observation.ObservationTypePattern},
+		{name: "convention", query: "project conventions", want: observation.ObservationTypePattern},
+		// preference
+		{name: "preference", query: "my preferences", want: observation.ObservationTypePreference},
+		{name: "prefer", query: "what do we prefer", want: observation.ObservationTypePreference},
+		{name: "preferred", query: "preferred approach", want: observation.ObservationTypePreference},
+		// discovery
+		{name: "discovery", query: "recent discovery", want: observation.ObservationTypeDiscovery},
+		{name: "learned", query: "what I learned", want: observation.ObservationTypeDiscovery},
+		{name: "found", query: "what we found", want: observation.ObservationTypeDiscovery},
+		// config
+		{name: "config", query: "show config", want: observation.ObservationTypeConfig},
+		{name: "configuration", query: "database configuration", want: observation.ObservationTypeConfig},
+		{name: "setup", query: "project setup notes", want: observation.ObservationTypeConfig},
+		// question
+		{name: "question", query: "open questions", want: observation.ObservationTypeQuestion},
+		{name: "wondering", query: "I was wondering", want: observation.ObservationTypeQuestion},
+		// no match
+		{name: "no intent", query: "auth implementation details", want: ""},
+		{name: "no intent generic", query: "how does the system work", want: ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := detectTypeIntent(tt.query)
+			if got != tt.want {
+				t.Errorf("detectTypeIntent(%q) = %q, want %q", tt.query, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestTypeIntentBoost verifies that the type intent boost is applied correctly
+// in the full search pipeline: observations whose type matches the detected
+// query intent receive a 1.3x multiplicative score boost.
+func TestTypeIntentBoost(t *testing.T) {
+	engine, store, database := newTestEngine(t)
+	defer database.Close()
+
+	ctx := context.Background()
+
+	// Create observations of different types with the same content and importance.
+	// This ensures the only score difference is the type intent boost.
+	gotchaObs, err := store.Save(ctx, observation.Observation{
+		Title:           "SQLite gotcha",
+		Content:         "sqlite fts5 requires build tags",
+		ObservationType: observation.ObservationTypeGotcha,
+	})
+	if err != nil {
+		t.Fatalf("save gotcha: %v", err)
+	}
+
+	decisionObs, err := store.Save(ctx, observation.Observation{
+		Title:           "SQLite decision",
+		Content:         "sqlite fts5 requires build tags",
+		ObservationType: observation.ObservationTypeDecision,
+	})
+	if err != nil {
+		t.Fatalf("save decision: %v", err)
+	}
+
+	bugfixObs, err := store.Save(ctx, observation.Observation{
+		Title:           "SQLite bugfix",
+		Content:         "sqlite fts5 requires build tags",
+		ObservationType: observation.ObservationTypeBugfix,
+	})
+	if err != nil {
+		t.Fatalf("save bugfix: %v", err)
+	}
+
+	preferenceObs, err := store.Save(ctx, observation.Observation{
+		Title:           "SQLite preference",
+		Content:         "sqlite fts5 requires build tags",
+		ObservationType: observation.ObservationTypePreference,
+	})
+	if err != nil {
+		t.Fatalf("save preference: %v", err)
+	}
+
+	// Set identical importance and creation time for fair comparison
+	for _, id := range []string{gotchaObs.ID, decisionObs.ID, bugfixObs.ID, preferenceObs.ID} {
+		setObservationFields(t, database, id, map[string]any{
+			"importance": 0.5,
+			"created_at": "datetime('now', '-1 day')",
+		})
+	}
+
+	// --- subtest: "gotchas" boosts type=gotcha ---
+	t.Run("gotchas boosts gotcha type", func(t *testing.T) {
+		results, err := engine.Search(ctx, SearchOptions{Query: "sqlite gotchas", Limit: 10})
+		if err != nil {
+			t.Fatalf("Search returned error: %v", err)
+		}
+		if len(results) < 2 {
+			t.Fatalf("expected at least 2 results, got %d", len(results))
+		}
+		if results[0].ID != gotchaObs.ID {
+			t.Errorf("top result = %q (type=%s), want %q (type=gotcha)",
+				results[0].ID, results[0].ObservationType, gotchaObs.ID)
+		}
+		// Verify boosted score is higher than non-boosted
+		gotchaScore := findResultScore(t, results, gotchaObs.ID)
+		decisionScore := findResultScore(t, results, decisionObs.ID)
+		if gotchaScore <= decisionScore {
+			t.Errorf("gotcha score (%.4f) should be > decision score (%.4f) due to type boost",
+				gotchaScore, decisionScore)
+		}
+		t.Logf("gotcha=%.4f, decision=%.4f — boost ratio=%.2fx",
+			gotchaScore, decisionScore, gotchaScore/decisionScore)
+	})
+
+	// --- subtest: "decisions" boosts type=decision ---
+	t.Run("decisions boosts decision type", func(t *testing.T) {
+		results, err := engine.Search(ctx, SearchOptions{Query: "sqlite decisions", Limit: 10})
+		if err != nil {
+			t.Fatalf("Search returned error: %v", err)
+		}
+		if len(results) < 2 {
+			t.Fatalf("expected at least 2 results, got %d", len(results))
+		}
+		if results[0].ID != decisionObs.ID {
+			t.Errorf("top result = %q (type=%s), want %q (type=decision)",
+				results[0].ID, results[0].ObservationType, decisionObs.ID)
+		}
+		t.Logf("decision ranked first with type intent boost")
+	})
+
+	// --- subtest: "bugs" boosts type=bugfix ---
+	t.Run("bugs boosts bugfix type", func(t *testing.T) {
+		results, err := engine.Search(ctx, SearchOptions{Query: "sqlite bugs", Limit: 10})
+		if err != nil {
+			t.Fatalf("Search returned error: %v", err)
+		}
+		if len(results) < 2 {
+			t.Fatalf("expected at least 2 results, got %d", len(results))
+		}
+		if results[0].ID != bugfixObs.ID {
+			t.Errorf("top result = %q (type=%s), want %q (type=bugfix)",
+				results[0].ID, results[0].ObservationType, bugfixObs.ID)
+		}
+		t.Logf("bugfix ranked first with type intent boost")
+	})
+
+	// --- subtest: "preferences" boosts type=preference ---
+	t.Run("preferences boosts preference type", func(t *testing.T) {
+		results, err := engine.Search(ctx, SearchOptions{Query: "sqlite preferences", Limit: 10})
+		if err != nil {
+			t.Fatalf("Search returned error: %v", err)
+		}
+		if len(results) < 2 {
+			t.Fatalf("expected at least 2 results, got %d", len(results))
+		}
+		if results[0].ID != preferenceObs.ID {
+			t.Errorf("top result = %q (type=%s), want %q (type=preference)",
+				results[0].ID, results[0].ObservationType, preferenceObs.ID)
+		}
+		t.Logf("preference ranked first with type intent boost")
+	})
+
+	// --- subtest: no type keyword means no boost ---
+	t.Run("no type keyword no boost", func(t *testing.T) {
+		results, err := engine.Search(ctx, SearchOptions{Query: "sqlite fts5", Limit: 10})
+		if err != nil {
+			t.Fatalf("Search returned error: %v", err)
+		}
+		if len(results) < 2 {
+			t.Fatalf("expected at least 2 results, got %d", len(results))
+		}
+		// Without a type keyword, all candidates should have roughly equal scores
+		// (same content, same importance, same recency). No observation should
+		// consistently dominate due to type alone.
+		topScore := results[0].Score
+		secondScore := results[1].Score
+		ratio := topScore / secondScore
+		// Without boost, ratio should be close to 1.0 (no 1.3x advantage)
+		if ratio > 1.25 {
+			t.Errorf("without type keyword, score ratio should be close to 1.0, got %.2f (top=%q type=%s)",
+				ratio, results[0].ID, results[0].ObservationType)
+		}
+		t.Logf("no type boost: ratio=%.2f (top=%s, second=%s)", ratio,
+			results[0].ObservationType, results[1].ObservationType)
+	})
+
+	// --- subtest: boost is multiplicative (1.3x), not absolute ---
+	t.Run("boost is multiplicative 1.3x", func(t *testing.T) {
+		results, err := engine.Search(ctx, SearchOptions{Query: "sqlite gotchas", Limit: 10, Debug: true})
+		if err != nil {
+			t.Fatalf("Search returned error: %v", err)
+		}
+
+		var gotchaResult, otherResult *Result
+		for i := range results {
+			if results[i].ID == gotchaObs.ID {
+				gotchaResult = &results[i]
+			} else if otherResult == nil {
+				otherResult = &results[i]
+			}
+		}
+		if gotchaResult == nil || otherResult == nil {
+			t.Fatal("expected to find both gotcha and non-gotcha results")
+		}
+		if gotchaResult.Breakdown == nil || otherResult.Breakdown == nil {
+			t.Fatal("expected debug breakdowns to be populated")
+		}
+
+		// The gotcha result should have TypeIntentBoost=1.3, others should have 1.0
+		if gotchaResult.Breakdown.TypeIntentBoost != 1.3 {
+			t.Errorf("gotcha TypeIntentBoost = %.2f, want 1.3", gotchaResult.Breakdown.TypeIntentBoost)
+		}
+		if otherResult.Breakdown.TypeIntentBoost != 1.0 {
+			t.Errorf("other TypeIntentBoost = %.2f, want 1.0", otherResult.Breakdown.TypeIntentBoost)
+		}
+
+		t.Logf("gotcha breakdown: TypeIntentBoost=%.2f, FinalScore=%.4f",
+			gotchaResult.Breakdown.TypeIntentBoost, gotchaResult.Breakdown.FinalScore)
+		t.Logf("other breakdown: TypeIntentBoost=%.2f, FinalScore=%.4f",
+			otherResult.Breakdown.TypeIntentBoost, otherResult.Breakdown.FinalScore)
+	})
+}
+
+// ============================================================================
+// INTEGRATION TESTS: Combined recall pipeline features
+// These tests exercise multiple recall quality features working together:
+//   - Semantic fallback (Step 1)
+//   - FTS5 prefix matching (Step 2)
+//   - Type intent boost (Step 3)
+//   - Facts integration (Step 4)
+// ============================================================================
+
+// TestIntegrationSemanticFallbackAndTypeBoost verifies that a query benefits
+// from BOTH semantic fallback AND type intent boost simultaneously. Scenario:
+// query "what gotchas about deployment" should find an observation stored with
+// completely different words (e.g. "production release pitfalls") that happens
+// to be type=gotcha. The observation has no FTS match, so it must come from
+// semantic fallback, and the type boost should rank it above other semantic-only
+// results of different types.
+func TestIntegrationSemanticFallbackAndTypeBoost(t *testing.T) {
+	ctx := context.Background()
+	databasePath := filepath.Join(t.TempDir(), "neurox.db")
+	database, err := db.Open(ctx, databasePath)
+	if err != nil {
+		t.Fatalf("db.Open: %v", err)
+	}
+	defer database.Close()
+
+	store := observation.NewStore(database, nil)
+
+	// --- Seed: a gotcha observation that uses completely different words than the query ---
+	gotchaObs, err := store.Save(ctx, observation.Observation{
+		Title:           "Production release pitfall",
+		Content:         "Environment variables must be validated before container startup or the service crashes silently",
+		ObservationType: observation.ObservationTypeGotcha,
+		Namespace:       "integ-ns",
+	})
+	if err != nil {
+		t.Fatalf("save gotcha: %v", err)
+	}
+	setEmbedding(t, database, gotchaObs.ID, makeTestVector(50, 4))
+
+	// --- Seed: a discovery observation with similar embedding but different type ---
+	discoveryObs, err := store.Save(ctx, observation.Observation{
+		Title:           "CI pipeline optimization",
+		Content:         "Discovered that parallel stages reduce build time by 40 percent",
+		ObservationType: observation.ObservationTypeDiscovery,
+		Namespace:       "integ-ns",
+	})
+	if err != nil {
+		t.Fatalf("save discovery: %v", err)
+	}
+	setEmbedding(t, database, discoveryObs.ID, makeTestVector(50, 4)) // same vector
+
+	// Set identical importance so type boost is the differentiator
+	setObservationFields(t, database, gotchaObs.ID, map[string]any{
+		"importance": 0.6,
+		"created_at": "datetime('now', '-1 day')",
+	})
+	setObservationFields(t, database, discoveryObs.ID, map[string]any{
+		"importance": 0.6,
+		"created_at": "datetime('now', '-1 day')",
+	})
+
+	// Provider returns vector similar to seed 50
+	provider := &testEmbedProvider{dims: 4, queryVector: makeTestVector(50, 4)}
+	engine := NewEngine(database, WithEmbedder(provider))
+
+	// Query: "gotchas" triggers type boost, "xyzzy" ensures FTS returns nothing
+	// so all results come from semantic fallback
+	results, err := engine.Search(ctx, SearchOptions{
+		Query:     "xyzzy gotchas",
+		Namespace: "integ-ns",
+		Limit:     10,
+	})
+	if err != nil {
+		t.Fatalf("Search returned error: %v", err)
+	}
+
+	if len(results) < 2 {
+		t.Fatalf("expected at least 2 results (semantic fallback), got %d", len(results))
+	}
+
+	// Both observations should be found via semantic fallback
+	foundGotcha := false
+	foundDiscovery := false
+	for _, r := range results {
+		if r.ID == gotchaObs.ID {
+			foundGotcha = true
+		}
+		if r.ID == discoveryObs.ID {
+			foundDiscovery = true
+		}
+	}
+	if !foundGotcha {
+		t.Error("gotcha observation should be found via semantic fallback")
+	}
+	if !foundDiscovery {
+		t.Error("discovery observation should be found via semantic fallback")
+	}
+
+	// The gotcha observation should rank higher due to type intent boost
+	if foundGotcha && foundDiscovery {
+		gotchaScore := findResultScore(t, results, gotchaObs.ID)
+		discoveryScore := findResultScore(t, results, discoveryObs.ID)
+		if gotchaScore <= discoveryScore {
+			t.Errorf("gotcha (score=%.4f) should rank higher than discovery (score=%.4f) due to type boost",
+				gotchaScore, discoveryScore)
+		}
+		t.Logf("Semantic fallback + type boost: gotcha=%.4f, discovery=%.4f — ratio=%.2fx",
+			gotchaScore, discoveryScore, gotchaScore/discoveryScore)
+	}
+}
+
+// TestIntegrationPrefixMatchingAndTypeBoost verifies that prefix matching
+// and type boost work together. Query "authentication bugs" should:
+//   - Find observations containing "authentication" via FTS
+//   - Boost the bugfix-typed observation over decision-typed observations
+//
+// Note: We use identical content in both observations so the only scoring
+// difference comes from the type intent boost on "bugs". The query uses
+// "authentication" (full word) to ensure identical FTS relevance for both.
+func TestIntegrationPrefixMatchingAndTypeBoost(t *testing.T) {
+	engine, store, database := newTestEngine(t)
+	defer database.Close()
+
+	ctx := context.Background()
+
+	// --- Seed: bugfix about authentication (identical content for fair comparison) ---
+	bugfixObs, err := store.Save(ctx, observation.Observation{
+		Title:           "Authentication issue",
+		Content:         "authentication token handling in the service layer",
+		ObservationType: observation.ObservationTypeBugfix,
+	})
+	if err != nil {
+		t.Fatalf("save bugfix: %v", err)
+	}
+
+	// --- Seed: decision about authentication (same content, different type) ---
+	decisionObs, err := store.Save(ctx, observation.Observation{
+		Title:           "Authentication issue",
+		Content:         "authentication token handling in the service layer",
+		ObservationType: observation.ObservationTypeDecision,
+	})
+	if err != nil {
+		t.Fatalf("save decision: %v", err)
+	}
+
+	// Set identical importance and creation time
+	setObservationFields(t, database, bugfixObs.ID, map[string]any{
+		"importance": 0.6,
+		"created_at": "datetime('now', '-2 day')",
+	})
+	setObservationFields(t, database, decisionObs.ID, map[string]any{
+		"importance": 0.6,
+		"created_at": "datetime('now', '-2 day')",
+	})
+
+	// Query "authentication bugs":
+	// - "authentication" matches both observations via FTS (identical content)
+	// - "bugs" → triggers type boost for bugfix (1.3x)
+	results, err := engine.Search(ctx, SearchOptions{Query: "authentication bugs", Limit: 10})
+	if err != nil {
+		t.Fatalf("Search returned error: %v", err)
+	}
+
+	if len(results) < 2 {
+		t.Fatalf("expected at least 2 results, got %d", len(results))
+	}
+
+	// Both observations should be found via FTS on "authentication"
+	foundBugfix := false
+	foundDecision := false
+	for _, r := range results {
+		if r.ID == bugfixObs.ID {
+			foundBugfix = true
+		}
+		if r.ID == decisionObs.ID {
+			foundDecision = true
+		}
+	}
+	if !foundBugfix {
+		t.Error("bugfix observation should be found via FTS match on 'authentication'")
+	}
+	if !foundDecision {
+		t.Error("decision observation should be found via FTS match on 'authentication'")
+	}
+
+	// Bugfix should rank higher due to type intent boost from "bugs" keyword
+	if foundBugfix && foundDecision {
+		bugfixScore := findResultScore(t, results, bugfixObs.ID)
+		decisionScore := findResultScore(t, results, decisionObs.ID)
+		if bugfixScore <= decisionScore {
+			t.Errorf("bugfix (score=%.4f) should rank higher than decision (score=%.4f) due to type boost on 'bugs'",
+				bugfixScore, decisionScore)
+		}
+		t.Logf("Prefix match + type boost: bugfix=%.4f, decision=%.4f — ratio=%.2fx",
+			bugfixScore, decisionScore, bugfixScore/decisionScore)
+	}
+
+	// Also verify prefix matching still works: "auth" (≥4 chars) should find both via prefix
+	prefixResults, err := engine.Search(ctx, SearchOptions{Query: "auth bugs", Limit: 10})
+	if err != nil {
+		t.Fatalf("prefix Search returned error: %v", err)
+	}
+	foundViaPrefix := false
+	for _, r := range prefixResults {
+		if r.ID == bugfixObs.ID || r.ID == decisionObs.ID {
+			foundViaPrefix = true
+			break
+		}
+	}
+	if !foundViaPrefix {
+		t.Error("prefix matching ('auth' → 'authentication') should find observations")
+	}
+	t.Logf("Prefix matching: 'auth bugs' found %d results", len(prefixResults))
+}
+
+// TestIntegrationFTSSemanticFallbackAndFacts verifies the scenario where:
+//   - FTS finds some results (partial match)
+//   - Semantic fallback fills remaining slots with additional matches
+//   - Fact integration adds even more results from the knowledge graph
+//
+// All three sources should be merged, deduplicated, and ranked properly.
+func TestIntegrationFTSSemanticFallbackAndFacts(t *testing.T) {
+	ctx := context.Background()
+	databasePath := filepath.Join(t.TempDir(), "neurox.db")
+	database, err := db.Open(ctx, databasePath)
+	if err != nil {
+		t.Fatalf("db.Open: %v", err)
+	}
+	defer database.Close()
+
+	store := observation.NewStore(database, nil)
+	idGen := observation.NewULIDGenerator()
+	factStore := facts.NewStore(database, idGen)
+
+	// --- Source 1: FTS match (observation contains "database" directly) ---
+	ftsObs, err := store.Save(ctx, observation.Observation{
+		Title:     "Database setup",
+		Content:   "We configured database replication for high availability",
+		Namespace: "integ-ns",
+	})
+	if err != nil {
+		t.Fatalf("save fts observation: %v", err)
+	}
+	ftsVec := makeTestVector(30, 4)
+	setEmbedding(t, database, ftsObs.ID, ftsVec)
+
+	// --- Source 2: Semantic-only match (no FTS overlap, but semantically similar) ---
+	semObs, err := store.Save(ctx, observation.Observation{
+		Title:     "Storage layer choice",
+		Content:   "Selected PostgreSQL for relational persistence requirements",
+		Namespace: "integ-ns",
+	})
+	if err != nil {
+		t.Fatalf("save semantic observation: %v", err)
+	}
+	semVec := makeTestVector(30, 4) // same vector as fts obs → high cosine sim
+	setEmbedding(t, database, semObs.ID, semVec)
+
+	// --- Source 3: Fact-only match (fact links to an observation) ---
+	factObs, err := store.Save(ctx, observation.Observation{
+		Title:     "Infrastructure notes",
+		Content:   "Evaluated multiple options for data persistence",
+		Namespace: "integ-ns",
+	})
+	if err != nil {
+		t.Fatalf("save fact observation: %v", err)
+	}
+
+	_, err = factStore.Save(ctx, facts.Fact{
+		Subject:       "database",
+		Predicate:     "engine",
+		Object:        "PostgreSQL",
+		ObservationID: factObs.ID,
+		Namespace:     "integ-ns",
+	})
+	if err != nil {
+		t.Fatalf("save fact: %v", err)
+	}
+
+	// Set importance for predictable ranking
+	setObservationFields(t, database, ftsObs.ID, map[string]any{
+		"importance": 0.7,
+		"created_at": "datetime('now', '-1 day')",
+	})
+	setObservationFields(t, database, semObs.ID, map[string]any{
+		"importance": 0.5,
+		"created_at": "datetime('now', '-1 day')",
+	})
+	setObservationFields(t, database, factObs.ID, map[string]any{
+		"importance": 0.5,
+		"created_at": "datetime('now', '-1 day')",
+	})
+
+	provider := &testEmbedProvider{dims: 4, queryVector: makeTestVector(30, 4)}
+	engine := NewEngine(database, WithEmbedder(provider), WithFactStore(factStore))
+
+	// "database" matches FTS (ftsObs), semantic (semObs via cosine), fact (factObs via subject)
+	results, err := engine.Search(ctx, SearchOptions{
+		Query:     "database",
+		Namespace: "integ-ns",
+		Limit:     10,
+	})
+	if err != nil {
+		t.Fatalf("Search returned error: %v", err)
+	}
+
+	// Should find all three observations from different sources
+	foundFTS := false
+	foundSem := false
+	foundFact := false
+	for _, r := range results {
+		switch r.ID {
+		case ftsObs.ID:
+			foundFTS = true
+		case semObs.ID:
+			foundSem = true
+		case factObs.ID:
+			foundFact = true
+		}
+	}
+
+	if !foundFTS {
+		t.Error("FTS-matched observation should be in results")
+	}
+	if !foundSem {
+		t.Error("semantic-only observation should fill remaining slots")
+	}
+	if !foundFact {
+		t.Error("fact-sourced observation should be merged into results")
+	}
+
+	// FTS result should score highest (cross-signal boost + higher importance)
+	if foundFTS && foundSem {
+		ftsScore := findResultScore(t, results, ftsObs.ID)
+		semScore := findResultScore(t, results, semObs.ID)
+		if ftsScore <= semScore {
+			t.Errorf("FTS result (score=%.4f) should rank higher than semantic-only (score=%.4f)",
+				ftsScore, semScore)
+		}
+	}
+
+	// Verify fact result has [fact] prefix
+	for _, r := range results {
+		if r.ID == factObs.ID {
+			if !strings.HasPrefix(r.Title, "[fact]") {
+				t.Errorf("fact-sourced result should have [fact] prefix, got %q", r.Title)
+			}
+		}
+	}
+
+	// No duplicates: each observation should appear exactly once
+	idCounts := make(map[string]int)
+	for _, r := range results {
+		idCounts[r.ID]++
+	}
+	for id, count := range idCounts {
+		if count > 1 {
+			t.Errorf("observation %q appears %d times, want exactly 1", id, count)
+		}
+	}
+
+	t.Logf("FTS + Semantic + Facts: found %d results, FTS=%v Semantic=%v Fact=%v",
+		len(results), foundFTS, foundSem, foundFact)
+}
+
+// TestIntegrationAllFourFeatures exercises ALL four recall quality features
+// simultaneously across two complementary queries, demonstrating how the
+// features interact in the full pipeline:
+//
+//  1. FTS prefix matching: "deploy" → matches "deployment"
+//  2. Semantic fallback: fills slots with semantically similar non-FTS observations
+//  3. Type intent boost: "gotchas" boosts type=gotcha observations
+//  4. Facts integration: knowledge graph contributes additional results
+//
+// The test runs two queries to cover all four features — a single query cannot
+// reliably exercise facts (which uses LIKE on the full query string) AND type
+// boost AND prefix matching without conflicting constraints.
+func TestIntegrationAllFourFeatures(t *testing.T) {
+	ctx := context.Background()
+	databasePath := filepath.Join(t.TempDir(), "neurox.db")
+	database, err := db.Open(ctx, databasePath)
+	if err != nil {
+		t.Fatalf("db.Open: %v", err)
+	}
+	defer database.Close()
+
+	store := observation.NewStore(database, nil)
+	idGen := observation.NewULIDGenerator()
+	factStore := facts.NewStore(database, idGen)
+
+	// --- Obs A: FTS match + gotcha type ---
+	obsA, err := store.Save(ctx, observation.Observation{
+		Title:           "Deployment gotcha",
+		Content:         "deployment rollback requires manual database migration reversal",
+		ObservationType: observation.ObservationTypeGotcha,
+		Namespace:       "integ-ns",
+	})
+	if err != nil {
+		t.Fatalf("save obsA: %v", err)
+	}
+	setEmbedding(t, database, obsA.ID, makeTestVector(77, 4))
+
+	// --- Obs B: FTS match + decision type (no type boost for "gotchas") ---
+	obsB, err := store.Save(ctx, observation.Observation{
+		Title:           "Deployment decision",
+		Content:         "deployment strategy uses blue-green approach for zero downtime",
+		ObservationType: observation.ObservationTypeDecision,
+		Namespace:       "integ-ns",
+	})
+	if err != nil {
+		t.Fatalf("save obsB: %v", err)
+	}
+	setEmbedding(t, database, obsB.ID, makeTestVector(77, 4))
+
+	// --- Obs C: Semantic-only match (no FTS match, similar embedding, gotcha type) ---
+	obsC, err := store.Save(ctx, observation.Observation{
+		Title:           "Release pipeline pitfall",
+		Content:         "Container orchestration silently drops environment variables during rolling updates",
+		ObservationType: observation.ObservationTypeGotcha,
+		Namespace:       "integ-ns",
+	})
+	if err != nil {
+		t.Fatalf("save obsC: %v", err)
+	}
+	setEmbedding(t, database, obsC.ID, makeTestVector(77, 4)) // same vector → high cosine sim
+
+	// --- Obs D: Fact-only match ---
+	obsD, err := store.Save(ctx, observation.Observation{
+		Title:           "Infrastructure notes",
+		Content:         "Documented production environment settings",
+		ObservationType: observation.ObservationTypeDiscovery,
+		Namespace:       "integ-ns",
+	})
+	if err != nil {
+		t.Fatalf("save obsD: %v", err)
+	}
+
+	_, err = factStore.Save(ctx, facts.Fact{
+		Subject:       "deployment",
+		Predicate:     "strategy",
+		Object:        "blue-green",
+		ObservationID: obsD.ID,
+		Namespace:     "integ-ns",
+	})
+	if err != nil {
+		t.Fatalf("save fact: %v", err)
+	}
+
+	// Normalize importance and creation time so scoring differences come from features
+	for _, id := range []string{obsA.ID, obsB.ID, obsC.ID, obsD.ID} {
+		setObservationFields(t, database, id, map[string]any{
+			"importance": 0.5,
+			"created_at": "datetime('now', '-1 day')",
+		})
+	}
+
+	provider := &testEmbedProvider{dims: 4, queryVector: makeTestVector(77, 4)}
+	engine := NewEngine(database, WithEmbedder(provider), WithFactStore(factStore))
+
+	// --- Query 1: "deployment gotchas" ---
+	// - "deployment" matches FTS (obsA, obsB) — note: also prefix would match "deploy"
+	// - "gotchas" → type boost for gotcha (obsA gets 1.3x)
+	// - semantic fallback fills obsC (no FTS match but high cosine sim)
+	// - fact search: LIKE '%deployment gotchas%' won't match, but "deployment" is in obsA/B already
+	t.Run("query with prefix+type+semantic", func(t *testing.T) {
+		results, err := engine.Search(ctx, SearchOptions{
+			Query:     "deployment gotchas",
+			Namespace: "integ-ns",
+			Limit:     10,
+			Debug:     true,
+		})
+		if err != nil {
+			t.Fatalf("Search returned error: %v", err)
+		}
+
+		found := make(map[string]bool)
+		for _, r := range results {
+			found[r.ID] = true
+		}
+
+		// obsA: FTS match + gotcha type boost
+		if !found[obsA.ID] {
+			t.Error("obsA (FTS + gotcha) should be in results")
+		}
+		// obsB: FTS match, no type boost
+		if !found[obsB.ID] {
+			t.Error("obsB (FTS + decision) should be in results")
+		}
+		// obsC: semantic fallback (no FTS match)
+		if !found[obsC.ID] {
+			t.Error("obsC (semantic fallback + gotcha) should be in results")
+		}
+
+		// obsA (gotcha + FTS + semantic) should rank higher than obsB (decision + FTS + semantic)
+		if found[obsA.ID] && found[obsB.ID] {
+			scoreA := findResultScore(t, results, obsA.ID)
+			scoreB := findResultScore(t, results, obsB.ID)
+			if scoreA <= scoreB {
+				t.Errorf("obsA gotcha (score=%.4f) should rank higher than obsB decision (score=%.4f) due to type boost",
+					scoreA, scoreB)
+			}
+			t.Logf("obsA gotcha=%.4f vs obsB decision=%.4f (ratio=%.2fx)", scoreA, scoreB, scoreA/scoreB)
+		}
+
+		// Verify debug breakdowns are populated
+		if len(results) > 0 && results[0].Breakdown != nil {
+			bd := results[0].Breakdown
+			t.Logf("Top result breakdown: recency=%.4f importance=%.4f relevance=%.4f semantic=%.4f typeBoost=%.2f crossBoost=%.2f final=%.4f",
+				bd.Recency, bd.Importance, bd.Relevance, bd.SemanticScore,
+				bd.TypeIntentBoost, bd.CrossSignalBoost, bd.FinalScore)
+		}
+
+		// No duplicates
+		idCounts := make(map[string]int)
+		for _, r := range results {
+			idCounts[r.ID]++
+		}
+		for id, count := range idCounts {
+			if count > 1 {
+				t.Errorf("observation %q appears %d times, want exactly 1", id, count)
+			}
+		}
+	})
+
+	// --- Query 2: "deployment" (simple query for fact integration) ---
+	// - FTS matches obsA, obsB
+	// - Semantic fills obsC
+	// - Fact search: LIKE '%deployment%' matches fact subject → adds obsD
+	t.Run("query with facts integration", func(t *testing.T) {
+		results, err := engine.Search(ctx, SearchOptions{
+			Query:     "deployment",
+			Namespace: "integ-ns",
+			Limit:     10,
+		})
+		if err != nil {
+			t.Fatalf("Search returned error: %v", err)
+		}
+
+		found := make(map[string]bool)
+		for _, r := range results {
+			found[r.ID] = true
+		}
+
+		if !found[obsD.ID] {
+			t.Error("obsD (fact-sourced) should be in results via fact integration")
+		}
+
+		// Verify fact result has [fact] prefix
+		for _, r := range results {
+			if r.ID == obsD.ID && !strings.HasPrefix(r.Title, "[fact]") {
+				t.Errorf("obsD fact-sourced result should have [fact] prefix, got %q", r.Title)
+			}
+		}
+
+		t.Logf("Fact integration: found %d results, A=%v B=%v C=%v D(fact)=%v",
+			len(results), found[obsA.ID], found[obsB.ID], found[obsC.ID], found[obsD.ID])
+	})
+
+	// --- Query 3: "deploy" (prefix matching finds "deployment") ---
+	// - "deploy" (6 chars, ≥4) → prefix expansion matches "deployment"
+	t.Run("prefix matching finds deployment", func(t *testing.T) {
+		results, err := engine.Search(ctx, SearchOptions{
+			Query:     "deploy",
+			Namespace: "integ-ns",
+			Limit:     10,
+		})
+		if err != nil {
+			t.Fatalf("Search returned error: %v", err)
+		}
+
+		found := make(map[string]bool)
+		for _, r := range results {
+			found[r.ID] = true
+		}
+
+		if !found[obsA.ID] {
+			t.Error("'deploy' prefix should match 'deployment' in obsA")
+		}
+		if !found[obsB.ID] {
+			t.Error("'deploy' prefix should match 'deployment' in obsB")
+		}
+
+		t.Logf("Prefix matching: 'deploy' found %d results, A=%v B=%v",
+			len(results), found[obsA.ID], found[obsB.ID])
+	})
+}
+
+// TestIntegrationPrefixMatchWithSemanticBoost verifies that when FTS finds
+// results via prefix matching AND those same results also have high semantic
+// scores, they receive the cross-signal boost (1.2x). This tests the interaction
+// between prefix expansion and hybrid scoring.
+func TestIntegrationPrefixMatchWithSemanticBoost(t *testing.T) {
+	ctx := context.Background()
+	databasePath := filepath.Join(t.TempDir(), "neurox.db")
+	database, err := db.Open(ctx, databasePath)
+	if err != nil {
+		t.Fatalf("db.Open: %v", err)
+	}
+	defer database.Close()
+
+	store := observation.NewStore(database, nil)
+
+	// Observation found via prefix: "deploy" matches "deployment"
+	deployObs, err := store.Save(ctx, observation.Observation{
+		Title:   "Deployment process",
+		Content: "The deployment pipeline runs integration tests before promoting to production",
+	})
+	if err != nil {
+		t.Fatalf("save deploy: %v", err)
+	}
+	deployVec := makeTestVector(99, 4)
+	setEmbedding(t, database, deployObs.ID, deployVec)
+
+	// Observation only via semantic (different words entirely)
+	semOnlyObs, err := store.Save(ctx, observation.Observation{
+		Title:   "Release workflow",
+		Content: "The CI system promotes builds through staging gates before going live",
+	})
+	if err != nil {
+		t.Fatalf("save semantic only: %v", err)
+	}
+	setEmbedding(t, database, semOnlyObs.ID, makeTestVector(99, 4)) // same vector
+
+	// Set identical importance
+	setObservationFields(t, database, deployObs.ID, map[string]any{
+		"importance": 0.5,
+		"created_at": "datetime('now', '-1 day')",
+	})
+	setObservationFields(t, database, semOnlyObs.ID, map[string]any{
+		"importance": 0.5,
+		"created_at": "datetime('now', '-1 day')",
+	})
+
+	provider := &testEmbedProvider{dims: 4, queryVector: makeTestVector(99, 4)}
+	engine := NewEngine(database, WithEmbedder(provider))
+
+	// "deploy" (5 chars) → prefix matches "deployment" in deployObs (FTS hit)
+	// Both get semantic score. deployObs gets cross-signal boost (FTS + semantic).
+	// semOnlyObs is semantic-only fallback (no FTS match).
+	results, err := engine.Search(ctx, SearchOptions{
+		Query: "deploy",
+		Limit: 10,
+		Debug: true,
+	})
+	if err != nil {
+		t.Fatalf("Search returned error: %v", err)
+	}
+
+	if len(results) < 2 {
+		t.Fatalf("expected at least 2 results, got %d", len(results))
+	}
+
+	foundDeploy := false
+	foundSemOnly := false
+	for _, r := range results {
+		if r.ID == deployObs.ID {
+			foundDeploy = true
+		}
+		if r.ID == semOnlyObs.ID {
+			foundSemOnly = true
+		}
+	}
+
+	if !foundDeploy {
+		t.Error("deploy observation should be found via prefix matching")
+	}
+	if !foundSemOnly {
+		t.Error("semantic-only observation should be found via semantic fallback")
+	}
+
+	// The prefix-matched observation should rank higher due to cross-signal boost
+	if foundDeploy && foundSemOnly {
+		deployScore := findResultScore(t, results, deployObs.ID)
+		semOnlyScore := findResultScore(t, results, semOnlyObs.ID)
+		if deployScore <= semOnlyScore {
+			t.Errorf("deploy (FTS+semantic, score=%.4f) should rank higher than semantic-only (score=%.4f)",
+				deployScore, semOnlyScore)
+		}
+
+		// Verify cross-signal boost in debug breakdown
+		for _, r := range results {
+			if r.ID == deployObs.ID && r.Breakdown != nil {
+				if r.Breakdown.CrossSignalBoost != crossSignalBoost {
+					t.Errorf("deploy should have cross-signal boost=%.2f, got %.2f",
+						crossSignalBoost, r.Breakdown.CrossSignalBoost)
+				}
+				t.Logf("Deploy breakdown: crossSignal=%.2f, semantic=%.4f, relevance=%.4f",
+					r.Breakdown.CrossSignalBoost, r.Breakdown.SemanticScore, r.Breakdown.Relevance)
+			}
+		}
+	}
+}
+
+// resultIDs extracts observation IDs from a result slice for diagnostic output.
+func resultIDs(results []Result) []string {
+	ids := make([]string, len(results))
+	for i, r := range results {
+		ids[i] = r.ID
+	}
+	return ids
 }
 
 // --- Semantic test helpers ---
