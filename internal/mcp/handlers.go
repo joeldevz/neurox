@@ -96,23 +96,8 @@ func (d *Deps) handleSave(ctx context.Context, req mcp.CallToolRequest) (result 
 		obs.Retention = classify.InferRetention(obs.Title, obs.ObservationType, obs.Source)
 	}
 
-	// Quality gate: check if worth saving
-	if d.LLMGate != nil {
-		decision, _ := d.LLMGate.SaveGateDecide(ctx, llm.SaveInput{
-			Title:           obs.Title,
-			Content:         obs.Content,
-			ObservationType: string(obs.ObservationType),
-		})
-		if decision == llm.SaveReject {
-			return toolResultJSON(map[string]string{
-				"message": "observation rejected by quality gate (not worth persisting)",
-				"title":   obs.Title,
-			})
-		}
-	}
-
 	// Fast path: enqueue and return immediately so the MCP client never
-	// blocks on SQLite write contention.
+	// blocks on SQLite writes or LLM gate calls.
 	if d.SaveQueue != nil {
 		result, qErr := d.SaveQueue.Enqueue(ctx, obs)
 		if qErr != nil {
@@ -129,6 +114,22 @@ func (d *Deps) handleSave(ctx context.Context, req mcp.CallToolRequest) (result 
 	}
 
 	// Fallback: synchronous write (no queue configured).
+
+	// Quality gate: check if worth saving (only in sync path).
+	if d.LLMGate != nil {
+		decision, _ := d.LLMGate.SaveGateDecide(ctx, llm.SaveInput{
+			Title:           obs.Title,
+			Content:         obs.Content,
+			ObservationType: string(obs.ObservationType),
+		})
+		if decision == llm.SaveReject {
+			return toolResultJSON(map[string]string{
+				"message": "observation rejected by quality gate (not worth persisting)",
+				"title":   obs.Title,
+			})
+		}
+	}
+
 	saved, err := d.ObservationStore.Save(ctx, obs)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("save failed: %v", err)), nil

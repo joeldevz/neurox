@@ -42,7 +42,7 @@ import (
 )
 
 const (
-	version         = "0.1.14"
+	version         = "0.1.15"
 	defaultHTTPPort = 7438
 )
 
@@ -607,7 +607,20 @@ func runMCP(ctx context.Context, database *sql.DB, cfg config.Config) {
 	}
 
 	// Async save queue: decouple MCP handler from SQLite writes.
+	// All heavy work (LLM gate, SQLite write, facts, embeddings) runs in the
+	// background worker so the MCP response is always instant.
 	saveQueue := observation.NewSaveQueue(d.obsStore)
+	if d.llmGate != nil {
+		gate := d.llmGate
+		saveQueue.OnPreSave(func(ctx context.Context, obs observation.Observation) bool {
+			decision, _ := gate.SaveGateDecide(ctx, llm.SaveInput{
+				Title:           obs.Title,
+				Content:         obs.Content,
+				ObservationType: string(obs.ObservationType),
+			})
+			return decision != llm.SaveReject
+		})
+	}
 	if d.factExtractor != nil {
 		fe := d.factExtractor
 		saveQueue.OnPostSave(func(_ context.Context, saved observation.Observation) {

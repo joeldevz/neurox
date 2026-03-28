@@ -24,6 +24,10 @@ type SaveResult struct {
 	TopicKey  string
 }
 
+// PreSaveFilter runs in the background worker before persisting.
+// Return false to silently skip the observation (e.g. quality gate reject).
+type PreSaveFilter func(ctx context.Context, obs Observation) bool
+
 // PostSaveHook is called by the worker after an observation is successfully
 // persisted.  Implementations must not block indefinitely.
 type PostSaveHook func(ctx context.Context, saved Observation)
@@ -37,11 +41,12 @@ type PostSaveHook func(ctx context.Context, saved Observation)
 // If the queue is full, Enqueue falls back to a synchronous write so the
 // observation is never silently dropped.
 type SaveQueue struct {
-	store *Store
-	ch    chan Observation
-	hooks []PostSaveHook
-	wg    sync.WaitGroup
-	stop  chan struct{}
+	store   *Store
+	ch      chan Observation
+	filters []PreSaveFilter
+	hooks   []PostSaveHook
+	wg      sync.WaitGroup
+	stop    chan struct{}
 }
 
 // NewSaveQueue creates a queue backed by the given Store.
@@ -52,6 +57,12 @@ func NewSaveQueue(store *Store) *SaveQueue {
 		ch:    make(chan Observation, defaultQueueSize),
 		stop:  make(chan struct{}),
 	}
+}
+
+// OnPreSave registers a filter that runs before each write.
+// If any filter returns false, the observation is silently dropped.
+func (q *SaveQueue) OnPreSave(filter PreSaveFilter) {
+	q.filters = append(q.filters, filter)
 }
 
 // OnPostSave registers a hook that runs after each successful write.
@@ -143,10 +154,17 @@ func (q *SaveQueue) drain() {
 	}
 }
 
-// persist writes a single observation and fires hooks.
+// persist runs pre-save filters, writes a single observation, and fires hooks.
 func (q *SaveQueue) persist(obs Observation) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
+
+	for _, filter := range q.filters {
+		if !filter(ctx, obs) {
+			log.Printf("save queue: filtered out %q (id=%s)", obs.Title, obs.ID)
+			return
+		}
+	}
 
 	saved, err := q.store.Save(ctx, obs)
 	if err != nil {
