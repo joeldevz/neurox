@@ -81,6 +81,9 @@ func main() {
 			log.Fatalf("benchmark: %v", err)
 		}
 		return
+	case "setup":
+		runSetup()
+		return
 	}
 
 	cfg, err := config.Load("")
@@ -169,6 +172,7 @@ func printUsage() {
 	fmt.Println("  backup           Create a safe backup of the database (--output path)")
 	fmt.Println()
 	fmt.Println("Setup commands:")
+	fmt.Println("  setup <agent>    Configure an AI agent (claude-code, opencode, cursor, vscode, antigravity)")
 	fmt.Println("  install          Launch interactive installer")
 	fmt.Println("  install-hook     Install git post-commit hook")
 	fmt.Println("  update           Update neurox to the latest version")
@@ -176,6 +180,41 @@ func printUsage() {
 	fmt.Println("  version          Show version")
 	fmt.Println()
 	fmt.Println("Run 'neurox <command> --help' for details on a command.")
+}
+
+func runSetup() {
+	// Handle no-arg and --list cases
+	if len(os.Args) < 3 || os.Args[2] == "--list" || os.Args[2] == "-l" {
+		printSetupUsage()
+		return
+	}
+
+	agent := os.Args[2]
+	if agent == "--help" || agent == "-h" {
+		printSetupUsage()
+		return
+	}
+
+	if err := installer.Setup(agent); err != nil {
+		fmt.Fprintf(os.Stderr, "setup: %v\n", err)
+		os.Exit(1)
+	}
+}
+
+func printSetupUsage() {
+	fmt.Println("Configure an AI agent to use Neurox as MCP server.")
+	fmt.Println()
+	fmt.Println("Usage: neurox setup <agent>")
+	fmt.Println()
+	fmt.Println("Supported agents:")
+	for _, a := range installer.SupportedAgents() {
+		fmt.Printf("  %-18s %s\n", a.Name, a.Description)
+	}
+	fmt.Println()
+	fmt.Println("Examples:")
+	fmt.Println("  neurox setup claude-code      # Configure Claude Code")
+	fmt.Println("  neurox setup opencode          # Configure OpenCode")
+	fmt.Println("  neurox setup cursor            # Configure Cursor")
 }
 
 // --- CLI subcommands ---

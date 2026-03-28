@@ -15,15 +15,30 @@
 
 ---
 
-## Quick Setup
+## Quick Start
 
-| AI Client | Setup Guide |
-|-----------|-------------|
-| Claude Code | [docs/claude-code.md](docs/claude-code.md) |
-| Claude Desktop | [docs/claude-desktop.md](docs/claude-desktop.md) |
-| Cursor | [docs/cursor.md](docs/cursor.md) |
-| VS Code | [docs/vscode.md](docs/vscode.md) |
-| OpenCode | [docs/opencode.md](docs/opencode.md) |
+### Install
+
+```bash
+# macOS / Linux
+curl -fsSL https://raw.githubusercontent.com/joeldevz/neurox/main/install.sh | bash
+
+# Windows
+irm https://raw.githubusercontent.com/joeldevz/neurox/main/install.ps1 | iex
+```
+
+### Configure your agent
+
+```bash
+neurox setup claude-code       # Claude Code
+neurox setup opencode          # OpenCode
+neurox setup cursor            # Cursor
+neurox setup vscode            # VS Code (Copilot)
+neurox setup antigravity       # Gemini CLI / Antigravity
+neurox setup claude-desktop    # Claude Desktop
+```
+
+That's it. No Node.js, no Python, no Docker. **One binary, one SQLite file.**
 
 ---
 
@@ -34,25 +49,6 @@ Neurox gives your agent persistent, structured memory that works like a brain.
 - 🧠 **Architecture decisions** — Decided to use Postgres over SQLite? Neurox remembers why, what tradeoffs were discussed, and which files are affected.
 - 🐛 **Bug discoveries** — Fixed a subtle timezone bug in JWT auth? Neurox stores the what, why, and where so your agent never has to rediscover it.
 - ⚙️ **Preferences** — Prefer tabs over spaces? English commit messages? Neurox saves your preferences and applies them automatically.
-
-### 30-second install
-
-**Linux / macOS:**
-```bash
-curl -fsSL https://raw.githubusercontent.com/joeldevz/neurox/main/install.sh | bash
-```
-
-**Windows (PowerShell):**
-```powershell
-irm https://raw.githubusercontent.com/joeldevz/neurox/main/install.ps1 | iex
-```
-
-Then configure your AI clients:
-```bash
-neurox install
-```
-
-See [docs/quickstart.md](docs/quickstart.md) for Claude Desktop, Cursor, VS Code setup.
 
 **98% recall on LongMemEval** · **Brain Benchmark** · Zero infrastructure · Local-first
 
@@ -305,15 +301,28 @@ neurox benchmark --category cognitive --verbose
 
 Scale controls synthetic dataset size: `small` (1k), `medium` (10k), `large` (100k observations).
 
-## Quick Start
+## Installation
 
-### Interactive installer
+### Quick install
 
 ```bash
-./install.sh
+# macOS / Linux
+curl -fsSL https://raw.githubusercontent.com/joeldevz/neurox/main/install.sh | bash
+
+# Windows (PowerShell)
+irm https://raw.githubusercontent.com/joeldevz/neurox/main/install.ps1 | iex
+
+# Then configure your agent
+neurox setup claude-code    # or: opencode, cursor, vscode, antigravity, claude-desktop
 ```
 
-The installer launches a Bubble Tea TUI where you can choose the binary install directory, the Neurox config directory, local or remote providers, editor integrations, and whether to install the git hook in the current repo.
+### Interactive installer (advanced)
+
+```bash
+neurox install
+```
+
+The interactive installer launches a Bubble Tea TUI where you can choose the binary install directory, the Neurox config directory, local or remote providers, editor integrations, and whether to install the git hook in the current repo.
 
 Before it writes anything, it shows exactly where configuration will be stored and which provider settings are required.
 
@@ -411,6 +420,7 @@ Most CLI commands print JSON, which makes them easy to pipe into other tools or 
 | `neurox audit <id>` | Shows full lifecycle of an observation: creation, provenance, links, staleness, temporal mentions | none |
 | `neurox consolidate` | Forces a full consolidation run immediately | none |
 | `neurox graph` | Generates an interactive HTML graph view | `--namespace`, `--type`, `--tags`, `--min-importance`, `--limit`, `--linked-only`, `--output`, `--no-browser` |
+| `neurox setup <agent>` | Configure AI agent MCP integration | `<agent>` |
 | `neurox config` | Prints the resolved runtime config | none |
 | `neurox install-hook` | Installs the git `post-commit` hook in the current repo | none |
 | `neurox curate` | Deep memory curation with external LLM | `--namespace`, `-n`, `--dry-run` |

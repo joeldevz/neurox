@@ -271,35 +271,36 @@ Scale controla el tamano del dataset sintetico: `small` (1k), `medium` (10k), `l
 
 ## Inicio Rapido
 
-### Instalador interactivo
+### Instalar
 
-**Linux / macOS:**
 ```bash
-./install.sh
-```
+# macOS / Linux
+curl -fsSL https://raw.githubusercontent.com/joeldevz/neurox/main/install.sh | bash
 
-**Windows (PowerShell):**
-```powershell
+# Windows (PowerShell)
 irm https://raw.githubusercontent.com/joeldevz/neurox/main/install.ps1 | iex
 ```
 
-El instalador abre una TUI hecha con Bubble Tea donde puedes elegir el directorio del binario, el directorio de configuracion de Neurox, providers locales o remotos, integraciones de editor y si quieres instalar el git hook en el repo actual.
+### Configurar tu agente
 
-Antes de escribir nada, te muestra exactamente donde va a guardar la configuracion y que settings de provider hacen falta.
+```bash
+neurox setup claude-code       # Claude Code
+neurox setup opencode          # OpenCode
+neurox setup cursor            # Cursor
+neurox setup vscode            # VS Code (Copilot)
+neurox setup antigravity       # Gemini CLI / Antigravity
+neurox setup claude-desktop    # Claude Desktop
+```
 
-### Compilar
+Eso es todo. Sin Node.js, sin Python, sin Docker. **Un binario, un archivo SQLite.**
+
+> **Configuracion avanzada**: Ejecuta `neurox install` para el instalador interactivo con configuracion de providers, embeddings y LLM.
+
+### Compilar desde source
 
 ```bash
 # Requiere CGO para SQLite
 CGO_ENABLED=1 go build -tags fts5 -o neurox .
-```
-
-Nota: el ejecutable resultante es portable, pero no totalmente estatico; con SQLite via CGO enlaza contra `libc`/`libm` del sistema.
-
-### Usar con agentes de IA (MCP)
-
-```bash
-./neurox mcp
 ```
 
 ### Usar como API HTTP
@@ -377,6 +378,7 @@ La mayoria de los comandos CLI imprimen JSON, asi que se integran bien con scrip
 | `neurox audit <id>` | Muestra el ciclo de vida completo de una observacion: creacion, provenance, links, staleness, menciones temporales | ninguna |
 | `neurox consolidate` | Fuerza un ciclo completo de consolidacion | ninguna |
 | `neurox graph` | Genera una vista HTML interactiva del grafo | `--namespace`, `--type`, `--tags`, `--min-importance`, `--limit`, `--linked-only`, `--output`, `--no-browser` |
+| `neurox setup <agente>` | Configura integracion MCP de un agente IA | `<agente>` |
 | `neurox config` | Imprime la configuracion resuelta en runtime | ninguna |
 | `neurox install-hook` | Instala el hook `post-commit` en el repo actual | ninguna |
 | `neurox curate` | Curacion profunda de memoria con LLM externo | `--namespace`, `-n`, `--dry-run` |

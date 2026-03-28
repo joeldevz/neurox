@@ -76,18 +76,33 @@ while IFS= read -r stale; do
 done < <(which -a "$BINARY" 2>/dev/null || true)
 
 # ── Ensure INSTALL_DIR is in PATH ─────────────────────────────────────────────
+PATH_MODIFIED=0
 if [[ ":$PATH:" != *":$INSTALL_DIR:"* ]]; then
+  PATH_MODIFIED=1
   for RC in "$HOME/.zshrc" "$HOME/.bashrc" "$HOME/.bash_profile"; do
     if [[ -f "$RC" ]]; then
       printf '\nexport PATH="%s:$PATH"\n' "$INSTALL_DIR" >> "$RC"
-      printf "Added %s to PATH in %s\n" "$INSTALL_DIR" "$RC"
-      printf "Run: source %s\n" "$RC"
       break
     fi
   done
 fi
 
-# ── Done ──────────────────────────────────────────────────────────────────────
+# ── Post-install instructions ─────────────────────────────────────────────────
 printf "\n✓ neurox %s installed to %s/%s\n" "$VERSION" "$INSTALL_DIR" "$BINARY"
-printf "\nNext: configure your AI clients\n"
-printf "  neurox install\n\n"
+
+if [[ "$PATH_MODIFIED" -eq 1 ]]; then
+  printf "\n  Run this now to use neurox in this terminal:\n"
+  printf "\n    export PATH=\"%s:\$PATH\"\n" "$INSTALL_DIR"
+  printf "\n  Then configure your AI agent:\n"
+else
+  printf "\n  Configure your AI agent:\n"
+fi
+
+printf "\n    neurox setup claude-code       # Claude Code\n"
+printf "    neurox setup opencode          # OpenCode\n"
+printf "    neurox setup cursor            # Cursor\n"
+printf "    neurox setup vscode            # VS Code (Copilot)\n"
+printf "    neurox setup antigravity       # Gemini CLI / Antigravity\n"
+printf "    neurox setup claude-desktop    # Claude Desktop\n"
+printf "\n  Verify installation:\n"
+printf "\n    neurox version\n\n"

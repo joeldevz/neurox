@@ -69,15 +69,38 @@ Copy-Item -Path $ExtractedBin -Destination (Join-Path $InstallDir $Binary) -Forc
 Remove-Item -Recurse -Force $TmpDir
 
 # Add to PATH if needed
+$PathModified = $false
 $UserPath = [Environment]::GetEnvironmentVariable("PATH", "User")
 if ($UserPath -notlike "*$InstallDir*") {
     [Environment]::SetEnvironmentVariable("PATH", "$InstallDir;$UserPath", "User")
-    Write-Host "Added $InstallDir to your PATH. Restart your terminal for it to take effect."
+    $PathModified = $true
+}
+
+# Post-install instructions
+Write-Host ""
+Write-Host "✓ neurox $Version installed to $InstallDir\$Binary" -ForegroundColor Green
+
+if ($PathModified) {
+    Write-Host ""
+    Write-Host "  Refresh PATH in this terminal:"
+    Write-Host ""
+    Write-Host '    $env:PATH = [Environment]::GetEnvironmentVariable("PATH", "User") + ";" + $env:PATH' -ForegroundColor Cyan
+    Write-Host ""
+    Write-Host "  Then configure your AI agent:"
+} else {
+    Write-Host ""
+    Write-Host "  Configure your AI agent:"
 }
 
 Write-Host ""
-Write-Host "neurox $Version installed to $InstallDir\$Binary" -ForegroundColor Green
+Write-Host "    neurox setup claude-code       # Claude Code" -ForegroundColor Cyan
+Write-Host "    neurox setup opencode          # OpenCode" -ForegroundColor Cyan
+Write-Host "    neurox setup cursor            # Cursor" -ForegroundColor Cyan
+Write-Host "    neurox setup vscode            # VS Code (Copilot)" -ForegroundColor Cyan
+Write-Host "    neurox setup antigravity       # Gemini CLI / Antigravity" -ForegroundColor Cyan
+Write-Host "    neurox setup claude-desktop    # Claude Desktop" -ForegroundColor Cyan
 Write-Host ""
-Write-Host "Next: configure your AI clients"
-Write-Host "  neurox install"
+Write-Host "  Verify installation:"
+Write-Host ""
+Write-Host "    neurox version" -ForegroundColor Cyan
 Write-Host ""
