@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/joeldevz/neurox/internal/db"
 	"github.com/joeldevz/neurox/internal/links"
@@ -232,5 +233,117 @@ func TestCORSHeaders(t *testing.T) {
 	w := doJSON(t, s, "OPTIONS", "/health", nil)
 	if w.Header().Get("Access-Control-Allow-Origin") != "*" {
 		t.Error("missing CORS header")
+	}
+}
+
+func TestActivityEndpoint(t *testing.T) {
+	s := newTestServer(t)
+
+	// Test activity endpoint with no data
+	w := doJSON(t, s, "GET", "/api/v1/stats/activity", nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("activity: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var result map[string]any
+	decodeResp(t, w, &result)
+
+	// Verify structure
+	if _, ok := result["days"]; !ok {
+		t.Error("expected 'days' field")
+	}
+	if _, ok := result["series"]; !ok {
+		t.Error("expected 'series' field")
+	}
+	if _, ok := result["period_days"]; !ok {
+		t.Error("expected 'period_days' field")
+	}
+
+	// With no data, days should be empty array (since we fill all days)
+	// Actually we fill all days in range, so days should have 30 entries
+	days := result["days"].([]any)
+	if len(days) != 30 {
+		t.Errorf("expected 30 days, got %d", len(days))
+	}
+
+	// Test with custom days parameter
+	w = doJSON(t, s, "GET", "/api/v1/stats/activity?days=7", nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("activity with days=7: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	decodeResp(t, w, &result)
+	days = result["days"].([]any)
+	if len(days) != 7 {
+		t.Errorf("expected 7 days, got %d", len(days))
+	}
+	if result["period_days"].(float64) != 7 {
+		t.Errorf("expected period_days=7, got %v", result["period_days"])
+	}
+}
+
+func TestBrowseSortParameter(t *testing.T) {
+	s := newTestServer(t)
+
+	// Create observations in sequence with delays to ensure different timestamps
+	// Note: API doesn't accept importance, all get default 0.5, so sort falls back to created_at DESC
+	// SQLite datetime('now') has second precision, so we need 1+ second delays
+	doJSON(t, s, "POST", "/api/v1/observations", map[string]any{
+		"title":   "First observation",
+		"content": "Content A",
+	})
+	time.Sleep(1100 * time.Millisecond)
+	doJSON(t, s, "POST", "/api/v1/observations", map[string]any{
+		"title":   "Second observation",
+		"content": "Content B",
+	})
+	time.Sleep(1100 * time.Millisecond)
+	doJSON(t, s, "POST", "/api/v1/observations", map[string]any{
+		"title":   "Third observation",
+		"content": "Content C",
+	})
+
+	// Test default sort (importance DESC, created_at DESC)
+	// Since all have same importance (0.5), secondary sort by created_at DESC applies
+	w := doJSON(t, s, "GET", "/api/v1/observations/browse", nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("browse default: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var result map[string]any
+	decodeResp(t, w, &result)
+	items := result["items"].([]any)
+	if len(items) != 3 {
+		t.Fatalf("expected 3 items, got %d", len(items))
+	}
+
+	// With default sort and equal importance, most recent should be first
+	firstItem := items[0].(map[string]any)
+	if firstItem["title"] != "Third observation" {
+		t.Errorf("default sort: expected 'Third observation' first (most recent), got %v", firstItem["title"])
+	}
+
+	// Test sort=recent (created_at DESC) - should also give most recent first
+	w = doJSON(t, s, "GET", "/api/v1/observations/browse?sort=recent", nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("browse recent: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	decodeResp(t, w, &result)
+	items = result["items"].([]any)
+	if len(items) != 3 {
+		t.Fatalf("expected 3 items, got %d", len(items))
+	}
+
+	// With recent sort, last created should be first
+	firstItem = items[0].(map[string]any)
+	if firstItem["title"] != "Third observation" {
+		t.Errorf("recent sort: expected 'Third observation' first (most recent), got %v", firstItem["title"])
+	}
+
+	// Test with invalid sort value (should use default)
+	w = doJSON(t, s, "GET", "/api/v1/observations/browse?sort=invalid", nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("browse invalid sort: expected 200, got %d: %s", w.Code, w.Body.String())
 	}
 }

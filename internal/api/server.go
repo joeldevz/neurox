@@ -90,6 +90,7 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/graph", s.handleGraph)
 	mux.HandleFunc("GET /api/v1/health-check", s.handleHealthCheck)
 	mux.HandleFunc("GET /api/v1/decay-timeline", s.handleDecayTimeline)
+	mux.HandleFunc("GET /api/v1/stats/activity", s.handleActivity)
 }
 
 func corsMiddleware(next http.Handler) http.Handler {

@@ -498,6 +498,13 @@ func (s *Server) handleBrowse(w http.ResponseWriter, r *http.Request) {
 
 	whereClause := strings.Join(where, " AND ")
 
+	// Determine sort order
+	sort := q.Get("sort")
+	orderBy := "importance DESC, created_at DESC"
+	if sort == "recent" {
+		orderBy = "created_at DESC"
+	}
+
 	// Count total.
 	var total int
 	countQ := "SELECT COUNT(*) FROM observations WHERE " + whereClause
@@ -508,9 +515,9 @@ func (s *Server) handleBrowse(w http.ResponseWriter, r *http.Request) {
 		SELECT id, title, content, observation_type, layer, confidence, importance, kind,
 		       COALESCE(tags, ''), namespace, COALESCE(staleness, 'fresh'), COALESCE(created_at, '')
 		FROM observations WHERE %s
-		ORDER BY importance DESC, created_at DESC
+		ORDER BY %s
 		LIMIT ? OFFSET ?
-	`, whereClause)
+	`, whereClause, orderBy)
 	queryArgs := append(args, limit, offset)
 
 	rows, err := s.deps.DB.QueryContext(ctx, selectQ, queryArgs...)
@@ -717,6 +724,97 @@ func (s *Server) handleDecayTimeline(w http.ResponseWriter, r *http.Request) {
 		points = []point{}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"points": points})
+}
+
+func (s *Server) handleActivity(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	db := s.deps.DB
+
+	// Parse days parameter (default 30)
+	days := 30
+	if d := r.URL.Query().Get("days"); d != "" {
+		if v, err := strconv.Atoi(d); err == nil && v > 0 {
+			days = v
+		}
+	}
+
+	// Query tool_calls grouped by day and tool_name
+	rows, err := db.QueryContext(ctx, `
+		SELECT DATE(called_at) as day, tool_name, COUNT(*) as cnt
+		FROM tool_calls
+		WHERE called_at >= datetime('now', ?)
+		GROUP BY day, tool_name
+		ORDER BY day ASC, tool_name ASC
+	`, fmt.Sprintf("-%d days", days))
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		return
+	}
+	defer rows.Close()
+
+	// Collect data and track unique tools and days
+	type dataPoint struct {
+		Day   string
+		Tool  string
+		Count int
+	}
+	var dataPoints []dataPoint
+	toolSet := make(map[string]struct{})
+	daySet := make(map[string]struct{})
+
+	for rows.Next() {
+		var dp dataPoint
+		if err := rows.Scan(&dp.Day, &dp.Tool, &dp.Count); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+			return
+		}
+		dataPoints = append(dataPoints, dp)
+		toolSet[dp.Tool] = struct{}{}
+		daySet[dp.Day] = struct{}{}
+	}
+
+	// Build sorted list of days (all days in range, even if no data)
+	var daysList []string
+	for i := days - 1; i >= 0; i-- {
+		day := time.Now().UTC().AddDate(0, 0, -i).Format("2006-01-02")
+		daysList = append(daysList, day)
+	}
+
+	// Build sorted list of tools
+	var toolsList []string
+	for tool := range toolSet {
+		toolsList = append(toolsList, tool)
+	}
+
+	// Build series map: tool_name -> []counts (one per day)
+	series := make(map[string][]int)
+	for tool := range toolSet {
+		series[tool] = make([]int, len(daysList))
+	}
+
+	// Create day index map for quick lookup
+	dayIndex := make(map[string]int)
+	for i, day := range daysList {
+		dayIndex[day] = i
+	}
+
+	// Fill in the data
+	for _, dp := range dataPoints {
+		if idx, ok := dayIndex[dp.Day]; ok {
+			series[dp.Tool][idx] = dp.Count
+		}
+	}
+
+	// If no data at all, return empty series but still include all days
+	if len(toolsList) == 0 {
+		series = map[string][]int{}
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"days":        daysList,
+		"series":      series,
+		"period_days": days,
+	})
 }
 
 func (s *Server) handleHealthCheck(w http.ResponseWriter, r *http.Request) {

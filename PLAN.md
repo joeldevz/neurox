@@ -1,188 +1,159 @@
-# Plan: Recalibrar la consolidación de memoria
+# Plan: Dashboard Redesign — Fey-inspired Dark Premium UI
 
 ## Goal
 
-Corregir la lógica de consolidación de Neurox para que el sistema deje de empujar conocimiento durable hacia importancias residuales, y para que la promoción a Working/Core refleje mejor estabilidad y utilidad real de la memoria.
-
-El objetivo de esta iteración es mejorar decay, retrieval y promotion dentro del motor de memoria. **No** incluye cambios de proveedor/modelo LLM ni experimentación con modelos.
+Redesign completo del dashboard de Neurox (`GET /`) para conseguir una visual premium inspirada en Fey (app financiera): fondo dark, tipografía grande para KPIs, cards con bordes sutiles, charts elegantes, whitespace generoso, y una experiencia cohesiva entre las 4 tabs (Brain, Explorer, Graph, Health). También añadir datos nuevos: activity timeline (saves/recalls por día), recent observations, y mejorar la tab de Graph para que esté integrada visualmente con el nuevo diseño.
 
 ## Business Context
 
-- **Problema principal**: hoy muchas observaciones valiosas (`decision`, `bugfix`, `gotcha`, `preference`) terminan en `0.01` aunque sigan siendo conocimiento importante para el agente.
-- **Consecuencia**: el grafo y el recall pierden capacidad de priorización, porque `importance` deja de discriminar bien entre conocimiento durable y ruido operativo.
-- **Síntoma observable**:
-  - `ApplyDecay()` reduce `importance` linealmente para Buffer/Working.
-  - `bumpAccess()` vuelve a subir `importance` directamente al recordar.
-  - `promoteWorkingToCore()` promueve por edad + accesos, pero no recalibra el valor semántico al entrar a Core.
-  - Core acaba almacenando conocimiento estable con scores heredados ya degradados.
-- **Resultado esperado**:
-  - `importance` debe comportarse como valor durable, no como frescura momentánea.
-  - La accesibilidad reciente debe afectar la activación, no destruir la importancia semántica.
-  - La promoción a Core debe producir memorias estables y útiles, no solo memorias viejas y muy accedidas.
-  - Los datos existentes deben poder reconciliarse sin perder historial.
-- **Restricciones**:
-  - Mantener compatibilidad con SQLite y el patrón actual de migraciones embebidas.
-  - Preservar `retention='operational'` como barrera para no contaminar Core con trazas operativas.
-  - No mezclar en este plan trabajo sobre selección de modelos o tuning del proveedor LLM.
+- **Problema**: el dashboard actual es funcional pero tiene aspecto de dev tool — cards pequeñas, texto apretado, poco breathing room. No transmite la calidad premium del producto.
+- **Referencia visual**: Fey (Mobbin) — KPIs en una fila horizontal con label arriba y big number abajo, chart principal con línea fina sobre fondo dark, cards con bordes `rgba(255,255,255,0.08)` y border-radius 12-16px, tabs limpios, mucho whitespace.
+- **Preferencias del usuario**: Christopher prefiere consistentemente dark UI, palette purple-blue + pink, estética premium tipo Vercel/OpenCode/Claude.
+- **El brain SVG animado se mantiene** — es un diferenciador, pero se pule visualmente.
+- **Scope**: redesign visual de los 4 tabs + 2 nuevos endpoints de datos + nuevas secciones (activity chart, recent observations). Todo en el HTML embebido single-file.
 
 ## Technical Context
 
-- `internal/decay/engine.go` hoy usa:
-  - `ApplyDecay()` para restar importancia fija por epoch a `layer < 2`
-  - `ActivationScore()` para GC a partir de `importance`, `daysSinceAccess` y `access_count`
-- `internal/recall/engine.go` incrementa `access_count`, `last_accessed` y además sube `importance` en cada recall (`+0.03`).
-- `internal/consolidate/pipeline.go` hoy promueve:
-  - Buffer → Working por `importance >= 0.3` o `kind='procedural'`
-  - Working → Core por `retention='durable'`, `access_count >= 5` y `age >= 7 days`
-- `internal/db/schema.sql` ya contiene `access_count`, `last_accessed`, `repetition_count`, `decay_rate`, `modified_epoch`, pero la lógica actual no separa claramente valor durable vs activación.
-- Los tests existentes en `internal/decay/engine_test.go`, `internal/consolidate/pipeline_test.go` y `internal/recall/engine_test.go` ya cubren decay, promotion y recall bump; son el punto natural para construir la red de seguridad.
-- El proyecto ya tiene una política explícita de `retention` (`internal/observation/observation.go`) y memoria Core orientada a conocimiento estable; la consolidación actual no refleja bien esa intención.
+- **Dashboard actual**: `internal/api/dashboard.html` (1112 líneas), embebido via `go:embed` en `dashboard.go`. 4 tabs: Brain, Explorer, Graph, Health.
+- **Graph standalone**: `internal/graph/render.go` tiene su propio template HTML para `neurox graph` CLI. El dashboard usa el graph API con `?format=json` y renderiza con vis-network en el tab.
+- **CDN dependencies**: vis-network 9.1.9, Chart.js 4. Añadiremos Inter font desde Google Fonts.
+- **APIs existentes que usa el dashboard**:
+  - `GET /api/v1/status` — aggregate stats
+  - `GET /api/v1/stats/breakdown` — counts by type/layer/namespace/kind/relation
+  - `GET /api/v1/observations/browse` — paginated list
+  - `GET /api/v1/graph?format=json` — graph nodes/edges
+  - `GET /api/v1/health-check` — health score + dimensions
+  - `GET /api/v1/decay-timeline` — avg importance by layer per day
+- **APIs que faltan** (necesarias para nuevas features):
+  - `GET /api/v1/stats/activity` — saves/recalls per day (datos en `tool_calls` table)
+  - `GET /api/v1/observations/browse?sort=recent` — soporte de sort cronológico
+- **Constraint**: todo el dashboard es un single HTML file embebido — no hay build step, bundler, ni framework JS.
 
 ## Implementation Steps
 
-### Step 1: Crear red de seguridad y baseline de consolidación
-- **What**: ampliar tests y métricas para capturar el comportamiento actual de decay, recall bump y promotion antes de refactorizar.
-- **Why**: la consolidación es transversal; hace falta un baseline reproducible para evitar corregir una zona rompiendo otra.
+### Step 1: Añadir endpoints de datos para las nuevas secciones
+- **What**: Crear `GET /api/v1/stats/activity?days=30` que devuelve tool calls agrupados por día y tool_name (saves, recalls, etc.). Añadir parámetro `sort=recent` al endpoint `/api/v1/observations/browse` para ordenar por `created_at DESC`.
+- **Why**: El dashboard necesita datos de actividad temporal y observaciones recientes cronológicas que no existen todavía.
 - **Where**:
-  - `internal/decay/engine_test.go`
-  - `internal/consolidate/pipeline_test.go`
-  - `internal/recall/engine_test.go`
+  - `internal/api/handlers.go` — nuevo handler `handleActivity`, modificar `handleBrowse`
+  - `internal/api/server.go` — registrar nueva ruta
 - **Acceptance**:
-  - Existen tests que demuestran explícitamente el problema actual: observaciones durables degradadas antes de Core y promotion a Core sin recalibración.
-  - Existen fixtures diferenciando `decision`, `bugfix`, `preference`, `discovery` y `operational`.
-  - Hay cobertura para accesos repetidos, edad de la observación y capas Buffer/Working/Core.
-  - `CGO_ENABLED=1 go test -tags fts5 ./internal/decay ./internal/consolidate ./internal/recall`
-  - **Status**: [x] done
+  - `GET /api/v1/stats/activity?days=30` devuelve `{ "days": [...], "series": { "save": [...], "recall": [...], ... } }`
+  - `GET /api/v1/observations/browse?sort=recent&limit=10` devuelve las 10 observaciones más recientes
+  - `CGO_ENABLED=1 go test -tags fts5 ./internal/api/...`
+  - `CGO_ENABLED=1 go build -tags fts5 ./...`
+- **Status**: [x] done
 
-### Step 2: Separar en storage la señal de valor durable y la señal de activación
-- **What**: introducir columnas explícitas para activación/fortaleza de consolidación y ajustar el modelo persistido para que `importance` deje de cargar solo con recencia y accesos.
-- **Why**: mientras `importance` siga representando a la vez valor, frescura y promotion eligibility, la escala seguirá colapsándose.
+### Step 2: Redesign del Brain Tab — hero visual con KPI row y activity chart
+- **What**: Rediseñar el Brain tab con:
+  1. Header refinado con logo más premium, tabs estilo Fey (pill-shaped o underline sutil), y provider tags más elegantes
+  2. Brain SVG mantenido pero con glow más refinado y tipografía más grande dentro de los anillos
+  3. KPI row estilo Fey: 9 métricas en cards horizontales (Total, Core, Working, Buffer, Links, Facts, Health Score, Sessions, Stale) con label arriba en texto dim y valor grande abajo
+  4. Activity chart nuevo debajo de KPIs: Chart.js area chart mostrando saves/recalls por día (últimos 30 días) con la estética de Fey (línea fina blanca, area fill sutil, dark background)
+  5. "Recent observations" card tipo "News summary" de Fey: últimas 5 observaciones con title, type badge, y timestamp
+- **Why**: El Brain tab es la primera impresión. Debe transmitir la calidad del producto y dar un overview completo del brain health.
 - **Where**:
-  - `internal/db/` nueva migración
-  - `internal/db/db.go`
-  - `internal/db/schema.sql`
-  - `internal/observation/store.go`
-  - `internal/observation/observation.go`
-  - tests de DB/store relacionados
+  - `internal/api/dashboard.html` — CSS variables, header, brain-tab HTML + JS
 - **Acceptance**:
-  - El schema soporta guardar por separado la activación reciente y la fuerza de consolidación sin perder compatibilidad con datos existentes.
-  - Las observaciones nuevas reciben defaults coherentes.
-  - La migración deja los registros existentes en estado válido y sin NULLs inesperados.
-  - Hay tests de migración y persistencia para los nuevos campos.
-  - `CGO_ENABLED=1 go test -tags fts5 ./internal/db ./internal/observation`
-  - **Status**: [x] done
+  - El Brain tab muestra el SVG animado, KPI row, activity chart, y recent observations
+  - Los KPIs se actualizan cada 5 segundos vía polling
+  - El activity chart se carga con datos del nuevo endpoint
+  - Visual cohesiva con palette dark, borders sutiles, tipografía Inter, border-radius 12-16px
+  - Responsive: se ve bien en 1280px+ (no necesita ser mobile)
+- **Status**: [x] done
 
-### Step 3: Reescribir decay y recall bump para que afecten activación, no valor durable
+### Step 3: Redesign del Explorer Tab — layout refinado con glass cards
+- **What**: Rediseñar el Explorer con:
+  1. Sidebar con categorías en cards más elegantes, icons por tipo, y contadores con tipografía tabular
+  2. Observation cards más espaciados con hover effects sutiles, badges de tipo más refinados, importance bars más visual
+  3. Detail panel con glass-morphism (backdrop-filter blur), tipografía más limpia, y mejor jerarquía visual
+  4. Toolbar con filtros estilizados (selects con bordes sutiles, search input con icon)
+- **Why**: El Explorer es donde el usuario pasa más tiempo explorando observaciones. Necesita sentirse premium sin perder funcionalidad.
+- **Where**:
+  - `internal/api/dashboard.html` — CSS del explorer + HTML restructure
+- **Acceptance**:
+  - Toda la funcionalidad existente sigue intacta (filtros, browse, detail panel, load more)
+  - Visual consistente con el nuevo Brain tab
+  - Hover transitions suaves (150-200ms)
+  - Scrollbar custom sutil
+- **Status**: [x] done
+
+### Step 4: Redesign del Graph Tab — integración visual completa
+- **What**: Rediseñar el Graph tab para que sea cohesivo con el nuevo diseño:
+  1. Sidebar flotante con glass-morphism, filtros estilizados, y legend refinada
+  2. Stats overlay más elegante (top-right) con glass background
+  3. Detail panel (bottom-right) con glass-morphism y tipografía consistente
+  4. Botón "Load Graph" con estilo de los nuevos buttons
+  5. Namespace/type selects poblados dinámicamente desde breakdown API
+- **Why**: El Graph tab usa el mismo vis-network pero su chrome (sidebar, overlays, legend) debe ser consistente con el redesign.
+- **Where**:
+  - `internal/api/dashboard.html` — CSS y HTML del graph tab
+- **Acceptance**:
+  - Graph carga y funciona igual que antes (vis-network, filtros, click para detalle)
+  - Chrome visual (sidebar, overlays) consistente con el diseño Fey
+  - Glass-morphism en todos los overlays flotantes
+- **Status**: [x] done
+
+### Step 5: Redesign del Health Tab — score card premium y charts refinados
+- **What**: Rediseñar el Health tab:
+  1. Score card grande tipo "hero metric" con el número gigante, grade badge, y summary — estilo similar al "$329.28" de Fey
+  2. Top actions como pills/cards en vez de lista plana
+  3. Dimension breakdown con progress bars más anchas, colores por status, y tooltips para recommendations
+  4. Memory Layer Funnel con bars más anchas y visuales
+  5. Decay timeline chart con la estética refinada de Chart.js (grid lines sutiles, colores consistentes con el palette)
+- **Why**: El Health tab es la vista analítica principal. Debe sentirse como un dashboard financiero premium.
+- **Where**:
+  - `internal/api/dashboard.html` — CSS y HTML del health tab
+- **Acceptance**:
+  - Score card prominente con animación de entrada
+  - Dimension bars y funnel visualmente mejorados
+  - Chart con grid sutil y colores consistentes
+  - Todo funcional con datos del health-check API existente
+- **Status**: [x] done
+
+### Step 6: Polish final — transiciones, loading states, y cohesión
 - **What**:
-  - cambiar `ApplyDecay()` para que degrade principalmente activación y no fuerce `importance` hacia `0.01` en memorias durables.
-  - cambiar `bumpAccess()` para que un recall refuerce activación y consolidación de forma controlada, sin inflar `importance` ciegamente.
-  - mantener `GarbageCollect()` alineado con la nueva semántica.
-- **Why**: en memoria humana la accesibilidad cambia rápido, pero el valor durable no debería destruirse por falta de uso reciente.
+  1. Loading states para tabs que cargan datos (skeleton screens o spinners sutiles)
+  2. Transiciones de entrada para cards (fade-in staggered)
+  3. Verificar que los 4 tabs tienen una experiencia cohesiva
+  4. Asegurar que el header, tabs, y footer (si existe) son consistentes
+  5. Verificar que el graph standalone template (`internal/graph/render.go`) mantiene su visual (es independiente del dashboard pero debería ser consistente en palette)
+- **Why**: El polish marca la diferencia entre "funcional" y "premium".
 - **Where**:
-  - `internal/decay/engine.go`
-  - `internal/decay/engine_test.go`
-  - `internal/recall/engine.go`
-  - `internal/recall/engine_test.go`
+  - `internal/api/dashboard.html` — CSS animations, JS loading states
+  - `internal/graph/render.go` — actualizar palette si hay divergencia
 - **Acceptance**:
-  - El decay deja de reducir linealmente `importance` en Buffer/Working como comportamiento principal.
-  - Recall aumenta accesibilidad reciente sin volver a mezclarla con la importancia durable.
-  - GC sigue pudiendo eliminar trazas débiles y antiguas, usando la nueva señal correcta.
-  - Los tests muestran que una observación durable puede perder activación sin perder su valor semántico base.
-  - `CGO_ENABLED=1 go test -tags fts5 ./internal/decay ./internal/recall`
-  - **Status**: [x] done
-
-### Step 4: Recalibrar las promociones Buffer→Working y Working→Core
-- **What**:
-  - redefinir los criterios de promotion usando valor durable + activación + fuerza de consolidación + retention.
-  - recalibrar explícitamente observaciones que entren en Core para que no hereden scores colapsados.
-  - mantener `operational` fuera de Core.
-- **Why**: hoy la promotion a Core representa antigüedad y accesos, pero no la estabilidad semántica de la memoria consolidada.
-- **Where**:
-  - `internal/consolidate/pipeline.go`
-  - `internal/consolidate/pipeline_test.go`
-  - `internal/config/config.go` y tests si aparecen nuevos thresholds configurables
-  - `main.go` si se exponen nuevos parámetros
-- **Acceptance**:
-  - Buffer → Working deja de depender solo de un cutoff plano de `importance`.
-  - Working → Core requiere estabilidad real además de accesos/edad.
-  - Una observación durable promovida a Core nunca queda con un valor semántico "muerto" por herencia de decay previo.
-  - Observaciones operativas permanecen en Buffer/Working aunque tengan mucho uso.
-  - Hay tests de promoción por tipo, retention, acceso espaciado y antigüedad.
-  - `CGO_ENABLED=1 go test -tags fts5 ./internal/consolidate ./internal/config`
-  - **Status**: [x] done
-
-### Step 5: Reconciliar datos existentes y corregir scores heredados
-- **What**: implementar una migración o rutina de backfill que recalibre observaciones existentes usando capa, retention, tipo, accesos y edad, para sacar de `0.01` el conocimiento durable que hoy está artificialmente deprimido.
-- **Why**: aunque la lógica nueva sea correcta, la base actual seguiría arrastrando miles de observaciones mal calibradas.
-- **Where**:
-  - `internal/db/` nueva migración o rutina explícita de backfill
-  - `internal/consolidate/pipeline.go` si el backfill forma parte de consolidación controlada
-  - tests de integración o DB
-- **Acceptance**:
-  - El backfill no cambia IDs, historial ni relaciones.
-  - Observaciones durables de Core/Working recuperan una escala útil de prioridad.
-  - Observaciones claramente operativas o efímeras no se inflan artificialmente.
-  - Hay tests o fixtures que validan antes/después sobre datos representativos.
-  - `CGO_ENABLED=1 go test -tags fts5 ./internal/db ./internal/consolidate`
-  - **Status**: [x] done
-
-### Step 6: Validación integral de comportamiento y calidad del ranking
-- **What**: ejecutar validación técnica completa y una auditoría manual de muestras para comprobar que el ranking final tiene más sentido semántico que antes.
-- **Why**: la mejora real no es solo pasar tests, sino que `importance` vuelva a servir para priorizar conocimiento útil.
-- **Where**:
-  - raíz del proyecto
-  - queries manuales sobre la DB
-- **Acceptance**:
+  - No hay flash of unstyled content ni jumps al cargar tabs
+  - Transiciones suaves entre tabs
+  - No hay errores en la consola del browser
   - `CGO_ENABLED=1 go build -tags fts5 ./...`
   - `CGO_ENABLED=1 go vet -tags fts5 ./...`
   - `CGO_ENABLED=1 go test -tags fts5 ./...`
-  - `CGO_ENABLED=1 go test -race -tags fts5 ./...`
-  - `CGO_ENABLED=1 go build -tags fts5 -o neurox .`
-  - Auditoría manual confirma que observaciones durables ya no se concentran masivamente en `0.01`.
-  - Auditoría manual confirma que Core contiene conocimiento estable mejor calibrado que antes.
-  - **Status**: [x] done
+- **Status**: [x] done
 
 ## Verification
 
 ```bash
-CGO_ENABLED=1 go test -tags fts5 ./internal/db ./internal/observation
-CGO_ENABLED=1 go test -tags fts5 ./internal/decay ./internal/recall ./internal/consolidate ./internal/config
 CGO_ENABLED=1 go build -tags fts5 ./...
 CGO_ENABLED=1 go vet -tags fts5 ./...
 CGO_ENABLED=1 go test -tags fts5 ./...
-CGO_ENABLED=1 go test -race -tags fts5 ./...
 CGO_ENABLED=1 go build -tags fts5 -o neurox .
 ```
 
-Verificaciones manuales recomendadas:
-
-```sql
-SELECT observation_type, layer, retention,
-       COUNT(*) AS total,
-       ROUND(AVG(importance), 3) AS avg_importance
-FROM observations
-WHERE deleted_at IS NULL
-GROUP BY observation_type, layer, retention
-ORDER BY avg_importance DESC;
-
-SELECT COUNT(*)
-FROM observations
-WHERE deleted_at IS NULL
-  AND retention = 'durable'
-  AND layer = 2
-  AND importance <= 0.01;
-
-SELECT id, title, observation_type, layer, retention, importance, access_count
-FROM observations
-WHERE deleted_at IS NULL
-ORDER BY importance DESC, layer DESC, created_at DESC
-LIMIT 25;
-```
+Verificación manual:
+1. Abrir `http://localhost:7438` y verificar cada tab
+2. Brain tab: SVG animado visible, KPIs con datos reales, activity chart con datos, recent observations
+3. Explorer tab: filtros funcionales, browse/paginate, detail panel
+4. Graph tab: Load Graph funciona, filtros, click para detalle
+5. Health tab: score card con datos, dimensions, funnel, decay chart
+6. Verificar que no hay errores en la consola del browser
+7. Verificar en viewport 1280px+
 
 ## Risks / Notes
 
-- **Cambio transversal**: decay, recall, GC, promotion y migraciones comparten semántica; no conviene implementar esto por partes sin baseline fuerte.
-- **Compatibilidad histórica**: si se añaden nuevas señales persistidas, el backfill debe ser deterministic y reversible a nivel de migración de datos.
-- **Riesgo de sobrecorrección**: subir demasiado las memorias durables podría volver casi todo “importante”; por eso hace falta verificación con muestras reales tras el backfill.
-- **Scope intencional**: esta iteración mejora la consolidación y la semántica del score; no incluye trabajo sobre proveedor/modelo LLM.
-- **Política de Core**: Core debe seguir representando conocimiento estable del proyecto, no trazas operativas ni logs de ejecución.
+- **Single HTML file**: todo el dashboard es un archivo embebido. Con ~1100 líneas actuales, podría crecer a ~1800-2200. Es manejable pero hay que mantener el CSS organizado con secciones comentadas.
+- **No build step**: sin bundler ni framework. Todo es vanilla HTML/CSS/JS con CDN para Chart.js, vis-network, e Inter font. Esto es intencional y se mantiene.
+- **Graph standalone**: `internal/graph/render.go` tiene su propio template HTML. No se modifica estructuralmente, solo se alinea la palette si diverge.
+- **Datos de actividad**: depende de que la tabla `tool_calls` tenga datos. Si no hay historial, el activity chart mostrará un mensaje "Not enough data" como ya hace el decay chart.
+- **No mobile**: el dashboard está pensado para desktop (1280px+). No se invertirá en responsive mobile.
+- **Inter font**: se carga desde Google Fonts CDN. Si no hay conectividad, fallback a system fonts (ya definido en font-family).
