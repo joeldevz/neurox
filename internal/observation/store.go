@@ -189,7 +189,9 @@ func (s *Store) saveTx(ctx context.Context, tx *sql.Tx, input Observation) (Obse
 		return s.updateTx(ctx, tx, input)
 	}
 
-	input.ID = s.idGenerator.New()
+	if input.ID == "" {
+		input.ID = s.idGenerator.New()
+	}
 	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO observations(
 			id, title, content, observation_type, layer, confidence, kind, tags, namespace, topic_key, retention,

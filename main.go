@@ -42,7 +42,7 @@ import (
 )
 
 const (
-	version         = "0.1.13"
+	version         = "0.1.14"
 	defaultHTTPPort = 7438
 )
 
@@ -606,6 +606,23 @@ func runMCP(ctx context.Context, database *sql.DB, cfg config.Config) {
 		defer d.embedQueue.Stop()
 	}
 
+	// Async save queue: decouple MCP handler from SQLite writes.
+	saveQueue := observation.NewSaveQueue(d.obsStore)
+	if d.factExtractor != nil {
+		fe := d.factExtractor
+		saveQueue.OnPostSave(func(_ context.Context, saved observation.Observation) {
+			go fe.ExtractAndSave(context.Background(), saved.ID, saved.Title, saved.Content, saved.Namespace)
+		})
+	}
+	if d.embedQueue != nil {
+		eq := d.embedQueue
+		saveQueue.OnPostSave(func(_ context.Context, saved observation.Observation) {
+			eq.Enqueue(saved.ID)
+		})
+	}
+	saveQueue.Start(ctx)
+	defer saveQueue.Stop()
+
 	var curateEngine *curate.Engine
 	if llm.IsAvailable(d.curatorProvider) {
 		priorities, prErr := curate.LoadPriorities(cfg.Curator.PrioritiesFile)
@@ -617,6 +634,7 @@ func runMCP(ctx context.Context, database *sql.DB, cfg config.Config) {
 
 	mcpDeps := &neuroxmcp.Deps{
 		ObservationStore: d.obsStore,
+		SaveQueue:        saveQueue,
 		RecallEngine:     d.recallEngine,
 		LinkStore:        d.linkStore,
 		FactStore:        d.factStore,

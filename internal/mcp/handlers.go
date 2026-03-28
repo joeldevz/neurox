@@ -14,6 +14,7 @@ import (
 	"github.com/joeldevz/neurox/internal/classify"
 	"github.com/joeldevz/neurox/internal/consolidate"
 	curatepkg "github.com/joeldevz/neurox/internal/curate"
+	"github.com/joeldevz/neurox/internal/db"
 	"github.com/joeldevz/neurox/internal/embed"
 	"github.com/joeldevz/neurox/internal/facts"
 	"github.com/joeldevz/neurox/internal/health"
@@ -29,6 +30,7 @@ import (
 
 type Deps struct {
 	ObservationStore *observation.Store
+	SaveQueue        *observation.SaveQueue
 	RecallEngine     *recall.Engine
 	LinkStore        *links.Store
 	FactStore        *facts.Store
@@ -109,6 +111,24 @@ func (d *Deps) handleSave(ctx context.Context, req mcp.CallToolRequest) (result 
 		}
 	}
 
+	// Fast path: enqueue and return immediately so the MCP client never
+	// blocks on SQLite write contention.
+	if d.SaveQueue != nil {
+		result, qErr := d.SaveQueue.Enqueue(ctx, obs)
+		if qErr != nil {
+			return mcp.NewToolResultError(fmt.Sprintf("save failed: %v", qErr)), nil
+		}
+		return toolResultJSON(saveResponse{
+			ID:        result.ID,
+			Title:     result.Title,
+			Layer:     0,
+			Namespace: result.Namespace,
+			TopicKey:  result.TopicKey,
+			Message:   "observation queued for persistence",
+		})
+	}
+
+	// Fallback: synchronous write (no queue configured).
 	saved, err := d.ObservationStore.Save(ctx, obs)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("save failed: %v", err)), nil
@@ -755,6 +775,12 @@ func (d *Deps) handleConsolidate(ctx context.Context, req mcp.CallToolRequest) (
 	if err := d.Pipeline.ForceRun(ctx); err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("consolidation failed: %v", err)), nil
 	}
+
+	// Run a passive WAL checkpoint after consolidation to keep the WAL file
+	// small and prevent write contention when multiple instances share the DB.
+	walCheckpointed, walErr := db.WALCheckpoint(ctx, d.DB)
+	_ = walCheckpointed // logged below if needed
+	_ = walErr          // passive checkpoint is best-effort
 
 	var buffer, working, core int
 	d.DB.QueryRowContext(ctx, "SELECT COUNT(*) FROM observations WHERE deleted_at IS NULL AND layer = 0").Scan(&buffer)

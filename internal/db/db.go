@@ -129,7 +129,7 @@ func configure(ctx context.Context, database *sql.DB) error {
 		"PRAGMA foreign_keys = ON;",
 		"PRAGMA journal_mode = WAL;",
 		"PRAGMA synchronous = NORMAL;",
-		"PRAGMA busy_timeout = 5000;",
+		"PRAGMA busy_timeout = 15000;",
 		"PRAGMA temp_store = MEMORY;",
 	}
 
@@ -140,6 +140,18 @@ func configure(ctx context.Context, database *sql.DB) error {
 	}
 
 	return nil
+}
+
+// WALCheckpoint runs a passive WAL checkpoint to keep the WAL file small.
+// It uses PASSIVE mode so it never blocks writers. Returns the number of
+// WAL frames written back to the database, or an error.
+func WALCheckpoint(ctx context.Context, database *sql.DB) (int, error) {
+	var busy, log, checkpointed int
+	err := database.QueryRowContext(ctx, "PRAGMA wal_checkpoint(PASSIVE);").Scan(&busy, &log, &checkpointed)
+	if err != nil {
+		return 0, fmt.Errorf("wal checkpoint: %w", err)
+	}
+	return checkpointed, nil
 }
 
 func Migrate(ctx context.Context, database *sql.DB) error {
