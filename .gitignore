@@ -14,6 +14,9 @@ benchmarks/longmemeval/*_metrics.json
 .claude
 .ruff_cache
 
+# Internal strategy/planning docs (not for public repo)
+internal-docs/
+
 # Compiled binaries
 longmemeval
 

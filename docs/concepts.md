@@ -127,4 +127,4 @@ A reference guide to the core concepts behind persistent memory in AI coding age
 ## Further Reading
 
 - [docs/quickstart.md](quickstart.md) — Get Neurox running with your AI client in under 5 minutes
-- [GitHub README](https://github.com/joeldevz/neurox) — Architecture, MCP tools reference, benchmark results, and configuration
+- [Full Reference](reference.md) — CLI commands, REST API, MCP tool inputs, configuration, architecture
