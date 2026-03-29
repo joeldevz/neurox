@@ -54,22 +54,22 @@ type ScoreBreakdown struct {
 }
 
 type Result struct {
-	ID              string
-	Title           string
-	Content         string
-	Score           float64
-	Layer           int
-	ObservationType observation.ObservationType
-	Kind            observation.Kind
-	Confidence      float64
-	Tags            []string
-	Staleness       string
-	Retention       string
-	LinkedFiles     []string
-	SourceSurface   string
-	SourceSessionID string
-	SourceTool      string
-	Breakdown       *ScoreBreakdown // non-nil only when debug mode is enabled
+	ID              string                      `json:"id"`
+	Title           string                      `json:"title"`
+	Content         string                      `json:"content"`
+	Score           float64                     `json:"score"`
+	Layer           int                         `json:"layer"`
+	ObservationType observation.ObservationType `json:"observation_type"`
+	Kind            observation.Kind            `json:"kind"`
+	Confidence      float64                     `json:"confidence"`
+	Tags            []string                    `json:"tags,omitempty"`
+	Staleness       string                      `json:"staleness"`
+	Retention       string                      `json:"retention"`
+	LinkedFiles     []string                    `json:"linked_files,omitempty"`
+	SourceSurface   string                      `json:"source_surface,omitempty"`
+	SourceSessionID string                      `json:"source_session_id,omitempty"`
+	SourceTool      string                      `json:"source_tool,omitempty"`
+	Breakdown       *ScoreBreakdown             `json:"score_breakdown,omitempty"` // non-nil only when debug mode is enabled
 }
 
 type candidate struct {

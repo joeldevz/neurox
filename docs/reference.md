@@ -4,6 +4,22 @@ Complete reference for CLI commands, MCP tool inputs, REST API, configuration, a
 
 ---
 
+## Surface Parity
+
+All three surfaces (CLI, MCP, HTTP) share the **same save pipeline** (`internal/savepipeline`). This guarantees that `save`, `recall`, `context`, and `session` operations produce identical quality across surfaces:
+
+- **Provenance** (`source_surface`, `source_session_id`, `source_tool`) — set on every observation, returned by `recall` and `context` in all surfaces.
+- **Retention auto-classification** — identical logic in all surfaces.
+- **LLM quality gate** — runs on every save when configured, regardless of surface.
+- **Post-save hooks** — fact extraction and embedding enqueue fire on every save.
+- **Session attachment** — the active session for the namespace is attached automatically.
+
+**Concurrency model:** MCP and HTTP use an async `SaveQueue` with background workers for non-blocking saves. CLI uses the same pipeline synchronously (the process exits after each command). The quality gates, hooks, and provenance logic are shared code.
+
+**Fact extraction and reflection** require an LLM provider. When no LLM is configured, these features degrade gracefully — saves still persist, but no facts are extracted and no reflections are synthesized. The `status` command/tool shows whether an LLM is available.
+
+---
+
 ## MCP Tool Inputs
 
 | Tool | Key inputs |
@@ -14,11 +30,15 @@ Complete reference for CLI commands, MCP tool inputs, REST API, configuration, a
 | `update` | `id`, `title`, `content`, `observation_type`, `kind`, `confidence`, `tags`, `files`, `retention` |
 | `forget` | `id` |
 | `invalidate` | `observation_id`, `reason`, `replacement_title`, `replacement_content` |
+| `status` | *(no inputs)* |
 | `session_start` | `title`, `directory`, `branch`, `namespace` |
 | `session_end` | `session_id`, `summary` |
 | `git_hook` | `changed_files`, `commit_sha`, `branch` |
+| `reflect` | `namespace` |
+| `consolidate` | *(no inputs)* |
 | `health_check` | `days` |
 | `curate` | `namespace`, `dry_run` |
+| `backup` | `output` |
 
 ---
 
@@ -28,25 +48,29 @@ Complete reference for CLI commands, MCP tool inputs, REST API, configuration, a
 |---|---|---|
 | `neurox mcp` | Start MCP server (stdio) | — |
 | `neurox serve` | Start HTTP server + web dashboard on port 7438 | `--host` |
-| `neurox save "title"` | Save observation | `--content`, `--type`, `--kind`, `--confidence`, `--topic-key`, `--tags`, `--files`, `--namespace` |
+| `neurox save "title"` | Save observation (shared pipeline) | `--content`, `--type`, `--kind`, `--confidence`, `--topic-key`, `--retention`, `--tags`, `--files`, `--namespace` |
 | `neurox recall "query"` | Search with temporal-aware ranking | `--type`, `--kind`, `--namespace`, `--files`, `--include-stale`, `--limit`, `--debug` |
 | `neurox context` | Proactive context for namespace/files | `--namespace`, `--files`, `--limit` |
 | `neurox invalidate <id>` | Mark observation incorrect + replace | `--reason`, `--replacement-title`, `--replacement-content` |
 | `neurox status` | Brain, provider, and database stats | — |
 | `neurox audit <id>` | Full lifecycle of an observation | — |
 | `neurox consolidate` | Force full consolidation | — |
-| `neurox graph` | Interactive HTML graph view | `--namespace`, `--type`, `--tags`, `--min-importance`, `--limit`, `--linked-only`, `--output`, `--no-browser` |
-| `neurox setup <agent>` | Configure AI agent integration | — |
-| `neurox config` | Print resolved runtime config | — |
-| `neurox install-hook` | Install git post-commit hook | — |
 | `neurox curate` | Deep memory curation | `--namespace`, `--dry-run` |
+| `neurox session-start` | Start a new session | `--title`, `--directory`, `--branch`, `--namespace` |
+| `neurox session-end` | End a session with summary | `--session-id`, `--summary` |
+| `neurox graph` | Interactive HTML graph view | `--namespace`, `--type`, `--tags`, `--min-importance`, `--limit`, `--linked-only`, `--output`, `--no-browser` |
 | `neurox reembed` | Re-embed all observations | — |
-| `neurox export` | Export as Markdown files | `--format`, `--output`, `--namespace` |
-| `neurox import` | Import .md observation files | `--source` |
+| `neurox export` | Export observations | `--format` (md, json), `--output`, `--namespace` |
+| `neurox import` | Import observations | `--format` (md, json), `--source` |
+| `neurox backup` | Create safe database backup | `--output` |
 | `neurox benchmark` | Run brain benchmark suite | `--scale`, `--category`, `--dimensions`, `--output`, `--output-html`, `--verbose` |
+| `neurox setup <agent>` | Configure AI agent integration | — |
+| `neurox install` | Launch interactive TUI installer | — |
+| `neurox install-hook` | Install git post-commit hook | — |
 | `neurox update` | Update to latest version | `--yes` |
+| `neurox config` | Print resolved runtime config | — |
 
-All data commands (`save`, `recall`, `context`, `invalidate`, `status`, `audit`, `config`) return JSON.
+All data commands (`save`, `recall`, `context`, `invalidate`, `status`, `audit`, `config`, `session-start`, `session-end`) return JSON.
 
 ---
 
@@ -60,7 +84,7 @@ GET    /api/v1/decay-timeline                Importance by layer per day
 GET    /api/v1/stats/activity                Tool call activity per day
 GET    /api/v1/stats/breakdown               Breakdown by type/layer/namespace/kind
 GET    /api/v1/observations/browse           Browse recent observations
-POST   /api/v1/observations                  Save observation
+POST   /api/v1/observations                  Save observation (shared pipeline)
 GET    /api/v1/observations/search?q=...     Search memories
 GET    /api/v1/observations/context          Proactive context
 GET    /api/v1/observations/{id}             Get observation
@@ -74,6 +98,8 @@ GET    /api/v1/graph                         Graph view (HTML or ?format=json)
 POST   /api/v1/reflect                       Trigger reflection
 POST   /api/v1/consolidate                   Force consolidation
 POST   /api/v1/curate                        Deep curation
+POST   /api/v1/backup                        Database backup
+GET    /.well-known/mcp/server-card.json     MCP registry discovery
 ```
 
 ### Query Parameters

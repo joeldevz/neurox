@@ -1,7 +1,6 @@
 package api
 
 import (
-	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -10,13 +9,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/joeldevz/neurox/internal/classify"
 	"github.com/joeldevz/neurox/internal/db"
 	"github.com/joeldevz/neurox/internal/graph"
 	"github.com/joeldevz/neurox/internal/health"
-	"github.com/joeldevz/neurox/internal/llm"
 	"github.com/joeldevz/neurox/internal/observation"
 	"github.com/joeldevz/neurox/internal/recall"
+	"github.com/joeldevz/neurox/internal/savepipeline"
 )
 
 func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
@@ -101,73 +99,48 @@ func (s *Server) handleSave(w http.ResponseWriter, r *http.Request) {
 		Tags:            req.Tags,
 		Files:           req.Files,
 		Namespace:       req.Namespace,
-		SourceSurface:   "http",
-		SourceTool:      "save",
 	}
 
-	// Retention: use explicit value if provided, otherwise auto-classify.
+	// Explicit retention overrides auto-classification inside the pipeline.
 	if req.Retention != "" {
 		obs.Retention = observation.Retention(req.Retention)
-	} else {
-		obs.Retention = classify.InferRetention(obs.Title, obs.ObservationType, obs.Source)
 	}
 
-	// Fast path: enqueue and return immediately so the HTTP client never
-	// blocks on SQLite writes or LLM gate calls.  The SaveQueue's PreSave
-	// hooks (LLM gate) and PostSave hooks (fact extraction + embed enqueue)
-	// run in the background worker — same flow as MCP handleSave.
-	if s.deps.SaveQueue != nil {
-		result, qErr := s.deps.SaveQueue.Enqueue(r.Context(), obs)
-		if qErr != nil {
-			writeError(w, http.StatusBadRequest, fmt.Sprintf("save failed: %v", qErr))
-			return
-		}
-		writeJSON(w, http.StatusCreated, map[string]any{
-			"id":        result.ID,
-			"title":     result.Title,
-			"layer":     0,
-			"namespace": result.Namespace,
-			"topic_key": result.TopicKey,
-			"message":   "observation queued for persistence",
+	// Delegate to the shared save pipeline (provenance + retention + session
+	// attachment + SaveQueue fast path or sync fallback + post-save hooks).
+	pr, pErr := savepipeline.Run(r.Context(), savepipeline.Deps{
+		Store:         s.deps.ObservationStore,
+		SaveQueue:     s.deps.SaveQueue,
+		LLMGate:       s.deps.LLMGate,
+		FactExtractor: s.deps.FactExtractor,
+		EmbedQueue:    s.deps.EmbedQueue,
+		DB:            s.deps.DB,
+	}, savepipeline.Input{
+		Obs:     obs,
+		Surface: "http",
+		Tool:    "save",
+	})
+	if pErr != nil {
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("save failed: %v", pErr))
+		return
+	}
+
+	if pr.Rejected {
+		writeJSON(w, http.StatusOK, map[string]string{
+			"message": pr.Message,
+			"title":   pr.Title,
 		})
 		return
 	}
 
-	// Fallback: synchronous write (no queue configured).
-
-	// Quality gate: check if worth saving (only in sync path, mirrors MCP).
-	if s.deps.LLMGate != nil {
-		decision, _ := s.deps.LLMGate.SaveGateDecide(r.Context(), llm.SaveInput{
-			Title:           obs.Title,
-			Content:         obs.Content,
-			ObservationType: string(obs.ObservationType),
-		})
-		if decision == llm.SaveReject {
-			writeJSON(w, http.StatusOK, map[string]string{
-				"message": "observation rejected by quality gate (not worth persisting)",
-				"title":   obs.Title,
-			})
-			return
-		}
-	}
-
-	saved, err := s.deps.ObservationStore.Save(r.Context(), obs)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-
-	// Extract facts in background if LLM available (mirrors MCP sync path).
-	if s.deps.FactExtractor != nil {
-		go s.deps.FactExtractor.ExtractAndSave(context.Background(), saved.ID, saved.Title, saved.Content, saved.Namespace)
-	}
-
-	// Enqueue for embedding.
-	if s.deps.EmbedQueue != nil {
-		s.deps.EmbedQueue.Enqueue(saved.ID)
-	}
-
-	writeJSON(w, http.StatusCreated, observationToJSON(saved))
+	writeJSON(w, http.StatusCreated, map[string]any{
+		"id":        pr.ID,
+		"title":     pr.Title,
+		"layer":     pr.Layer,
+		"namespace": pr.Namespace,
+		"topic_key": pr.TopicKey,
+		"message":   pr.Message,
+	})
 }
 
 func (s *Server) handleRecall(w http.ResponseWriter, r *http.Request) {
@@ -214,6 +187,15 @@ func (s *Server) handleRecall(w http.ResponseWriter, r *http.Request) {
 			"confidence": res.Confidence, "tags": res.Tags,
 			"staleness": res.Staleness, "linked_files": res.LinkedFiles,
 			"retention": res.Retention,
+		}
+		if res.SourceSurface != "" {
+			item["source_surface"] = res.SourceSurface
+		}
+		if res.SourceSessionID != "" {
+			item["source_session_id"] = res.SourceSessionID
+		}
+		if res.SourceTool != "" {
+			item["source_tool"] = res.SourceTool
 		}
 		if res.Breakdown != nil {
 			item["score_breakdown"] = res.Breakdown
@@ -270,7 +252,9 @@ func (s *Server) handleContext(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Fallback: raw SQL if ProactiveEngine is not available.
-	query := "SELECT id, title, content, observation_type, layer, confidence, importance, kind, staleness, created_at FROM observations WHERE deleted_at IS NULL AND namespace = ?"
+	// This path cannot apply activation scoring or semantic matching, so we
+	// signal the degraded mode explicitly in the response.
+	query := "SELECT id, title, content, observation_type, layer, confidence, importance, kind, staleness, created_at, source_surface, source_session_id, source_tool FROM observations WHERE deleted_at IS NULL AND namespace = ?"
 	args := []any{namespace}
 
 	if len(files) > 0 {
@@ -297,20 +281,32 @@ func (s *Server) handleContext(w http.ResponseWriter, r *http.Request) {
 		var id, title, content, obsType, kind, staleness, createdAt string
 		var layer int
 		var confidence, importance float64
-		if err := rows.Scan(&id, &title, &content, &obsType, &layer, &confidence, &importance, &kind, &staleness, &createdAt); err != nil {
+		var sourceSurface, sourceSessionID, sourceTool sql.NullString
+		if err := rows.Scan(&id, &title, &content, &obsType, &layer, &confidence, &importance, &kind, &staleness, &createdAt, &sourceSurface, &sourceSessionID, &sourceTool); err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
-		items = append(items, map[string]any{
+		item := map[string]any{
 			"id": id, "title": title, "content": content,
 			"observation_type": obsType, "layer": layer,
 			"confidence": confidence, "importance": importance,
 			"kind": kind, "staleness": staleness, "created_at": createdAt,
-		})
+		}
+		if sourceSurface.Valid && sourceSurface.String != "" {
+			item["source_surface"] = sourceSurface.String
+		}
+		if sourceSessionID.Valid && sourceSessionID.String != "" {
+			item["source_session_id"] = sourceSessionID.String
+		}
+		if sourceTool.Valid && sourceTool.String != "" {
+			item["source_tool"] = sourceTool.String
+		}
+		items = append(items, item)
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"namespace": namespace, "count": len(items), "items": items,
+		"_fallback": "proactive engine unavailable; results use simple recency/importance ordering without activation scoring or semantic matching",
 	})
 }
 
@@ -376,9 +372,12 @@ func (s *Server) handleUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if s.deps.EmbedQueue != nil {
-		s.deps.EmbedQueue.Enqueue(updated.ID)
-	}
+	// Post-update hooks: re-extract facts + re-enqueue embedding.
+	// Temporal re-extraction is already handled inside Store.Update().
+	savepipeline.AfterUpdate(r.Context(), savepipeline.Deps{
+		FactExtractor: s.deps.FactExtractor,
+		EmbedQueue:    s.deps.EmbedQueue,
+	}, updated)
 
 	writeJSON(w, http.StatusOK, observationToJSON(updated))
 }
@@ -1158,6 +1157,15 @@ func observationToJSON(obs observation.Observation) map[string]any {
 	}
 	if obs.Source != "" {
 		m["source"] = obs.Source
+	}
+	if obs.SourceSurface != "" {
+		m["source_surface"] = obs.SourceSurface
+	}
+	if obs.SourceSessionID != "" {
+		m["source_session_id"] = obs.SourceSessionID
+	}
+	if obs.SourceTool != "" {
+		m["source_tool"] = obs.SourceTool
 	}
 	return m
 }

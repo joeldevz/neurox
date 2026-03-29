@@ -199,6 +199,86 @@ func TestEndSessionWithoutTemporalExtractorStillWorks(t *testing.T) {
 	}
 }
 
+func TestEndSessionPostSaveHooksFire(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "neurox.db")
+	database, err := db.Open(context.Background(), dbPath)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	t.Cleanup(func() { database.Close() })
+
+	mock := &mockLLM{response: `decision | Chose React | What: Selected React for the frontend. Why: Better ecosystem.
+discovery | Redis caching | What: Adding Redis cache reduced latency. Where: API gateway.`}
+
+	idGen := observation.NewULIDGenerator()
+	mgr := NewManager(database, mock, idGen)
+
+	// Register post-save hooks to track calls.
+	var hookCalls []string
+	mgr.OnPostSave(func(_ context.Context, id, title, _, _ string) {
+		hookCalls = append(hookCalls, id+":"+title)
+	})
+
+	ctx := context.Background()
+	start, _ := mgr.Start(ctx, "Hook test", "", "", "ns")
+	result, err := mgr.End(ctx, start.SessionID, "We chose React and added Redis caching.", "test")
+	if err != nil {
+		t.Fatalf("end: %v", err)
+	}
+	if result.ObservationsExtracted != 2 {
+		t.Fatalf("extracted = %d, want 2", result.ObservationsExtracted)
+	}
+
+	// Post-save hooks should have been called for each extracted observation.
+	if len(hookCalls) != 2 {
+		t.Fatalf("post-save hook calls = %d, want 2; got: %v", len(hookCalls), hookCalls)
+	}
+}
+
+func TestEndSessionProvenanceOnExtracted(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "neurox.db")
+	database, err := db.Open(context.Background(), dbPath)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	t.Cleanup(func() { database.Close() })
+
+	mock := &mockLLM{response: `decision | Use Go | What: Go is the language. Why: Concurrency.`}
+
+	idGen := observation.NewULIDGenerator()
+	mgr := NewManager(database, mock, idGen)
+
+	ctx := context.Background()
+	start, _ := mgr.Start(ctx, "Provenance test", "", "", "ns")
+	result, err := mgr.End(ctx, start.SessionID, "We decided on Go.", "mcp")
+	if err != nil {
+		t.Fatalf("end: %v", err)
+	}
+	if result.ObservationsExtracted != 1 {
+		t.Fatalf("extracted = %d, want 1", result.ObservationsExtracted)
+	}
+
+	// Verify provenance on the extracted observation.
+	var sourceSurface, sourceSessionID, sourceTool string
+	err = database.QueryRowContext(ctx, `
+		SELECT COALESCE(source_surface,''), COALESCE(source_session_id,''), COALESCE(source_tool,'')
+		FROM observations WHERE namespace = 'ns' AND source = 'consolidator' AND deleted_at IS NULL
+		LIMIT 1
+	`).Scan(&sourceSurface, &sourceSessionID, &sourceTool)
+	if err != nil {
+		t.Fatalf("query provenance: %v", err)
+	}
+	if sourceSurface != "mcp" {
+		t.Errorf("source_surface = %q, want 'mcp'", sourceSurface)
+	}
+	if sourceSessionID != start.SessionID {
+		t.Errorf("source_session_id = %q, want %q", sourceSessionID, start.SessionID)
+	}
+	if sourceTool != "session_end" {
+		t.Errorf("source_tool = %q, want 'session_end'", sourceTool)
+	}
+}
+
 func TestEndSessionNotFound(t *testing.T) {
 	mgr, _ := setupTest(t)
 	_, err := mgr.End(context.Background(), "nonexistent", "summary", "test")

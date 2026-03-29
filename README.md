@@ -164,7 +164,36 @@ A self-contained [Brain Benchmark](docs/concepts.md#brain-benchmark) (12 dimensi
 
 ---
 
-## MCP Tools
+## Surface Parity
+
+Neurox exposes three access surfaces. The core memory operations — `save`, `recall`, `context`, and `session` — use the **same shared pipeline** across all three, guaranteeing identical quality, provenance, and hooks regardless of how you connect.
+
+| Capability | CLI | MCP | HTTP |
+|---|:---:|:---:|:---:|
+| **save** (shared pipeline, provenance, facts, embeddings) | ✓ | ✓ | ✓ |
+| **recall** (FTS5 + semantic + temporal intent + provenance) | ✓ | ✓ | ✓ |
+| **context** (proactive retrieval + reflections) | ✓ | ✓ | ✓ |
+| **session_start / session_end** (observation extraction) | ✓ | ✓ | ✓ |
+| **update** | — | ✓ | ✓ |
+| **forget** (soft-delete) | — | ✓ | ✓ |
+| **invalidate** (+ replacement) | ✓ | ✓ | ✓ |
+| **status** | ✓ | ✓ | ✓ |
+| **git_hook** | — | ✓ | ✓ |
+| **reflect** | — | ✓ | ✓ |
+| **consolidate** | ✓ | ✓ | ✓ |
+| **health_check** | — | ✓ | ✓ |
+| **curate** | ✓ | ✓ | ✓ |
+| **backup** | ✓ | ✓ | ✓ |
+| **audit** (full observation lifecycle) | ✓ | — | — |
+| **graph** (interactive visualization) | ✓ | — | ✓ |
+| **benchmark** | ✓ | — | — |
+| **export / import** | ✓ | — | — |
+| **reembed** | ✓ | — | — |
+| **Web dashboard** (Brain, Explorer, Graph, Health) | — | — | ✓ |
+
+**Concurrency model:** MCP and HTTP use an async `SaveQueue` with background workers. CLI uses the same pipeline synchronously (the process exits after each command). The quality gates, fact extraction, and embedding hooks are identical in all cases.
+
+### MCP Tools
 
 | Tool | Description |
 |---|---|
@@ -182,6 +211,7 @@ A self-contained [Brain Benchmark](docs/concepts.md#brain-benchmark) (12 dimensi
 | `consolidate` | Force immediate consolidation cycle |
 | `health_check` | Brain power score (0-100%) with recommendations |
 | `curate` | Deep curation with external LLM |
+| `backup` | Safe database backup while server is running |
 
 Full tool inputs and parameters: [docs/reference.md](docs/reference.md#mcp-tool-inputs)
 

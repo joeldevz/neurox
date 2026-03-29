@@ -11,7 +11,6 @@ import (
 
 	"github.com/mark3labs/mcp-go/mcp"
 
-	"github.com/joeldevz/neurox/internal/classify"
 	"github.com/joeldevz/neurox/internal/consolidate"
 	curatepkg "github.com/joeldevz/neurox/internal/curate"
 	"github.com/joeldevz/neurox/internal/db"
@@ -24,6 +23,7 @@ import (
 	"github.com/joeldevz/neurox/internal/proactive"
 	"github.com/joeldevz/neurox/internal/recall"
 	reflectpkg "github.com/joeldevz/neurox/internal/reflect"
+	"github.com/joeldevz/neurox/internal/savepipeline"
 	"github.com/joeldevz/neurox/internal/session"
 	"github.com/joeldevz/neurox/internal/telemetry"
 )
@@ -62,25 +62,13 @@ func (d *Deps) handleSave(ctx context.Context, req mcp.CallToolRequest) (result 
 		}
 	}()
 
-	title := req.GetString("title", "")
-	content := req.GetString("content", "")
-
 	obs := observation.Observation{
-		Title:           title,
-		Content:         content,
+		Title:           req.GetString("title", ""),
+		Content:         req.GetString("content", ""),
 		ObservationType: observation.ObservationType(req.GetString("observation_type", "")),
 		Kind:            observation.Kind(req.GetString("kind", "")),
 		TopicKey:        req.GetString("topic_key", ""),
 		Namespace:       req.GetString("namespace", ""),
-		SourceSurface:   "mcp",
-		SourceTool:      "save",
-	}
-
-	// Attach active session ID if available.
-	if d.SessionManager != nil {
-		if sid, err := d.activeSessionID(ctx, obs.Namespace); err == nil && sid != "" {
-			obs.SourceSessionID = sid
-		}
 	}
 
 	if args := req.GetArguments(); args != nil {
@@ -98,69 +86,43 @@ func (d *Deps) handleSave(ctx context.Context, req mcp.CallToolRequest) (result 
 		obs.Files = splitCSV(files)
 	}
 
-	// Retention: use explicit value if provided, otherwise auto-classify.
+	// Explicit retention overrides auto-classification inside the pipeline.
 	if ret := req.GetString("retention", ""); ret != "" {
 		obs.Retention = observation.Retention(ret)
-	} else {
-		obs.Retention = classify.InferRetention(obs.Title, obs.ObservationType, obs.Source)
 	}
 
-	// Fast path: enqueue and return immediately so the MCP client never
-	// blocks on SQLite writes or LLM gate calls.
-	if d.SaveQueue != nil {
-		result, qErr := d.SaveQueue.Enqueue(ctx, obs)
-		if qErr != nil {
-			return mcp.NewToolResultError(fmt.Sprintf("save failed: %v", qErr)), nil
-		}
-		return toolResultJSON(saveResponse{
-			ID:        result.ID,
-			Title:     result.Title,
-			Layer:     0,
-			Namespace: result.Namespace,
-			TopicKey:  result.TopicKey,
-			Message:   "observation queued for persistence",
+	// Delegate to the shared save pipeline (defaults + retention + session
+	// attachment + SaveQueue fast path or sync fallback + post-save hooks).
+	pr, pErr := savepipeline.Run(ctx, savepipeline.Deps{
+		Store:         d.ObservationStore,
+		SaveQueue:     d.SaveQueue,
+		LLMGate:       d.LLMGate,
+		FactExtractor: d.FactExtractor,
+		EmbedQueue:    d.EmbedQueue,
+		DB:            d.DB,
+	}, savepipeline.Input{
+		Obs:     obs,
+		Surface: "mcp",
+		Tool:    "save",
+	})
+	if pErr != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("save failed: %v", pErr)), nil
+	}
+
+	if pr.Rejected {
+		return toolResultJSON(map[string]string{
+			"message": pr.Message,
+			"title":   pr.Title,
 		})
-	}
-
-	// Fallback: synchronous write (no queue configured).
-
-	// Quality gate: check if worth saving (only in sync path).
-	if d.LLMGate != nil {
-		decision, _ := d.LLMGate.SaveGateDecide(ctx, llm.SaveInput{
-			Title:           obs.Title,
-			Content:         obs.Content,
-			ObservationType: string(obs.ObservationType),
-		})
-		if decision == llm.SaveReject {
-			return toolResultJSON(map[string]string{
-				"message": "observation rejected by quality gate (not worth persisting)",
-				"title":   obs.Title,
-			})
-		}
-	}
-
-	saved, err := d.ObservationStore.Save(ctx, obs)
-	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("save failed: %v", err)), nil
-	}
-
-	// Extract facts in background if LLM available
-	if d.FactExtractor != nil {
-		go d.FactExtractor.ExtractAndSave(context.Background(), saved.ID, saved.Title, saved.Content, saved.Namespace)
-	}
-
-	// Enqueue for embedding
-	if d.EmbedQueue != nil {
-		d.EmbedQueue.Enqueue(saved.ID)
 	}
 
 	return toolResultJSON(saveResponse{
-		ID:        saved.ID,
-		Title:     saved.Title,
-		Layer:     saved.Layer,
-		Namespace: saved.Namespace,
-		TopicKey:  saved.TopicKey,
-		Message:   "observation saved to Buffer",
+		ID:        pr.ID,
+		Title:     pr.Title,
+		Layer:     pr.Layer,
+		Namespace: pr.Namespace,
+		TopicKey:  pr.TopicKey,
+		Message:   pr.Message,
 	})
 }
 
@@ -382,10 +344,12 @@ func (d *Deps) handleUpdate(ctx context.Context, req mcp.CallToolRequest) (resul
 		return mcp.NewToolResultError(fmt.Sprintf("update failed: %v", err)), nil
 	}
 
-	// Enqueue for embedding
-	if d.EmbedQueue != nil {
-		d.EmbedQueue.Enqueue(updated.ID)
-	}
+	// Post-update hooks: re-extract facts + re-enqueue embedding.
+	// Temporal re-extraction is already handled inside Store.Update().
+	savepipeline.AfterUpdate(ctx, savepipeline.Deps{
+		FactExtractor: d.FactExtractor,
+		EmbedQueue:    d.EmbedQueue,
+	}, updated)
 
 	return toolResultJSON(saveResponse{
 		ID:        updated.ID,
@@ -942,22 +906,6 @@ func (d *Deps) dbPath() string {
 		return ""
 	}
 	return file
-}
-
-// activeSessionID returns the ID of the active session for the given namespace.
-// Returns ("", nil) if no active session exists or if the query fails.
-func (d *Deps) activeSessionID(ctx context.Context, namespace string) (string, error) {
-	if namespace == "" {
-		namespace = "default"
-	}
-	var id string
-	err := d.DB.QueryRowContext(ctx,
-		"SELECT id FROM sessions WHERE status = 'active' AND namespace = ? ORDER BY started_at DESC LIMIT 1",
-		namespace).Scan(&id)
-	if err != nil {
-		return "", err
-	}
-	return id, nil
 }
 
 // helpers

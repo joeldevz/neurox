@@ -149,6 +149,8 @@ func (s *Store) Update(ctx context.Context, input Observation) (Observation, err
 		return Observation{}, fmt.Errorf("commit update transaction: %w", err)
 	}
 
+	// Post-update: re-extract temporal mentions (same as Save) and run write gate.
+	s.extractTemporal(ctx, updated)
 	s.writeGate.CheckAsync(updated)
 	return updated, nil
 }

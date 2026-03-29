@@ -164,7 +164,36 @@ Un [Brain Benchmark](docs/concepts.md#brain-benchmark) autocontenido (12 dimensi
 
 ---
 
-## Tools MCP
+## Paridad de Superficies
+
+Neurox expone tres superficies de acceso. Las operaciones centrales de memoria — `save`, `recall`, `context` y `session` — usan el **mismo pipeline compartido** en las tres, garantizando calidad, provenance y hooks identicos sin importar como te conectes.
+
+| Capacidad | CLI | MCP | HTTP |
+|---|:---:|:---:|:---:|
+| **save** (pipeline compartido, provenance, facts, embeddings) | ✓ | ✓ | ✓ |
+| **recall** (FTS5 + semantico + intent temporal + provenance) | ✓ | ✓ | ✓ |
+| **context** (recuperacion proactiva + reflexiones) | ✓ | ✓ | ✓ |
+| **session_start / session_end** (extraccion de observaciones) | ✓ | ✓ | ✓ |
+| **update** | — | ✓ | ✓ |
+| **forget** (soft-delete) | — | ✓ | ✓ |
+| **invalidate** (+ reemplazo) | ✓ | ✓ | ✓ |
+| **status** | ✓ | ✓ | ✓ |
+| **git_hook** | — | ✓ | ✓ |
+| **reflect** | — | ✓ | ✓ |
+| **consolidate** | ✓ | ✓ | ✓ |
+| **health_check** | — | ✓ | ✓ |
+| **curate** | ✓ | ✓ | ✓ |
+| **backup** | ✓ | ✓ | ✓ |
+| **audit** (ciclo de vida completo de observacion) | ✓ | — | — |
+| **graph** (visualizacion interactiva) | ✓ | — | ✓ |
+| **benchmark** | ✓ | — | — |
+| **export / import** | ✓ | — | — |
+| **reembed** | ✓ | — | — |
+| **Dashboard web** (Brain, Explorer, Graph, Health) | — | — | ✓ |
+
+**Modelo de concurrencia:** MCP y HTTP usan un `SaveQueue` asincrono con workers en background. CLI usa el mismo pipeline de forma sincrona (el proceso termina despues de cada comando). Los quality gates, extraccion de facts y hooks de embedding son identicos en todos los casos.
+
+### Tools MCP
 
 | Tool | Descripcion |
 |---|---|
@@ -182,6 +211,7 @@ Un [Brain Benchmark](docs/concepts.md#brain-benchmark) autocontenido (12 dimensi
 | `consolidate` | Forzar ciclo de consolidacion inmediato |
 | `health_check` | Score de brain power (0-100%) con recomendaciones |
 | `curate` | Curacion profunda con LLM externo |
+| `backup` | Backup seguro de la base de datos mientras el servidor corre |
 
 Inputs y parametros completos: [docs/reference.md](docs/reference.md#mcp-tool-inputs)
 

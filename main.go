@@ -36,6 +36,7 @@ import (
 	"github.com/joeldevz/neurox/internal/proactive"
 	"github.com/joeldevz/neurox/internal/recall"
 	reflectpkg "github.com/joeldevz/neurox/internal/reflect"
+	"github.com/joeldevz/neurox/internal/savepipeline"
 	"github.com/joeldevz/neurox/internal/session"
 	"github.com/joeldevz/neurox/internal/telemetry"
 	"github.com/joeldevz/neurox/internal/temporal"
@@ -130,6 +131,10 @@ func main() {
 		runGraph(ctx, database)
 	case "backup":
 		runBackup(ctx, database, cfg)
+	case "session-start":
+		runSessionStart(ctx, database, cfg)
+	case "session-end":
+		runSessionEnd(ctx, database, cfg)
 	case "audit":
 		runAudit(ctx, database)
 	case "config":
@@ -159,6 +164,10 @@ func printUsage() {
 	fmt.Println("  consolidate      Force immediate consolidation (promote, dedup, reflect)")
 	fmt.Println("  curate           Deep curation: clean noise, recalibrate importance (--namespace ns --dry-run)")
 	fmt.Println("  reembed          Force re-embedding of all observations (useful after model change)")
+	fmt.Println()
+	fmt.Println("Session commands:")
+	fmt.Println("  session-start    Start a new session (--title, --directory, --branch, --namespace)")
+	fmt.Println("  session-end      End a session (--session-id, --summary)")
 	fmt.Println()
 	fmt.Println("Visualization:")
 	fmt.Println("  graph            Generate interactive graph visualization")
@@ -226,6 +235,7 @@ func runSave(ctx context.Context, database *sql.DB, cfg config.Config) {
 	kind := fs.String("kind", "semantic", "Memory kind (episodic, semantic, procedural)")
 	confidence := fs.Float64("confidence", 0.7, "Confidence level (0.0-1.0)")
 	topicKey := fs.String("topic-key", "", "Topic key for upsert")
+	retention := fs.String("retention", "", "Retention policy: durable (default) or operational")
 	tags := fs.String("tags", "", "Comma-separated tags")
 	files := fs.String("files", "", "Comma-separated file paths")
 	namespace := fs.String("namespace", "default", "Namespace")
@@ -246,8 +256,9 @@ func runSave(ctx context.Context, database *sql.DB, cfg config.Config) {
 		Confidence:      *confidence,
 		TopicKey:        *topicKey,
 		Namespace:       *namespace,
-		SourceSurface:   "cli",
-		SourceTool:      "save",
+	}
+	if *retention != "" {
+		obs.Retention = observation.Retention(*retention)
 	}
 	if *tags != "" {
 		obs.Tags = splitCSV(*tags)
@@ -256,39 +267,65 @@ func runSave(ctx context.Context, database *sql.DB, cfg config.Config) {
 		obs.Files = splitCSV(*files)
 	}
 
+	// Build the observation store with temporal extraction wired in —
+	// same as the full server path.
+	idGen := observation.NewULIDGenerator()
 	store := observation.NewStore(database, nil)
-	cliIDGen := observation.NewULIDGenerator()
-	cliTemporalStore := temporal.NewStore(database, cliIDGen)
-	cliTemporalExtractor := temporal.NewExtractor(temporal.NewParser(), cliTemporalStore)
-	store.SetTemporalExtractor(cliTemporalExtractor)
+	temporalStore := temporal.NewStore(database, idGen)
+	temporalExtractor := temporal.NewExtractor(temporal.NewParser(), temporalStore)
+	store.SetTemporalExtractor(temporalExtractor)
 
-	saved, err := store.Save(ctx, obs)
-	if err != nil {
-		log.Fatalf("save: %v", err)
-	}
-
-	// Trigger fact extraction if LLM available
+	// Minimal deps: LLM gate, fact extractor, embedder — no background workers.
 	d := initDepsLight(ctx, database, cfg)
-	if d.factExtractor != nil {
-		go d.factExtractor.ExtractAndSave(context.Background(), saved.ID, saved.Title, saved.Content, saved.Namespace)
+
+	// Create a short-lived embed queue that we drain synchronously.
+	// Unlike the server, the CLI process exits after the command, so we
+	// cannot use a background worker — we stop the queue (which drains it)
+	// before returning.
+	var embedQueue *embed.Queue
+	if embed.IsAvailable(d.embedder) {
+		embedQueue = embed.NewQueue(d.embedder, database)
+		embedQueue.Start(ctx)
 	}
 
-	// Enqueue embedding if embedder is available
-	if embed.IsAvailable(d.embedder) {
-		eq := embed.NewQueue(d.embedder, database)
-		eq.Start(ctx)
-		eq.Enqueue(saved.ID)
-		time.Sleep(2 * time.Second)
-		eq.Stop()
+	// Delegate to the canonical shared save pipeline.
+	pr, pErr := savepipeline.Run(ctx, savepipeline.Deps{
+		Store:         store,
+		SaveQueue:     nil, // CLI: always synchronous
+		LLMGate:       d.llmGate,
+		FactExtractor: d.factExtractor,
+		EmbedQueue:    embedQueue,
+		DB:            database,
+	}, savepipeline.Input{
+		Obs:     obs,
+		Surface: "cli",
+		Tool:    "save",
+	})
+
+	// Drain the embed queue synchronously before the process exits.
+	if embedQueue != nil {
+		embedQueue.Stop()
+	}
+
+	if pErr != nil {
+		log.Fatalf("save: %v", pErr)
+	}
+
+	if pr.Rejected {
+		printJSON(map[string]any{
+			"message": pr.Message,
+			"title":   pr.Title,
+		})
+		return
 	}
 
 	printJSON(map[string]any{
-		"id":        saved.ID,
-		"title":     saved.Title,
-		"layer":     saved.Layer,
-		"namespace": saved.Namespace,
-		"topic_key": saved.TopicKey,
-		"message":   "observation saved",
+		"id":        pr.ID,
+		"title":     pr.Title,
+		"layer":     pr.Layer,
+		"namespace": pr.Namespace,
+		"topic_key": pr.TopicKey,
+		"message":   pr.Message,
 	})
 }
 
@@ -336,11 +373,19 @@ func runRecall(ctx context.Context, database *sql.DB, cfg config.Config) {
 		log.Fatalf("recall: %v", err)
 	}
 
-	printJSON(map[string]any{
+	resp := map[string]any{
 		"query":   query,
 		"count":   len(results),
 		"results": results,
-	})
+	}
+
+	// Include detected temporal intent (same as MCP and HTTP surfaces).
+	intent := recall.DetectTemporalIntent(query, time.Now().UTC())
+	if intent.Kind != recall.IntentNone {
+		resp["temporal_intent"] = string(intent.Kind)
+	}
+
+	printJSON(resp)
 }
 
 func runContext(ctx context.Context, database *sql.DB, cfg config.Config) {
@@ -737,6 +782,87 @@ func nullStr(ns sql.NullString) string {
 		return ns.String
 	}
 	return ""
+}
+
+func runSessionStart(ctx context.Context, database *sql.DB, cfg config.Config) {
+	fs := flag.NewFlagSet("session-start", flag.ExitOnError)
+	title := fs.String("title", "", "Session title")
+	directory := fs.String("directory", "", "Working directory (default: current directory)")
+	branch := fs.String("branch", "", "Git branch")
+	namespace := fs.String("namespace", "default", "Namespace")
+	fs.Parse(os.Args[2:])
+
+	// Default directory to cwd if not provided.
+	if *directory == "" {
+		cwd, err := os.Getwd()
+		if err == nil {
+			*directory = cwd
+		}
+	}
+
+	d := initDepsSession(ctx, database, cfg)
+
+	startResult, err := d.sessionManager.Start(ctx, *title, *directory, *branch, *namespace)
+	if err != nil {
+		log.Fatalf("session start: %v", err)
+	}
+
+	resp := map[string]any{
+		"session_id": startResult.SessionID,
+		"namespace":  startResult.Namespace,
+		"abandoned":  startResult.Abandoned,
+		"message":    "session started",
+	}
+
+	// Get proactive context for this session.
+	if d.proactiveEngine != nil {
+		cr, err := d.proactiveEngine.GetSessionContext(ctx, startResult.Namespace, *title, *directory, *branch, 15)
+		if err == nil && cr.Count > 0 {
+			resp["context"] = cr.Items
+			resp["context_count"] = cr.Count
+			if len(cr.Reflections) > 0 {
+				resp["reflections"] = cr.Reflections
+			}
+		}
+	}
+
+	printJSON(resp)
+}
+
+func runSessionEnd(ctx context.Context, database *sql.DB, cfg config.Config) {
+	fs := flag.NewFlagSet("session-end", flag.ExitOnError)
+	sessionID := fs.String("session-id", "", "Session ID (required)")
+	summary := fs.String("summary", "", "Session summary (required)")
+	fs.Parse(os.Args[2:])
+
+	if strings.TrimSpace(*sessionID) == "" {
+		fmt.Fprintln(os.Stderr, "Usage: neurox session-end --session-id <id> --summary \"...\"")
+		fs.PrintDefaults()
+		os.Exit(1)
+	}
+	if strings.TrimSpace(*summary) == "" {
+		fmt.Fprintln(os.Stderr, "Usage: neurox session-end --session-id <id> --summary \"...\"")
+		fs.PrintDefaults()
+		os.Exit(1)
+	}
+
+	d := initDepsSession(ctx, database, cfg)
+
+	endResult, err := d.sessionManager.End(ctx, *sessionID, *summary, "cli")
+	if err != nil {
+		log.Fatalf("session end: %v", err)
+	}
+
+	resp := map[string]any{
+		"session_id":             endResult.SessionID,
+		"observations_extracted": endResult.ObservationsExtracted,
+		"message":                "session completed",
+	}
+	if endResult.Warning != "" {
+		resp["warning"] = endResult.Warning
+	}
+
+	printJSON(resp)
 }
 
 func runConsolidate(ctx context.Context, database *sql.DB, cfg config.Config) {
@@ -1241,6 +1367,22 @@ func initDeps(ctx context.Context, database *sql.DB, cfg config.Config) *deps {
 		embedQueue.Start(ctx)
 	}
 
+	// Wire post-save hooks on session manager so observations extracted
+	// from session summaries get fact extraction + embedding enqueue —
+	// the same post-processing that the main save pipeline performs.
+	if factExtractor != nil {
+		fe := factExtractor
+		sessionMgr.OnPostSave(func(_ context.Context, id, title, content, namespace string) {
+			go fe.ExtractAndSave(context.Background(), id, title, content, namespace)
+		})
+	}
+	if embedQueue != nil {
+		eq := embedQueue
+		sessionMgr.OnPostSave(func(_ context.Context, id, _, _, _ string) {
+			eq.Enqueue(id)
+		})
+	}
+
 	decayEngine := decay.NewEngine(database)
 	pipelineCfg := consolidate.Config{
 		Interval:         30 * time.Minute,
@@ -1278,6 +1420,49 @@ func initDeps(ctx context.Context, database *sql.DB, cfg config.Config) *deps {
 		curatorProvider: curatorProvider,
 		llmGate:         gate,
 		tracker:         tracker,
+	}
+}
+
+// initDepsSession creates deps for session CLI commands: SessionManager + ProactiveEngine.
+// It does not start background workers (consolidation pipeline, embed queue).
+func initDepsSession(ctx context.Context, database *sql.DB, cfg config.Config) *deps {
+	embedder := embed.AutoDetect(ctx, embed.OllamaConfig{URL: cfg.Embeddings.OllamaURL, Model: cfg.Embeddings.OllamaModel}, embed.RemoteConfig{
+		URL: cfg.Embeddings.RemoteURL, APIKey: cfg.Embeddings.RemoteKey,
+		Model: cfg.Embeddings.RemoteModel, Dimensions: cfg.Embeddings.Dimensions,
+	})
+	llmProvider := llm.AutoDetect(ctx,
+		llm.OllamaConfig{URL: cfg.LLM.OllamaURL, Model: cfg.LLM.OllamaModel},
+		llm.RemoteConfig{URL: cfg.LLM.RemoteURL, APIKey: cfg.LLM.RemoteAPIKey, Model: cfg.LLM.RemoteModel},
+	)
+	gate := llm.NewGate(llmProvider, llm.GateMode(cfg.LLM.GateMode))
+
+	idGen := observation.NewULIDGenerator()
+	factStore := facts.NewStore(database, idGen)
+	factExtractor := facts.NewExtractor(llmProvider, factStore)
+	sessionMgr := session.NewManager(database, llmProvider, idGen)
+	proactiveEng := proactive.NewEngine(database, embedder)
+
+	// Wire temporal extraction for session-derived observations.
+	temporalStore := temporal.NewStore(database, idGen)
+	temporalExtractor := temporal.NewExtractor(temporal.NewParser(), temporalStore)
+	sessionMgr.SetTemporalExtractor(temporalExtractor)
+
+	// Wire post-save hooks for session-derived observations (fact extraction).
+	// No embed queue in session CLI mode — embedding happens asynchronously
+	// when a full MCP/HTTP server runs.
+	if factExtractor != nil {
+		fe := factExtractor
+		sessionMgr.OnPostSave(func(_ context.Context, id, title, content, namespace string) {
+			go fe.ExtractAndSave(context.Background(), id, title, content, namespace)
+		})
+	}
+
+	return &deps{
+		sessionManager:  sessionMgr,
+		proactiveEngine: proactiveEng,
+		embedder:        embedder,
+		llmProvider:     llmProvider,
+		llmGate:         gate,
 	}
 }
 

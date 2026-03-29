@@ -12,12 +12,17 @@ import (
 	"github.com/joeldevz/neurox/internal/temporal"
 )
 
+// PostSaveHook is called after each observation extracted from a session
+// summary is persisted.  Implementations should not block indefinitely.
+type PostSaveHook func(ctx context.Context, id, title, content, namespace string)
+
 // Manager handles session lifecycle with LLM-based extraction.
 type Manager struct {
-	db       *sql.DB
-	llm      llm.Provider
-	idGen    filelink.IDGenerator
-	temporal *temporal.Extractor
+	db            *sql.DB
+	llm           llm.Provider
+	idGen         filelink.IDGenerator
+	temporal      *temporal.Extractor
+	postSaveHooks []PostSaveHook
 }
 
 // NewManager creates a session manager.
@@ -28,6 +33,14 @@ func NewManager(db *sql.DB, llmProvider llm.Provider, idGen filelink.IDGenerator
 // SetTemporalExtractor configures temporal extraction for session-derived observations.
 func (m *Manager) SetTemporalExtractor(te *temporal.Extractor) {
 	m.temporal = te
+}
+
+// OnPostSave registers a hook that runs after each observation extracted from
+// a session summary is persisted.  This is used to trigger fact extraction and
+// embedding enqueue — the same post-processing that the main save pipeline
+// performs — so that session-derived observations have equivalent quality.
+func (m *Manager) OnPostSave(hook PostSaveHook) {
+	m.postSaveHooks = append(m.postSaveHooks, hook)
 }
 
 // StartResult holds the result of starting a session.
@@ -158,6 +171,12 @@ Output observations (one per line, pipe-separated):`, summary)
 			// Best-effort temporal extraction — do not block on failure.
 			if m.temporal != nil {
 				_, _ = m.temporal.Extract(ctx, id, obs.content)
+			}
+			// Run post-save hooks (fact extraction, embedding enqueue, etc.)
+			// so session-derived observations get equivalent quality to
+			// observations saved through the main pipeline.
+			for _, hook := range m.postSaveHooks {
+				hook(ctx, id, obs.title, obs.content, namespace)
 			}
 		}
 	}
