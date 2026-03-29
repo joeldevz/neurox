@@ -43,7 +43,7 @@ import (
 	"github.com/joeldevz/neurox/internal/updatecheck"
 )
 
-var version = "0.5.1"
+var version = "0.5.2"
 
 const (
 	defaultHTTPPort = 7438
@@ -349,7 +349,7 @@ func runRecall(ctx context.Context, database *sql.DB, cfg config.Config) {
 	}
 	query := fs.Arg(0)
 
-	embedder := embed.AutoDetect(ctx, embed.OllamaConfig{URL: cfg.Embeddings.OllamaURL, Model: cfg.Embeddings.OllamaModel}, embed.RemoteConfig{
+	embedder := embed.AutoDetect(ctx, cfg.Embeddings.Provider, embed.OllamaConfig{URL: cfg.Embeddings.OllamaURL, Model: cfg.Embeddings.OllamaModel}, embed.RemoteConfig{
 		URL: cfg.Embeddings.RemoteURL, APIKey: cfg.Embeddings.RemoteKey,
 		Model: cfg.Embeddings.RemoteModel, Dimensions: cfg.Embeddings.Dimensions,
 	})
@@ -397,7 +397,7 @@ func runContext(ctx context.Context, database *sql.DB, cfg config.Config) {
 	limit := fs.Int("limit", 20, "Max results")
 	fs.Parse(os.Args[2:])
 
-	embedder := embed.AutoDetect(ctx, embed.OllamaConfig{URL: cfg.Embeddings.OllamaURL, Model: cfg.Embeddings.OllamaModel}, embed.RemoteConfig{
+	embedder := embed.AutoDetect(ctx, cfg.Embeddings.Provider, embed.OllamaConfig{URL: cfg.Embeddings.OllamaURL, Model: cfg.Embeddings.OllamaModel}, embed.RemoteConfig{
 		URL: cfg.Embeddings.RemoteURL, APIKey: cfg.Embeddings.RemoteKey,
 		Model: cfg.Embeddings.RemoteModel, Dimensions: cfg.Embeddings.Dimensions,
 	})
@@ -946,7 +946,7 @@ func dryRunLabel(dryRun bool) string {
 }
 
 func runReembed(ctx context.Context, database *sql.DB, cfg config.Config) {
-	embedder := embed.AutoDetect(ctx, embed.OllamaConfig{URL: cfg.Embeddings.OllamaURL, Model: cfg.Embeddings.OllamaModel}, embed.RemoteConfig{
+	embedder := embed.AutoDetect(ctx, cfg.Embeddings.Provider, embed.OllamaConfig{URL: cfg.Embeddings.OllamaURL, Model: cfg.Embeddings.OllamaModel}, embed.RemoteConfig{
 		URL: cfg.Embeddings.RemoteURL, APIKey: cfg.Embeddings.RemoteKey,
 		Model: cfg.Embeddings.RemoteModel, Dimensions: cfg.Embeddings.Dimensions,
 	})
@@ -1330,18 +1330,19 @@ type deps struct {
 }
 
 func initDeps(ctx context.Context, database *sql.DB, cfg config.Config) *deps {
-	embedder := embed.AutoDetect(ctx, embed.OllamaConfig{URL: cfg.Embeddings.OllamaURL, Model: cfg.Embeddings.OllamaModel}, embed.RemoteConfig{
+	embedder := embed.AutoDetect(ctx, cfg.Embeddings.Provider, embed.OllamaConfig{URL: cfg.Embeddings.OllamaURL, Model: cfg.Embeddings.OllamaModel}, embed.RemoteConfig{
 		URL: cfg.Embeddings.RemoteURL, APIKey: cfg.Embeddings.RemoteKey,
 		Model: cfg.Embeddings.RemoteModel, Dimensions: cfg.Embeddings.Dimensions,
 	})
-	llmProvider := llm.AutoDetect(ctx,
+	llmProvider := llm.AutoDetect(ctx, cfg.LLM.Provider,
 		llm.OllamaConfig{URL: cfg.LLM.OllamaURL, Model: cfg.LLM.OllamaModel},
 		llm.RemoteConfig{URL: cfg.LLM.RemoteURL, APIKey: cfg.LLM.RemoteAPIKey, Model: cfg.LLM.RemoteModel},
 	)
 	gate := llm.NewGate(llmProvider, llm.GateMode(cfg.LLM.GateMode))
 
 	// Build curator provider when configured; used for reflections and curation.
-	var curatorProvider llm.Provider
+	// Default to Disabled{} (not nil) so IsAvailable checks work correctly.
+	curatorProvider := llm.Provider(llm.Disabled{})
 	if cfg.Curator.Provider == "remote" && cfg.Curator.RemoteURL != "" && cfg.Curator.RemoteModel != "" {
 		curatorProvider = llm.NewRemoteWithTimeout(llm.RemoteConfig{
 			URL:    cfg.Curator.RemoteURL,
@@ -1383,7 +1384,7 @@ func initDeps(ctx context.Context, database *sql.DB, cfg config.Config) *deps {
 	// Wire post-save hooks on session manager so observations extracted
 	// from session summaries get fact extraction + embedding enqueue —
 	// the same post-processing that the main save pipeline performs.
-	if factExtractor != nil {
+	if llm.IsAvailable(llmProvider) {
 		fe := factExtractor
 		sessionMgr.OnPostSave(func(_ context.Context, id, title, content, namespace string) {
 			go fe.ExtractAndSave(context.Background(), id, title, content, namespace)
@@ -1439,11 +1440,11 @@ func initDeps(ctx context.Context, database *sql.DB, cfg config.Config) *deps {
 // initDepsSession creates deps for session CLI commands: SessionManager + ProactiveEngine.
 // It does not start background workers (consolidation pipeline, embed queue).
 func initDepsSession(ctx context.Context, database *sql.DB, cfg config.Config) *deps {
-	embedder := embed.AutoDetect(ctx, embed.OllamaConfig{URL: cfg.Embeddings.OllamaURL, Model: cfg.Embeddings.OllamaModel}, embed.RemoteConfig{
+	embedder := embed.AutoDetect(ctx, cfg.Embeddings.Provider, embed.OllamaConfig{URL: cfg.Embeddings.OllamaURL, Model: cfg.Embeddings.OllamaModel}, embed.RemoteConfig{
 		URL: cfg.Embeddings.RemoteURL, APIKey: cfg.Embeddings.RemoteKey,
 		Model: cfg.Embeddings.RemoteModel, Dimensions: cfg.Embeddings.Dimensions,
 	})
-	llmProvider := llm.AutoDetect(ctx,
+	llmProvider := llm.AutoDetect(ctx, cfg.LLM.Provider,
 		llm.OllamaConfig{URL: cfg.LLM.OllamaURL, Model: cfg.LLM.OllamaModel},
 		llm.RemoteConfig{URL: cfg.LLM.RemoteURL, APIKey: cfg.LLM.RemoteAPIKey, Model: cfg.LLM.RemoteModel},
 	)
@@ -1463,7 +1464,7 @@ func initDepsSession(ctx context.Context, database *sql.DB, cfg config.Config) *
 	// Wire post-save hooks for session-derived observations (fact extraction).
 	// No embed queue in session CLI mode — embedding happens asynchronously
 	// when a full MCP/HTTP server runs.
-	if factExtractor != nil {
+	if llm.IsAvailable(llmProvider) {
 		fe := factExtractor
 		sessionMgr.OnPostSave(func(_ context.Context, id, title, content, namespace string) {
 			go fe.ExtractAndSave(context.Background(), id, title, content, namespace)
@@ -1481,11 +1482,11 @@ func initDepsSession(ctx context.Context, database *sql.DB, cfg config.Config) *
 
 // initDepsLight creates minimal deps for CLI commands that don't need background workers.
 func initDepsLight(ctx context.Context, database *sql.DB, cfg config.Config) *deps {
-	embedder := embed.AutoDetect(ctx, embed.OllamaConfig{URL: cfg.Embeddings.OllamaURL, Model: cfg.Embeddings.OllamaModel}, embed.RemoteConfig{
+	embedder := embed.AutoDetect(ctx, cfg.Embeddings.Provider, embed.OllamaConfig{URL: cfg.Embeddings.OllamaURL, Model: cfg.Embeddings.OllamaModel}, embed.RemoteConfig{
 		URL: cfg.Embeddings.RemoteURL, APIKey: cfg.Embeddings.RemoteKey,
 		Model: cfg.Embeddings.RemoteModel, Dimensions: cfg.Embeddings.Dimensions,
 	})
-	llmProvider := llm.AutoDetect(ctx,
+	llmProvider := llm.AutoDetect(ctx, cfg.LLM.Provider,
 		llm.OllamaConfig{URL: cfg.LLM.OllamaURL, Model: cfg.LLM.OllamaModel},
 		llm.RemoteConfig{URL: cfg.LLM.RemoteURL, APIKey: cfg.LLM.RemoteAPIKey, Model: cfg.LLM.RemoteModel},
 	)
