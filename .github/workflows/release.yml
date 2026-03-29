@@ -119,3 +119,77 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: dist/*.zip
+
+  update-homebrew:
+    needs: [release-linux, release-darwin]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Update Homebrew formula
+        env:
+          GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+
+          # Download release tarballs and compute sha256
+          declare -A SHAS
+          for PLATFORM in darwin_arm64 darwin_amd64 linux_amd64 linux_arm64; do
+            URL="https://github.com/joeldevz/neurox/releases/download/v${VERSION}/neurox_${VERSION}_${PLATFORM}.tar.gz"
+            SHA=$(curl -sL "$URL" | sha256sum | cut -d' ' -f1)
+            SHAS[$PLATFORM]="$SHA"
+          done
+
+          # Clone the tap repo
+          git clone https://x-access-token:${GH_TOKEN}@github.com/joeldevz/homebrew-tap.git tap
+          cd tap
+
+          # Generate updated formula
+          cat > Formula/neurox.rb << RUBY
+          class Neurox < Formula
+            desc "Persistent memory for AI coding agents — brain-inspired, local-first"
+            homepage "https://github.com/joeldevz/neurox"
+            version "${VERSION}"
+            license "BSL-1.1"
+
+            on_macos do
+              if Hardware::CPU.arm?
+                url "https://github.com/joeldevz/neurox/releases/download/v${VERSION}/neurox_${VERSION}_darwin_arm64.tar.gz"
+                sha256 "${SHAS[darwin_arm64]}"
+              else
+                url "https://github.com/joeldevz/neurox/releases/download/v${VERSION}/neurox_${VERSION}_darwin_amd64.tar.gz"
+                sha256 "${SHAS[darwin_amd64]}"
+              end
+            end
+
+            on_linux do
+              if Hardware::CPU.arm?
+                url "https://github.com/joeldevz/neurox/releases/download/v${VERSION}/neurox_${VERSION}_linux_arm64.tar.gz"
+                sha256 "${SHAS[linux_arm64]}"
+              else
+                url "https://github.com/joeldevz/neurox/releases/download/v${VERSION}/neurox_${VERSION}_linux_amd64.tar.gz"
+                sha256 "${SHAS[linux_amd64]}"
+              end
+            end
+
+            def install
+              binary = Dir["neurox_*"].first
+              if binary
+                bin.install binary => "neurox"
+              else
+                bin.install "neurox"
+              end
+            end
+
+            test do
+              assert_match "neurox v#{version}", shell_output("#{bin}/neurox version")
+            end
+          end
+          RUBY
+
+          # Remove leading whitespace from heredoc
+          sed -i 's/^          //' Formula/neurox.rb
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Formula/neurox.rb
+          git commit -m "chore: bump neurox to v${VERSION}" || exit 0
+          git push

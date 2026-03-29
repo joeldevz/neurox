@@ -22,7 +22,7 @@ Tu agente de IA olvida todo entre sesiones. Cada conversacion empieza desde cero
 Neurox le da a tu agente memoria persistente y estructurada.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/joeldevz/neurox/main/install.sh | bash
+brew install joeldevz/tap/neurox           # macOS / Linux
 neurox setup claude-code    # o: opencode, cursor, vscode, antigravity, claude-desktop
 ```
 
@@ -62,13 +62,16 @@ Agente: "Decidimos usar SQLite en vez de PostgreSQL para deploy single-file"
 ### Instalar
 
 ```bash
-# macOS / Linux
+# Homebrew (macOS / Linux)
+brew install joeldevz/tap/neurox
+
+# Script de instalación (macOS / Linux)
 curl -fsSL https://raw.githubusercontent.com/joeldevz/neurox/main/install.sh | bash
 
-# Windows
+# Windows (PowerShell)
 irm https://raw.githubusercontent.com/joeldevz/neurox/main/install.ps1 | iex
 
-# Compilar desde source (requiere compilador C — driver CGO SQLite para rendimiento nativo FTS5)
+# Compilar desde fuente (requiere compilador C — driver CGO SQLite para rendimiento nativo FTS5)
 CGO_ENABLED=1 go build -tags sqlite_fts5 -o neurox .
 ```
 
@@ -240,6 +243,24 @@ Inputs y parametros completos: [docs/reference.md](docs/reference.md#mcp-tool-in
 - **Embeddings** — Ollama o cualquier API compatible OpenAI (opcional)
 - **LLM** — Ollama o compatible OpenAI (opcional)
 - **IDs** — ULID (monotonico, sorteable) via [oklog/ulid](https://github.com/oklog/ulid)
+
+## Soporte de Plataformas
+
+| Plataforma | Arquitectura | Binario | Homebrew | Compilar desde fuente |
+|---|:---:|:---:|:---:|:---:|
+| **macOS** | Apple Silicon (arm64) | ✓ | ✓ | ✓ |
+| **macOS** | Intel (amd64) | ✓ | ✓ | ✓ |
+| **Linux** | x86_64 (amd64) | ✓ | ✓ | ✓ |
+| **Linux** | ARM64 (arm64) | ✓ | ✓ | ✓ |
+| **Windows** | x86_64 (amd64) | ✓ | — | ✓ |
+| **Windows** | ARM64 | — | — | sin probar |
+| **FreeBSD** | cualquiera | — | — | sin probar |
+
+**Binarios precompilados** se adjuntan a cada [Release en GitHub](https://github.com/joeldevz/neurox/releases). Sin Go, sin compilador C, sin dependencias — descargar y ejecutar.
+
+**Homebrew** instala binarios precompilados via el [tap joeldevz/tap](https://github.com/joeldevz/homebrew-tap).
+
+**Compilar desde fuente** requiere Go 1.26+ y un compilador C (`gcc`, `clang`, o MinGW en Windows) con `CGO_ENABLED=1 -tags sqlite_fts5`.
 
 ## Licencia
 

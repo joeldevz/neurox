@@ -22,7 +22,7 @@ Your AI coding agent forgets everything between sessions. Every conversation sta
 Neurox gives your agent persistent, structured memory.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/joeldevz/neurox/main/install.sh | bash
+brew install joeldevz/tap/neurox           # macOS / Linux
 neurox setup claude-code    # or: opencode, cursor, vscode, antigravity, claude-desktop
 ```
 
@@ -62,10 +62,13 @@ Agent: "We decided to use SQLite instead of PostgreSQL for single-file deploymen
 ### Install
 
 ```bash
-# macOS / Linux
+# Homebrew (macOS / Linux)
+brew install joeldevz/tap/neurox
+
+# Script install (macOS / Linux)
 curl -fsSL https://raw.githubusercontent.com/joeldevz/neurox/main/install.sh | bash
 
-# Windows
+# Windows (PowerShell)
 irm https://raw.githubusercontent.com/joeldevz/neurox/main/install.ps1 | iex
 
 # Build from source (requires C compiler — CGO SQLite driver for native FTS5 performance)
@@ -240,6 +243,24 @@ Full tool inputs and parameters: [docs/reference.md](docs/reference.md#mcp-tool-
 - **Embeddings** — Ollama or any OpenAI-compatible API (optional)
 - **LLM** — Ollama or OpenAI-compatible (optional)
 - **IDs** — ULID (monotonic, sortable) via [oklog/ulid](https://github.com/oklog/ulid)
+
+## Platform Support
+
+| Platform | Architecture | Binary | Homebrew | Build from source |
+|---|:---:|:---:|:---:|:---:|
+| **macOS** | Apple Silicon (arm64) | ✓ | ✓ | ✓ |
+| **macOS** | Intel (amd64) | ✓ | ✓ | ✓ |
+| **Linux** | x86_64 (amd64) | ✓ | ✓ | ✓ |
+| **Linux** | ARM64 (arm64) | ✓ | ✓ | ✓ |
+| **Windows** | x86_64 (amd64) | ✓ | — | ✓ |
+| **Windows** | ARM64 | — | — | untested |
+| **FreeBSD** | any | — | — | untested |
+
+**Prebuilt binaries** are attached to every [GitHub Release](https://github.com/joeldevz/neurox/releases). No Go, no C compiler, no dependencies — download and run.
+
+**Homebrew** installs prebuilt binaries via the [joeldevz/tap](https://github.com/joeldevz/homebrew-tap).
+
+**Build from source** requires Go 1.26+ and a C compiler (`gcc`, `clang`, or MinGW on Windows) with `CGO_ENABLED=1 -tags sqlite_fts5`.
 
 ## License
 
