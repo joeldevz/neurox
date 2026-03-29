@@ -24,14 +24,15 @@ type Dimension struct {
 
 // Report is the full health-check output.
 type Report struct {
-	Score        int                    `json:"score"`
-	Grade        string                 `json:"grade"`
-	StaticScore  int                    `json:"static_score"`
-	DynamicScore int                    `json:"dynamic_score"`
-	Dimensions   []Dimension            `json:"dimensions"`
-	ToolUsage    *telemetry.UsageReport `json:"tool_usage,omitempty"`
-	Summary      string                 `json:"summary"`
-	TopActions   []string               `json:"top_actions"`
+	Score           int                    `json:"score"`
+	Grade           string                 `json:"grade"`
+	StaticScore     int                    `json:"static_score"`
+	DynamicScore    int                    `json:"dynamic_score"`
+	Dimensions      []Dimension            `json:"dimensions"`
+	ToolUsage       *telemetry.UsageReport `json:"tool_usage,omitempty"`
+	Summary         string                 `json:"summary"`
+	TopActions      []string               `json:"top_actions"`
+	UpdateAvailable string                 `json:"update_available,omitempty"`
 }
 
 // Deps holds dependencies for a health check.

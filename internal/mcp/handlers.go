@@ -26,6 +26,7 @@ import (
 	"github.com/joeldevz/neurox/internal/savepipeline"
 	"github.com/joeldevz/neurox/internal/session"
 	"github.com/joeldevz/neurox/internal/telemetry"
+	"github.com/joeldevz/neurox/internal/updatecheck"
 )
 
 type Deps struct {
@@ -46,6 +47,8 @@ type Deps struct {
 	EmbedQueue       *embed.Queue
 	Embedder         embed.Provider
 	Tracker          *telemetry.Tracker
+	Version          string
+	ConfigDir        string
 }
 
 func (d *Deps) handleSave(ctx context.Context, req mcp.CallToolRequest) (result *mcp.CallToolResult, err error) {
@@ -488,7 +491,7 @@ func (d *Deps) handleStatus(ctx context.Context, req mcp.CallToolRequest) (resul
 		gateMode = string(d.LLMGate.Mode())
 	}
 
-	return toolResultJSON(statusResponse{
+	resp := statusResponse{
 		Total:             total,
 		Buffer:            buffer,
 		Working:           working,
@@ -504,7 +507,12 @@ func (d *Deps) handleStatus(ctx context.Context, req mcp.CallToolRequest) (resul
 		EmbeddingsTotal:   embeddingsTotal,
 		EmbeddingsPending: embeddingsPending,
 		EmbedProvider:     embedProvider,
-	})
+	}
+	if updateAvailable := d.checkUpdateAvailable(ctx); updateAvailable != "" {
+		resp.UpdateAvailable = updateAvailable
+	}
+
+	return toolResultJSON(resp)
 }
 
 func (d *Deps) handleSessionStart(ctx context.Context, req mcp.CallToolRequest) (result *mcp.CallToolResult, err error) {
@@ -869,7 +877,24 @@ func (d *Deps) handleHealthCheck(ctx context.Context, req mcp.CallToolRequest) (
 		hdeps.LLMProviderName = d.LLMProvider.Name()
 	}
 	report := health.Check(ctx, hdeps)
+	if updateAvailable := d.checkUpdateAvailable(ctx); updateAvailable != "" {
+		report.UpdateAvailable = updateAvailable
+		report.TopActions = append([]string{fmt.Sprintf("Update Neurox to %s for the latest fixes and features.", updateAvailable)}, report.TopActions...)
+	}
 	return toolResultJSON(report)
+}
+
+func (d *Deps) checkUpdateAvailable(ctx context.Context) string {
+	if strings.TrimSpace(d.Version) == "" || strings.TrimSpace(d.ConfigDir) == "" {
+		return ""
+	}
+
+	latestVersion, isNewer, err := updatecheck.Check(ctx, d.Version, d.ConfigDir)
+	if err != nil || !isNewer {
+		return ""
+	}
+
+	return latestVersion
 }
 
 func (d *Deps) handleBackup(ctx context.Context, req mcp.CallToolRequest) (result *mcp.CallToolResult, err error) {
@@ -1036,4 +1061,5 @@ type statusResponse struct {
 	EmbeddingsTotal   int    `json:"embeddings_total"`
 	EmbeddingsPending int    `json:"embeddings_pending"`
 	EmbedProvider     string `json:"embedding_provider"`
+	UpdateAvailable   string `json:"update_available,omitempty"`
 }

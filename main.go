@@ -40,6 +40,7 @@ import (
 	"github.com/joeldevz/neurox/internal/session"
 	"github.com/joeldevz/neurox/internal/telemetry"
 	"github.com/joeldevz/neurox/internal/temporal"
+	"github.com/joeldevz/neurox/internal/updatecheck"
 )
 
 var version = "0.5.1"
@@ -1197,6 +1198,8 @@ func runMCP(ctx context.Context, database *sql.DB, cfg config.Config) {
 		EmbedQueue:       d.embedQueue,
 		Embedder:         d.embedder,
 		Tracker:          d.tracker,
+		Version:          version,
+		ConfigDir:        cfg.Meta.ConfigDir,
 	}
 
 	srv := neuroxmcp.NewServer(mcpDeps, version)
@@ -1290,6 +1293,15 @@ func runHTTP(ctx context.Context, database *sql.DB, cfg config.Config) {
 	go func() {
 		<-ctx.Done()
 		srv.Shutdown(context.Background())
+	}()
+
+	go func() {
+		checkCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		defer cancel()
+		latestVersion, isNewer, _ := updatecheck.Check(checkCtx, version, cfg.Meta.ConfigDir)
+		if isNewer {
+			log.Printf("neurox update available: %s — run 'neurox update' to upgrade", latestVersion)
+		}
 	}()
 
 	if err := srv.ListenAndServe(); err != nil {
