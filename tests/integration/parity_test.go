@@ -3,6 +3,7 @@ package integration
 import (
 	"context"
 	"fmt"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -924,10 +925,10 @@ func TestParityContract_CLI_Save_UsesSaveQueue(t *testing.T) {
 	store := observation.NewStore(tdb.DB, nil)
 	queue := observation.NewSaveQueue(store)
 
-	// Track whether the queue was used
-	hookCalled := false
+	// Track whether the queue was used (atomic to avoid data race with worker goroutine)
+	var hookCalled atomic.Bool
 	queue.OnPostSave(func(_ context.Context, saved observation.Observation) {
-		hookCalled = true
+		hookCalled.Store(true)
 	})
 	queue.Start(ctx)
 	defer queue.Stop()
@@ -970,7 +971,7 @@ func TestParityContract_CLI_Save_UsesSaveQueue(t *testing.T) {
 	}
 	time.Sleep(100 * time.Millisecond)
 
-	if !hookCalled {
+	if !hookCalled.Load() {
 		t.Error("PostSave hook was not called — shared pipeline must fire hooks via SaveQueue")
 	}
 
