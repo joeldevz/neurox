@@ -9,21 +9,55 @@ permissions:
   contents: write
 
 jobs:
-  release:
+  release-linux:
     strategy:
       matrix:
-        include:
-          - goos: linux
-            goarch: amd64
-          - goos: linux
-            goarch: arm64
-          - goos: darwin
-            goarch: amd64
-          - goos: darwin
-            goarch: arm64
-          - goos: windows
-            goarch: amd64
+        goarch: [amd64, arm64]
     runs-on: ubuntu-latest
+    env:
+      CGO_ENABLED: "1"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+
+      - name: Install cross-compiler
+        if: matrix.goarch == 'arm64'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu
+
+      - name: Build
+        env:
+          GOOS: linux
+          GOARCH: ${{ matrix.goarch }}
+          CC: ${{ matrix.goarch == 'arm64' && 'aarch64-linux-gnu-gcc' || 'gcc' }}
+        run: |
+          BINARY="neurox_linux_${{ matrix.goarch }}"
+          go build -tags sqlite_fts5 -ldflags "-s -w -X main.version=${GITHUB_REF_NAME#v}" -o "dist/${BINARY}" .
+
+      - name: Package
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          cd dist
+          tar -czf "neurox_${VERSION}_linux_${{ matrix.goarch }}.tar.gz" "neurox_linux_${{ matrix.goarch }}"
+
+      - name: Upload artifacts to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.tar.gz
+
+  release-darwin:
+    strategy:
+      matrix:
+        goarch: [amd64, arm64]
+    runs-on: macos-latest
+    env:
+      CGO_ENABLED: "1"
     steps:
       - uses: actions/checkout@v4
         with:
@@ -35,28 +69,53 @@ jobs:
 
       - name: Build
         env:
-          GOOS: ${{ matrix.goos }}
+          GOOS: darwin
           GOARCH: ${{ matrix.goarch }}
         run: |
-          BINARY="neurox_${{ matrix.goos }}_${{ matrix.goarch }}"
-          if [ "${{ matrix.goos }}" = "windows" ]; then
-            BINARY="${BINARY}.exe"
-          fi
-          go build -ldflags "-s -w -X main.version=${GITHUB_REF_NAME#v}" -o "dist/${BINARY}" .
+          BINARY="neurox_darwin_${{ matrix.goarch }}"
+          go build -tags sqlite_fts5 -ldflags "-s -w -X main.version=${GITHUB_REF_NAME#v}" -o "dist/${BINARY}" .
 
       - name: Package
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
           cd dist
-          if [ "${{ matrix.goos }}" = "windows" ]; then
-            zip "neurox_${VERSION}_${{ matrix.goos }}_${{ matrix.goarch }}.zip" "neurox_${{ matrix.goos }}_${{ matrix.goarch }}.exe"
-          else
-            tar -czf "neurox_${VERSION}_${{ matrix.goos }}_${{ matrix.goarch }}.tar.gz" "neurox_${{ matrix.goos }}_${{ matrix.goarch }}"
-          fi
+          tar -czf "neurox_${VERSION}_darwin_${{ matrix.goarch }}.tar.gz" "neurox_darwin_${{ matrix.goarch }}"
 
       - name: Upload artifacts to release
         uses: softprops/action-gh-release@v2
         with:
-          files: |
-            dist/*.tar.gz
-            dist/*.zip
+          files: dist/*.tar.gz
+
+  release-windows:
+    runs-on: windows-latest
+    env:
+      CGO_ENABLED: "1"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+
+      - name: Build
+        env:
+          GOOS: windows
+          GOARCH: amd64
+        shell: bash
+        run: |
+          BINARY="neurox_windows_amd64.exe"
+          go build -tags sqlite_fts5 -ldflags "-s -w -X main.version=${GITHUB_REF_NAME#v}" -o "dist/${BINARY}" .
+
+      - name: Package
+        shell: bash
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          cd dist
+          7z a "neurox_${VERSION}_windows_amd64.zip" "neurox_windows_amd64.exe"
+
+      - name: Upload artifacts to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.zip

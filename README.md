@@ -4,7 +4,7 @@
     <strong>Persistent memory for AI coding agents</strong>
   </p>
   <p align="center">
-    One Go binary &bull; One SQLite file &bull; Zero external dependencies
+    One Go binary &bull; One SQLite file &bull; Native performance
   </p>
   <p align="center">
     <a href="#quick-start">Quick Start</a> &bull;
@@ -26,7 +26,7 @@ curl -fsSL https://raw.githubusercontent.com/joeldevz/neurox/main/install.sh | b
 neurox setup claude-code    # or: opencode, cursor, vscode, antigravity, claude-desktop
 ```
 
-That's it. No Node.js, no Python, no Docker, no C compiler. Pure Go binary, single SQLite file.
+That's it. No Node.js, no Python, no Docker. One binary, one SQLite file, zero runtime dependencies.
 
 ---
 
@@ -68,8 +68,8 @@ curl -fsSL https://raw.githubusercontent.com/joeldevz/neurox/main/install.sh | b
 # Windows
 irm https://raw.githubusercontent.com/joeldevz/neurox/main/install.ps1 | iex
 
-# Build from source (no C compiler needed — pure Go SQLite driver)
-go build -o neurox .
+# Build from source (requires C compiler — CGO SQLite driver for native FTS5 performance)
+CGO_ENABLED=1 go build -tags sqlite_fts5 -o neurox .
 ```
 
 ### Configure your agent
@@ -136,7 +136,7 @@ Neurox works without any external services. Features activate based on what's av
 | + LLM (Ollama or remote) | Quality gate, fact extraction, reflection |
 | + Curator LLM (remote) | Deep curation with importance recalibration |
 
-The base configuration — zero dependencies — already delivers [98% recall](#benchmark-results).
+The base configuration — zero runtime dependencies — already delivers [98% recall](#benchmark-results).
 
 ### Consolidation
 
@@ -235,7 +235,7 @@ Full tool inputs and parameters: [docs/reference.md](docs/reference.md#mcp-tool-
 ## Technology
 
 - **Go 1.26+** — single binary, goroutines for background consolidation
-- **SQLite 3** — WAL mode, FTS5 full-text search, via [ncruces/go-sqlite3](https://github.com/ncruces/go-sqlite3) (pure Go, no CGO)
+- **SQLite 3** — WAL mode, FTS5 full-text search, via [mattn/go-sqlite3](https://github.com/mattn/go-sqlite3) (CGO, native SQLite performance)
 - **MCP** — Model Context Protocol via [mark3labs/mcp-go](https://github.com/mark3labs/mcp-go)
 - **Embeddings** — Ollama or any OpenAI-compatible API (optional)
 - **LLM** — Ollama or OpenAI-compatible (optional)

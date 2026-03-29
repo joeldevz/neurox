@@ -4,7 +4,7 @@
 
 Neurox is a brain-inspired memory engine for AI coding agents, written in Go. It implements a three-layer memory model (Buffer → Working → Core) with hybrid search (FTS5 + semantic), Ebbinghaus decay curves, and consolidation pipelines.
 
-**Stack**: Go, SQLite 3 (WAL mode, FTS5 via ncruces/go-sqlite3 — pure Go, no CGO), ULID (oklog/ulid), YAML config (gopkg.in/yaml.v3).
+**Stack**: Go, SQLite 3 (WAL mode, FTS5 via mattn/go-sqlite3 — CGO, native FTS5 performance), ULID (oklog/ulid), YAML config (gopkg.in/yaml.v3).
 
 ## Agent Roles
 

@@ -8,7 +8,6 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"testing"
-	"time"
 
 	"github.com/joeldevz/neurox/internal/consolidate"
 	"github.com/joeldevz/neurox/internal/db"
@@ -288,23 +287,37 @@ func TestActivityEndpoint(t *testing.T) {
 func TestBrowseSortParameter(t *testing.T) {
 	s := newTestServer(t)
 
-	// Create observations in sequence with delays to ensure different timestamps
-	// Note: API doesn't accept importance, all get default 0.5, so sort falls back to created_at DESC
-	// SQLite datetime('now') has second precision, so we need 1+ second delays
-	doJSON(t, s, "POST", "/api/v1/observations", map[string]any{
-		"title":   "First observation",
-		"content": "Content A",
-	})
-	time.Sleep(1100 * time.Millisecond)
-	doJSON(t, s, "POST", "/api/v1/observations", map[string]any{
-		"title":   "Second observation",
-		"content": "Content B",
-	})
-	time.Sleep(1100 * time.Millisecond)
-	doJSON(t, s, "POST", "/api/v1/observations", map[string]any{
-		"title":   "Third observation",
-		"content": "Content C",
-	})
+	// Create observations and then set deterministic timestamps via SQL UPDATE
+	// to avoid flakiness from time.Sleep + SQLite second-precision datetime.
+	type obs struct {
+		title     string
+		content   string
+		createdAt string // explicit timestamp to assign after creation
+	}
+	observations := []obs{
+		{"First observation", "Content A", "2026-01-01 00:00:01"},
+		{"Second observation", "Content B", "2026-01-01 00:00:02"},
+		{"Third observation", "Content C", "2026-01-01 00:00:03"},
+	}
+
+	for _, o := range observations {
+		w := doJSON(t, s, "POST", "/api/v1/observations", map[string]any{
+			"title":   o.title,
+			"content": o.content,
+		})
+		if w.Code != http.StatusCreated {
+			t.Fatalf("save %q: expected 201, got %d: %s", o.title, w.Code, w.Body.String())
+		}
+		var saved map[string]any
+		decodeResp(t, w, &saved)
+		id := saved["id"].(string)
+
+		// Set a deterministic created_at so sort order is fully predictable.
+		_, err := s.deps.DB.Exec("UPDATE observations SET created_at = ? WHERE id = ?", o.createdAt, id)
+		if err != nil {
+			t.Fatalf("update created_at for %q: %v", o.title, err)
+		}
+	}
 
 	// Test default sort (importance DESC, created_at DESC)
 	// Since all have same importance (0.5), secondary sort by created_at DESC applies
