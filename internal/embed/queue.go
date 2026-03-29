@@ -173,8 +173,54 @@ func (q *Queue) flush(ctx context.Context, ids []string) {
 }
 
 // AutoDetect tries Ollama first, then Remote, then returns Disabled.
-func AutoDetect(ctx context.Context, ollamaCfg OllamaConfig, remoteCfg ...RemoteConfig) Provider {
-	// Try Ollama first
+// If provider is "none" or "disabled", returns Disabled immediately without attempting any connections.
+func AutoDetect(ctx context.Context, provider string, ollamaCfg OllamaConfig, remoteCfg ...RemoteConfig) Provider {
+	switch strings.ToLower(strings.TrimSpace(provider)) {
+	case "none", "disabled":
+		log.Printf("embedding provider explicitly disabled")
+		return Disabled{}
+	case "remote":
+		if len(remoteCfg) > 0 && remoteCfg[0].URL != "" && remoteCfg[0].Model != "" {
+			remote := NewRemote(remoteCfg[0])
+			testCtx, testCancel := context.WithTimeout(ctx, 10*time.Second)
+			defer testCancel()
+			if _, testErr := remote.Embed(testCtx, "test"); testErr == nil {
+				log.Printf("using embedding provider: %s", remote.Name())
+				return remote
+			}
+			log.Printf("remote embedding provider configured but test failed, falling back to disabled")
+		} else {
+			log.Printf("remote embedding provider configured but url/model missing, falling back to disabled")
+		}
+		return Disabled{}
+	case "ollama":
+		if ollamaCfg.Model == "" {
+			detected := pickBestEmbedModel(ctx, ollamaCfg.URL)
+			if detected == "" {
+				log.Printf("no embedding model found; run: ollama pull qwen3-embedding:0.6b")
+				return Disabled{}
+			}
+			ollamaCfg.Model = detected
+		}
+		ollama := NewOllama(ollamaCfg)
+		pingCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+		defer cancel()
+		if err := ollama.Ping(pingCtx); err == nil {
+			testCtx, testCancel := context.WithTimeout(ctx, 10*time.Second)
+			defer testCancel()
+			if _, testErr := ollama.Embed(testCtx, "test"); testErr == nil {
+				log.Printf("using embedding provider: %s", ollama.Name())
+				return ollama
+			} else {
+				log.Printf("ollama embed test failed: %v", testErr)
+			}
+		} else {
+			log.Printf("ollama not available for embeddings: configured but unreachable")
+		}
+		return Disabled{}
+	}
+
+	// Auto-detect mode: try Ollama first
 	// If no model is configured, auto-detect the best available embedding model
 	if ollamaCfg.Model == "" {
 		detected := pickBestEmbedModel(ctx, ollamaCfg.URL)

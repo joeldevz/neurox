@@ -20,8 +20,11 @@ func (Disabled) Complete(_ context.Context, _ string) (string, error) {
 
 func (Disabled) Name() string { return "disabled" }
 
-// IsAvailable returns true if the provider is not Disabled.
+// IsAvailable returns true if the provider is not nil and not Disabled.
 func IsAvailable(p Provider) bool {
+	if p == nil {
+		return false
+	}
 	_, disabled := p.(Disabled)
 	return !disabled
 }

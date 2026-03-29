@@ -46,6 +46,9 @@ func NewDetector(db *sql.DB, embedder embed.Provider, llmProvider llm.Provider, 
 	if maxSim == 0 {
 		maxSim = defaultMaxContradictionSimilarity
 	}
+	if !llm.IsAvailable(llmProvider) {
+		log.Printf("contradiction detector: llm not available, contradictions will be flagged as questions for human review")
+	}
 	return &Detector{
 		db:        db,
 		embedder:  embedder,

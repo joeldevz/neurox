@@ -152,7 +152,7 @@ func main() {
 	// Embedding provider (optional)
 	var embedder embed.Provider = embed.Disabled{}
 	if *useEmbed {
-		embedder = embed.AutoDetect(ctx, embed.OllamaConfig{})
+		embedder = embed.AutoDetect(ctx, "", embed.OllamaConfig{})
 		if embed.IsAvailable(embedder) {
 			log.Printf("Embeddings enabled: %s", embedder.Name())
 		} else {
