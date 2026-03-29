@@ -9,9 +9,27 @@ description: Gives AI agents persistent, brain-inspired memory across sessions �
 
 Neurox is a brain-inspired persistent memory engine for AI coding agents. It stores observations across three memory layers (Buffer → Working → Core), applies Ebbinghaus decay curves to model forgetting, and retrieves relevant context using hybrid FTS5 + semantic + temporal scoring.
 
-**You have access to 13 Neurox MCP tools. Use them proactively — do not wait for the user to ask.**
+**You have access to 15 Neurox MCP tools. Use them proactively — do not wait for the user to ask.**
 
 Neurox remembers decisions, bug fixes, architecture patterns, user preferences, and project discoveries across sessions. Your job is to actively build and use this memory to give the user a better experience every time.
+
+---
+
+## Three Reflexes
+
+These three saves fire automatically, without confirmation. They are the minimum expected behavior.
+
+**Reflex A — User fact or correction**
+The user corrects your approach, states a preference, or shares a personal fact.
+→ `save(observation_type: "preference", kind: "procedural", retention: "durable")` — no namespace.
+
+**Reflex B — Architectural decision**
+Any design, architecture, or technology decision is made during the session.
+→ `save(observation_type: "decision", kind: "semantic", namespace: "<project>", retention: "durable")`
+
+**Reflex C — Bug fixed or pattern found**
+A bug is resolved → `save(observation_type: "bugfix", kind: "procedural")`.
+A codebase convention is confirmed → `save(observation_type: "pattern", kind: "semantic")`.
 
 ---
 
@@ -33,7 +51,7 @@ Neurox remembers decisions, bug fixes, architecture patterns, user preferences, 
 
 ---
 
-## The 13 MCP Tools — When and How
+## The 15 MCP Tools — When and How
 
 ### `session_start`
 
@@ -155,13 +173,17 @@ Call this to check the health of the Neurox brain — layer counts, staleness, f
 status()
 ```
 
+If the response includes `update_available`, inform the user that a newer version of Neurox is ready to install.
+
 ### `health_check`
 
 Call this to get the brain power score (0-100%) with per-dimension breakdown and actionable recommendations.
 
 ```
-health_check()
+health_check(days: 7)
 ```
+
+If the response includes `update_available`, inform the user that a newer version of Neurox is ready to install.
 
 ### `consolidate`
 
@@ -190,6 +212,26 @@ git_hook(
   branch: "feat/jwt-v2"
 )
 ```
+
+### `backup`
+
+Creates a safe, consistent point-in-time backup of the Neurox database using SQLite's online backup API. Works while the server is running.
+
+```
+backup(output: "/home/user/neurox-backup.db")
+```
+
+`output` is optional — defaults to `<db_path>.backup`. Call this before destructive operations (mass invalidations, curation runs, or major refactors).
+
+### `curate`
+
+Deep curation: uses an LLM to review a namespace, delete low-value noise, and recalibrate importance weights. Requires a curator LLM provider to be configured.
+
+```
+curate(namespace: "myproject", dry_run: true)
+```
+
+Always run with `dry_run: true` first to preview what will be removed. Then re-run without it to apply changes.
 
 ---
 
@@ -222,14 +264,11 @@ When in doubt: bugfixes → `procedural`, facts → `semantic`, session events �
 
 ## Namespaces
 
-Use the **project directory name** as the namespace. This keeps memories isolated per project.
+Use the **project directory name** as namespace. For cross-project or user-level preferences, omit it or use `"default"`.
 
 ```
 /home/user/projects/myapp  →  namespace: "myapp"
-/home/user/projects/api    →  namespace: "api"
 ```
-
-For cross-project or user-level preferences (name, communication style, tool preferences), use no namespace (leave it empty or use `"default"`).
 
 ---
 
