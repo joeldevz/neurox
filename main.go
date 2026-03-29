@@ -42,8 +42,9 @@ import (
 	"github.com/joeldevz/neurox/internal/temporal"
 )
 
+var version = "0.5.0"
+
 const (
-	version         = "0.5.0"
 	defaultHTTPPort = 7438
 )
 
