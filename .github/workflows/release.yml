@@ -105,15 +105,14 @@ jobs:
           GOARCH: amd64
         shell: bash
         run: |
-          BINARY="neurox_windows_amd64.exe"
-          go build -tags sqlite_fts5 -ldflags "-s -w -X main.version=${GITHUB_REF_NAME#v}" -o "dist/${BINARY}" .
+          go build -tags sqlite_fts5 -ldflags "-s -w -X main.version=${GITHUB_REF_NAME#v}" -o "dist/neurox.exe" .
 
       - name: Package
         shell: bash
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
           cd dist
-          7z a "neurox_${VERSION}_windows_amd64.zip" "neurox_windows_amd64.exe"
+          7z a "neurox_${VERSION}_windows_amd64.zip" "neurox.exe"
 
       - name: Upload artifacts to release
         uses: softprops/action-gh-release@v2

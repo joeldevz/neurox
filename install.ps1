@@ -55,8 +55,13 @@ try {
 Expand-Archive -Path $ZipPath -DestinationPath $TmpDir -Force
 $ExtractedBin = Join-Path $TmpDir $Binary
 if (-not (Test-Path $ExtractedBin)) {
-    Write-Error "neurox.exe not found in archive."
-    exit 1
+    # Fallback: find any .exe in the archive (e.g. neurox_windows_amd64.exe)
+    $found = Get-ChildItem -Path $TmpDir -Filter "*.exe" -File | Select-Object -First 1
+    if (-not $found) {
+        Write-Error "No executable found in archive."
+        exit 1
+    }
+    $ExtractedBin = $found.FullName
 }
 
 # Install
