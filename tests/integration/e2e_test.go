@@ -376,9 +376,13 @@ pattern | Always use transactions for multi-table updates | What: Wrap related u
 	if err != nil {
 		t.Fatalf("end: %v", err)
 	}
-	if endResult.ObservationsExtracted != 3 {
-		t.Errorf("extracted = %d, want 3", endResult.ObservationsExtracted)
+	// Extraction is async — ObservationsExtracted is -1 to signal background processing
+	if endResult.ObservationsExtracted != -1 {
+		t.Errorf("extracted = %d, want -1 (async)", endResult.ObservationsExtracted)
 	}
+
+	// Wait for background extraction to finish before checking DB
+	mgr.WaitBackground()
 
 	// Verify extracted observations exist
 	var extractedCount int

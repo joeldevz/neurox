@@ -311,6 +311,7 @@ type SessionStartResponse struct {
 type SessionEndResponse struct {
 	SessionID             string `json:"session_id"`
 	ObservationsExtracted int    `json:"observations_extracted"`
+	ObservationsStatus    string `json:"observations_status,omitempty"`
 	Message               string `json:"message"`
 }
 

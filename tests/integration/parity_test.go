@@ -709,10 +709,16 @@ discovery | Performance finding | What: Latency improved 30% with caching.`}
 		t.Fatalf("http end: %v", err)
 	}
 
-	// Both should extract the same number of observations (same LLM mock).
-	if mcpEnd.ObservationsExtracted != httpEnd.ObservationsExtracted {
-		t.Errorf("observations extracted: mcp=%d, http=%d", mcpEnd.ObservationsExtracted, httpEnd.ObservationsExtracted)
+	// Both should signal async extraction.
+	if mcpEnd.ObservationsExtracted != -1 {
+		t.Errorf("mcp observations extracted = %d, want -1 (async)", mcpEnd.ObservationsExtracted)
 	}
+	if httpEnd.ObservationsExtracted != -1 {
+		t.Errorf("http observations extracted = %d, want -1 (async)", httpEnd.ObservationsExtracted)
+	}
+
+	// Wait for background extraction to finish before checking DB.
+	mgr.WaitBackground()
 
 	// Verify sessions were recorded.
 	var sessionCount int
@@ -1292,9 +1298,13 @@ func TestParityContract_CLI_NoSessionLifecycle(t *testing.T) {
 		t.Errorf("session status after end = %q, want %q", status, "completed")
 	}
 
-	// 6. Verify observations were extracted from the summary.
-	if endResult.ObservationsExtracted < 1 {
-		t.Errorf("observations extracted = %d, want >= 1", endResult.ObservationsExtracted)
+	// 6. Extraction is async — wait for background goroutine then verify in DB.
+	mgr.WaitBackground()
+	var extractedCount int
+	tdb.DB.QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM observations WHERE namespace = 'parity-cli-session' AND source = 'consolidator' AND deleted_at IS NULL").Scan(&extractedCount)
+	if extractedCount < 1 {
+		t.Errorf("observations extracted in DB = %d, want >= 1", extractedCount)
 	}
 }
 

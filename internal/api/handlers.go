@@ -524,9 +524,13 @@ func (s *Server) handleSessionEnd(w http.ResponseWriter, r *http.Request) {
 		}
 
 		resp := map[string]any{
-			"session_id":             endResult.SessionID,
-			"observations_extracted": endResult.ObservationsExtracted,
-			"message":                "session completed",
+			"session_id": endResult.SessionID,
+			"message":    "session completed",
+		}
+		if endResult.ObservationsExtracted >= 0 {
+			resp["observations_extracted"] = endResult.ObservationsExtracted
+		} else {
+			resp["observations_status"] = "extracting in background"
 		}
 		if endResult.Warning != "" {
 			resp["warning"] = endResult.Warning

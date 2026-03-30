@@ -3,6 +3,7 @@ package session
 import (
 	"context"
 	"path/filepath"
+	"sync"
 	"testing"
 
 	"github.com/joeldevz/neurox/internal/db"
@@ -119,13 +120,17 @@ discovery | Redis caching improves latency | What: Adding Redis cache reduced AP
 	if err != nil {
 		t.Fatalf("end: %v", err)
 	}
-	if result.ObservationsExtracted != 2 {
-		t.Errorf("extracted = %d, want 2", result.ObservationsExtracted)
+	// Extraction is async — ObservationsExtracted is -1 to signal background processing
+	if result.ObservationsExtracted != -1 {
+		t.Errorf("extracted = %d, want -1 (async)", result.ObservationsExtracted)
 	}
 	// LLM available → no warning
 	if result.Warning != "" {
 		t.Errorf("expected no warning when LLM is available, got %q", result.Warning)
 	}
+
+	// Wait for background extraction to finish before checking DB
+	mgr.WaitBackground()
 
 	// Verify observations were created
 	var count int
@@ -155,12 +160,19 @@ func TestEndSessionWithLLMExtractsTemporalMentions(t *testing.T) {
 
 	ctx := context.Background()
 	start, _ := mgr.Start(ctx, "Test", "", "", "ns")
-	result, err := mgr.End(ctx, start.SessionID, "We migrated to SQLite yesterday and it is currently working.", "test")
+	_, err = mgr.End(ctx, start.SessionID, "We migrated to SQLite yesterday and it is currently working.", "test")
 	if err != nil {
 		t.Fatalf("end: %v", err)
 	}
-	if result.ObservationsExtracted != 1 {
-		t.Fatalf("extracted = %d, want 1", result.ObservationsExtracted)
+
+	// Wait for background extraction to finish before checking DB
+	mgr.WaitBackground()
+
+	// Verify at least one observation was extracted
+	var obsCount int
+	database.QueryRowContext(ctx, "SELECT COUNT(*) FROM observations WHERE namespace = 'ns' AND source = 'consolidator' AND deleted_at IS NULL").Scan(&obsCount)
+	if obsCount < 1 {
+		t.Fatalf("observations in DB = %d, want >= 1", obsCount)
 	}
 
 	// Verify temporal mentions were created for the extracted observation.
@@ -190,12 +202,19 @@ func TestEndSessionWithoutTemporalExtractorStillWorks(t *testing.T) {
 
 	ctx := context.Background()
 	start, _ := mgr.Start(ctx, "Test", "", "", "ns")
-	result, err := mgr.End(ctx, start.SessionID, "We decided on Redis.", "test")
+	_, err = mgr.End(ctx, start.SessionID, "We decided on Redis.", "test")
 	if err != nil {
 		t.Fatalf("end: %v", err)
 	}
-	if result.ObservationsExtracted != 1 {
-		t.Fatalf("extracted = %d, want 1", result.ObservationsExtracted)
+
+	// Wait for background extraction to finish before checking DB
+	mgr.WaitBackground()
+
+	// Verify observation was created
+	var count int
+	database.QueryRowContext(ctx, "SELECT COUNT(*) FROM observations WHERE namespace = 'ns' AND source = 'consolidator' AND deleted_at IS NULL").Scan(&count)
+	if count != 1 {
+		t.Fatalf("observations in DB = %d, want 1", count)
 	}
 }
 
@@ -214,22 +233,28 @@ discovery | Redis caching | What: Adding Redis cache reduced latency. Where: API
 	mgr := NewManager(database, mock, idGen)
 
 	// Register post-save hooks to track calls.
+	// Use a mutex since hooks run in a background goroutine.
+	var mu sync.Mutex
 	var hookCalls []string
 	mgr.OnPostSave(func(_ context.Context, id, title, _, _ string) {
+		mu.Lock()
+		defer mu.Unlock()
 		hookCalls = append(hookCalls, id+":"+title)
 	})
 
 	ctx := context.Background()
 	start, _ := mgr.Start(ctx, "Hook test", "", "", "ns")
-	result, err := mgr.End(ctx, start.SessionID, "We chose React and added Redis caching.", "test")
+	_, err = mgr.End(ctx, start.SessionID, "We chose React and added Redis caching.", "test")
 	if err != nil {
 		t.Fatalf("end: %v", err)
 	}
-	if result.ObservationsExtracted != 2 {
-		t.Fatalf("extracted = %d, want 2", result.ObservationsExtracted)
-	}
+
+	// Wait for background extraction to finish
+	mgr.WaitBackground()
 
 	// Post-save hooks should have been called for each extracted observation.
+	mu.Lock()
+	defer mu.Unlock()
 	if len(hookCalls) != 2 {
 		t.Fatalf("post-save hook calls = %d, want 2; got: %v", len(hookCalls), hookCalls)
 	}
@@ -250,13 +275,13 @@ func TestEndSessionProvenanceOnExtracted(t *testing.T) {
 
 	ctx := context.Background()
 	start, _ := mgr.Start(ctx, "Provenance test", "", "", "ns")
-	result, err := mgr.End(ctx, start.SessionID, "We decided on Go.", "mcp")
+	_, err = mgr.End(ctx, start.SessionID, "We decided on Go.", "mcp")
 	if err != nil {
 		t.Fatalf("end: %v", err)
 	}
-	if result.ObservationsExtracted != 1 {
-		t.Fatalf("extracted = %d, want 1", result.ObservationsExtracted)
-	}
+
+	// Wait for background extraction to finish
+	mgr.WaitBackground()
 
 	// Verify provenance on the extracted observation.
 	var sourceSurface, sourceSessionID, sourceTool string

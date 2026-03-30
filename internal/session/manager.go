@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"strings"
+	"sync"
 
 	"github.com/joeldevz/neurox/internal/filelink"
 	"github.com/joeldevz/neurox/internal/llm"
@@ -23,6 +24,10 @@ type Manager struct {
 	idGen         filelink.IDGenerator
 	temporal      *temporal.Extractor
 	postSaveHooks []PostSaveHook
+	// bgWG tracks in-flight background goroutines (e.g. LLM extraction).
+	// Production code does not wait on this; tests call WaitBackground()
+	// to deterministically assert on extracted observations.
+	bgWG sync.WaitGroup
 }
 
 // NewManager creates a session manager.
@@ -41,6 +46,13 @@ func (m *Manager) SetTemporalExtractor(te *temporal.Extractor) {
 // performs — so that session-derived observations have equivalent quality.
 func (m *Manager) OnPostSave(hook PostSaveHook) {
 	m.postSaveHooks = append(m.postSaveHooks, hook)
+}
+
+// WaitBackground blocks until all background goroutines (e.g. LLM extraction
+// started by End) have completed.  Intended for tests only — production
+// callers should not need this.
+func (m *Manager) WaitBackground() {
+	m.bgWG.Wait()
 }
 
 // StartResult holds the result of starting a session.
@@ -121,12 +133,21 @@ func (m *Manager) End(ctx context.Context, sessionID, summary, surface string) (
 
 	endResult := EndResult{SessionID: sessionID}
 
-	// Extract atomic observations if LLM available
+	// Extract atomic observations if LLM available — run in background
+	// so that the MCP/HTTP caller is never blocked by slow LLM inference.
 	if llm.IsAvailable(m.llm) {
-		extracted, extractErr := m.extractObservations(ctx, summary, namespace, sessionID, surface)
-		if extractErr == nil {
-			endResult.ObservationsExtracted = extracted
-		}
+		m.bgWG.Add(1)
+		go func() {
+			defer m.bgWG.Done()
+			bgCtx := context.Background()
+			extracted, extractErr := m.extractObservations(bgCtx, summary, namespace, sessionID, surface)
+			if extractErr != nil {
+				log.Printf("[WARN] session_end %s: background extraction failed: %v", sessionID, extractErr)
+			} else {
+				log.Printf("[INFO] session_end %s: extracted %d observations in background", sessionID, extracted)
+			}
+		}()
+		endResult.ObservationsExtracted = -1 // signals async; caller should not rely on count
 	} else {
 		endResult.Warning = "no LLM configured — session summary was saved but observations were not extracted. Configure an LLM provider to enable automatic observation extraction."
 		log.Printf("[WARN] session_end %s: %s", sessionID, endResult.Warning)
