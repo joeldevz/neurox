@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -17,6 +18,7 @@ type Config struct {
 	Embeddings    EmbeddingsConfig    `yaml:"embeddings"`
 	Curator       CuratorConfig       `yaml:"curator"`
 	Consolidation ConsolidationConfig `yaml:"consolidation"`
+	Recall        RecallConfig        `yaml:"recall"`
 	Meta          MetaConfig          `yaml:"-"`
 }
 
@@ -72,6 +74,17 @@ type DatabaseConfig struct {
 	Path string `yaml:"path"`
 }
 
+// RRFConfig holds the Reciprocal Rank Fusion parameters.
+// Designed to grow into per-channel k (KFts, KSem) without API break.
+type RRFConfig struct {
+	K int `yaml:"k"`
+}
+
+type RecallConfig struct {
+	RRF             RRFConfig `yaml:"rrf"`
+	DisableBackfill bool      `yaml:"disable_backfill"`
+}
+
 type MetaConfig struct {
 	ConfigPath string
 	ConfigDir  string
@@ -104,6 +117,10 @@ func Load(configPath string) (Config, error) {
 	applyEnvOverrides(&cfg, configPath, configDir)
 	applyDerivedDefaults(&cfg, configPath, configDir)
 
+	if err := validate(&cfg); err != nil {
+		return Config{}, err
+	}
+
 	return cfg, nil
 
 }
@@ -132,6 +149,10 @@ func defaultConfig(configDir string, configPath string) Config {
 	return Config{
 		Database: DatabaseConfig{
 			Path: filepath.Join(configDir, "neurox.db"),
+		},
+		Recall: RecallConfig{
+			RRF:             RRFConfig{K: 60},
+			DisableBackfill: false,
 		},
 		Meta: MetaConfig{
 			ConfigDir:  configDir,
@@ -235,6 +256,20 @@ func applyEnvOverrides(cfg *Config, configPath string, configDir string) {
 		cfg.Curator.PrioritiesFile = value
 		cfg.Meta.Source = "env"
 	}
+
+	if value := strings.TrimSpace(os.Getenv(envPrefix + "RECALL_RRF_K")); value != "" {
+		if k, err := strconv.Atoi(value); err == nil {
+			cfg.Recall.RRF.K = k
+			cfg.Meta.Source = "env"
+		}
+	}
+
+	if value := strings.TrimSpace(os.Getenv(envPrefix + "RECALL_DISABLE_BACKFILL")); value != "" {
+		if v, err := strconv.ParseBool(value); err == nil {
+			cfg.Recall.DisableBackfill = v
+			cfg.Meta.Source = "env"
+		}
+	}
 }
 
 func applyDerivedDefaults(cfg *Config, configPath string, configDir string) {
@@ -284,4 +319,11 @@ func applyDerivedDefaults(cfg *Config, configPath string, configDir string) {
 	// Promotion threshold defaults (0 means "use hardcoded default")
 	// We don't set defaults here - the consolidate package uses its own constants
 	// when these are 0, allowing users to explicitly override if needed
+}
+
+func validate(cfg *Config) error {
+	if cfg.Recall.RRF.K <= 0 {
+		return fmt.Errorf("recall.rrf.k must be > 0, got %d", cfg.Recall.RRF.K)
+	}
+	return nil
 }

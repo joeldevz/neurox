@@ -98,3 +98,50 @@ func TestBenchEnvRecallEngineUsesFactStore(t *testing.T) {
 		t.Fatalf("top result title = %q", results[0].Title)
 	}
 }
+
+// TestBenchEnvHonorsDisableBackfillEnv verifies the wiring that makes
+// G6 (stretch gate) work end-to-end: the env var NEUROX_RECALL_DISABLE_BACKFILL
+// is parsed and propagated to the recall engine via WithDisableBackfill.
+func TestBenchEnvHonorsDisableBackfillEnv(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("unset defaults to false", func(t *testing.T) {
+		t.Setenv("NEUROX_RECALL_DISABLE_BACKFILL", "")
+		env, err := NewBenchEnv(ctx, NewScaleConfig("small"))
+		if err != nil {
+			t.Fatalf("NewBenchEnv() error = %v", err)
+		}
+		defer env.Close()
+		if env.RecallEngine.DisableBackfill() {
+			t.Error("DisableBackfill = true with unset env, want false (default)")
+		}
+		if env.RecallEngine.RRFK() != 60 {
+			t.Errorf("RRFK = %d, want 60 (default)", env.RecallEngine.RRFK())
+		}
+	})
+
+	t.Run("true propagates to engine", func(t *testing.T) {
+		t.Setenv("NEUROX_RECALL_DISABLE_BACKFILL", "true")
+		env, err := NewBenchEnv(ctx, NewScaleConfig("small"))
+		if err != nil {
+			t.Fatalf("NewBenchEnv() error = %v", err)
+		}
+		defer env.Close()
+		if !env.RecallEngine.DisableBackfill() {
+			t.Error("DisableBackfill = false with env=true, want true")
+		}
+	})
+
+	t.Run("RRF k override", func(t *testing.T) {
+		t.Setenv("NEUROX_RECALL_DISABLE_BACKFILL", "")
+		t.Setenv("NEUROX_RECALL_RRF_K", "30")
+		env, err := NewBenchEnv(ctx, NewScaleConfig("small"))
+		if err != nil {
+			t.Fatalf("NewBenchEnv() error = %v", err)
+		}
+		defer env.Close()
+		if env.RecallEngine.RRFK() != 30 {
+			t.Errorf("RRFK = %d, want 30 (env override)", env.RecallEngine.RRFK())
+		}
+	})
+}

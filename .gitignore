@@ -24,3 +24,5 @@ longmemeval
 config.yaml
 .env
 priorities.yaml
+.skynex/production-gate.json
+.skynex/audit.log

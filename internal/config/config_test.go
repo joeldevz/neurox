@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -192,5 +193,172 @@ func TestConsolidationConfigParsing(t *testing.T) {
 	}
 	if cfg.Consolidation.RelatedMax != 0.80 {
 		t.Errorf("RelatedMax = %f, want 0.80", cfg.Consolidation.RelatedMax)
+	}
+}
+
+func TestRecallDefaultsWhenConfigMissing(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv(envPrefix+"CONFIG_DIR", "")
+	t.Setenv(envPrefix+"CONFIG_PATH", "")
+	t.Setenv(envPrefix+"RECALL_RRF_K", "")
+	t.Setenv(envPrefix+"RECALL_DISABLE_BACKFILL", "")
+
+	cfg, err := Load("")
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+
+	if cfg.Recall.RRF.K != 60 {
+		t.Errorf("Recall.RRF.K = %d, want 60", cfg.Recall.RRF.K)
+	}
+	if cfg.Recall.DisableBackfill != false {
+		t.Errorf("Recall.DisableBackfill = %v, want false", cfg.Recall.DisableBackfill)
+	}
+}
+
+func TestRecallYAMLConfig(t *testing.T) {
+	root := t.TempDir()
+	configDir := filepath.Join(root, "cfg")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll returned error: %v", err)
+	}
+
+	configPath := filepath.Join(configDir, "config.yaml")
+	content := []byte(`recall:
+  rrf:
+    k: 30
+  disable_backfill: true
+`)
+	if err := os.WriteFile(configPath, content, 0o644); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+
+	t.Setenv(envPrefix+"RECALL_RRF_K", "")
+	t.Setenv(envPrefix+"RECALL_DISABLE_BACKFILL", "")
+
+	cfg, err := Load(configPath)
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+
+	if cfg.Recall.RRF.K != 30 {
+		t.Errorf("Recall.RRF.K = %d, want 30", cfg.Recall.RRF.K)
+	}
+	if cfg.Recall.DisableBackfill != true {
+		t.Errorf("Recall.DisableBackfill = %v, want true", cfg.Recall.DisableBackfill)
+	}
+}
+
+func TestRecallEnvOverridesK(t *testing.T) {
+	root := t.TempDir()
+	configDir := filepath.Join(root, "cfg")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll returned error: %v", err)
+	}
+
+	configPath := filepath.Join(configDir, "config.yaml")
+	if err := os.WriteFile(configPath, []byte(""), 0o644); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+
+	t.Setenv(envPrefix+"RECALL_RRF_K", "30")
+	t.Setenv(envPrefix+"RECALL_DISABLE_BACKFILL", "")
+
+	cfg, err := Load(configPath)
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+
+	if cfg.Recall.RRF.K != 30 {
+		t.Errorf("Recall.RRF.K = %d, want 30", cfg.Recall.RRF.K)
+	}
+	if cfg.Meta.Source != "env" {
+		t.Errorf("Meta.Source = %q, want env", cfg.Meta.Source)
+	}
+}
+
+func TestRecallEnvOverridesDisableBackfill(t *testing.T) {
+	root := t.TempDir()
+	configDir := filepath.Join(root, "cfg")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll returned error: %v", err)
+	}
+
+	configPath := filepath.Join(configDir, "config.yaml")
+	if err := os.WriteFile(configPath, []byte(""), 0o644); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+
+	t.Setenv(envPrefix+"RECALL_RRF_K", "")
+	t.Setenv(envPrefix+"RECALL_DISABLE_BACKFILL", "true")
+
+	cfg, err := Load(configPath)
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+
+	if cfg.Recall.DisableBackfill != true {
+		t.Errorf("Recall.DisableBackfill = %v, want true", cfg.Recall.DisableBackfill)
+	}
+}
+
+func TestRecallEnvOverridesYAML(t *testing.T) {
+	root := t.TempDir()
+	configDir := filepath.Join(root, "cfg")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll returned error: %v", err)
+	}
+
+	configPath := filepath.Join(configDir, "config.yaml")
+	content := []byte(`recall:
+  rrf:
+    k: 30
+  disable_backfill: false
+`)
+	if err := os.WriteFile(configPath, content, 0o644); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+
+	t.Setenv(envPrefix+"RECALL_RRF_K", "90")
+	t.Setenv(envPrefix+"RECALL_DISABLE_BACKFILL", "true")
+
+	cfg, err := Load(configPath)
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+
+	if cfg.Recall.RRF.K != 90 {
+		t.Errorf("Recall.RRF.K = %d, want 90 (env override over YAML 30)", cfg.Recall.RRF.K)
+	}
+	if cfg.Recall.DisableBackfill != true {
+		t.Errorf("Recall.DisableBackfill = %v, want true (env override over YAML false)", cfg.Recall.DisableBackfill)
+	}
+}
+
+func TestRecallInvalidKReturnsError(t *testing.T) {
+	root := t.TempDir()
+	configDir := filepath.Join(root, "cfg")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll returned error: %v", err)
+	}
+
+	configPath := filepath.Join(configDir, "config.yaml")
+	content := []byte(`recall:
+  rrf:
+    k: 0
+`)
+	if err := os.WriteFile(configPath, content, 0o644); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+
+	t.Setenv(envPrefix+"RECALL_RRF_K", "")
+	t.Setenv(envPrefix+"RECALL_DISABLE_BACKFILL", "")
+
+	_, err := Load(configPath)
+	if err == nil {
+		t.Fatalf("Load returned nil error, want validation error for K=0")
+	}
+	if !strings.Contains(err.Error(), "recall.rrf.k") {
+		t.Errorf("error = %q, want message mentioning recall.rrf.k", err.Error())
 	}
 }

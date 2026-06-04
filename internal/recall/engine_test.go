@@ -693,7 +693,7 @@ func searchWithoutActivation(ctx context.Context, database *sql.DB, options Sear
 		return nil, err
 	}
 
-	applyScores(candidates, normalized.Weights, normalized.Now, intent, nil, false, normalized.Query)
+	applyScores(candidates, normalized.Weights, normalized.Now, intent, nil, false, normalized.Query, 60)
 	sort.SliceStable(candidates, func(i int, j int) bool {
 		if candidates[i].Score == candidates[j].Score {
 			if candidates[i].RawRelevance == candidates[j].RawRelevance {
@@ -3109,4 +3109,328 @@ func serializeF32ForTest(vec []float32) []byte {
 		buf[i*4+3] = byte(bits >> 24)
 	}
 	return buf
+}
+
+// ============================================================================
+// TESTS: Union merge (Subtask 2 of recall-merge-fix)
+//
+// The current merge at engine.go:152-210 is FTS-anchored with conditional
+// semantic-only fill. When FTS saturates the limit, semantic-only matches are
+// silently dropped (the limit-saturation bug). These tests verify the new
+// union behavior: semantic-only candidates enter the pool regardless of
+// len(FTS) vs limit, and final truncation happens after applyScores sorts.
+// ============================================================================
+
+// TestUnionMerge_LimitSaturation is the canonical limit-saturation scenario.
+// FTS returns exactly `limit` candidates, but a semantic-only doc with high
+// cosine similarity must still appear in results.
+//
+// Bug pre-fix: Phase 2 of the merge (semantic-only fill) is gated on
+// `len(candidates) < normalized.Limit` — when false, semantic-only docs are
+// silently dropped. This test fails pre-fix, passes post-fix.
+func TestUnionMerge_LimitSaturation(t *testing.T) {
+	ctx := context.Background()
+	databasePath := filepath.Join(t.TempDir(), "neurox.db")
+	database, err := db.Open(ctx, databasePath)
+	if err != nil {
+		t.Fatalf("db.Open: %v", err)
+	}
+	defer database.Close()
+
+	store := observation.NewStore(database, nil)
+
+	// 10 FTS-matching observations (all contain "auth" in content).
+	// FTS returns all 10 ordered by BM25 desc (then by importance desc).
+	ftsIDs := make([]string, 0, 10)
+	for i := 0; i < 10; i++ {
+		obs, err := store.Save(ctx, observation.Observation{
+			Title:   fmt.Sprintf("Auth note %d", i),
+			Content: fmt.Sprintf("auth configuration detail number %d", i),
+		})
+		if err != nil {
+			t.Fatalf("save fts obs %d: %v", i, err)
+		}
+		ftsIDs = append(ftsIDs, obs.ID)
+		// Low importance + old created_at so FTS-only docs rank low.
+		setObservationFields(t, database, obs.ID, map[string]any{
+			"importance": 0.1,
+			"created_at": "datetime('now', '-30 day')",
+		})
+		setEmbedding(t, database, obs.ID, makeTestVector(10, 4))
+	}
+
+	// 1 semantic-only observation: NO "auth" in content, but very high
+	// semantic similarity to the query. High importance + recent so it
+	// ranks in the top 10 by the tri-factor score.
+	semOnly, err := store.Save(ctx, observation.Observation{
+		Title:   "Login mechanism",
+		Content: "The login mechanism uses session cookies for user verification",
+	})
+	if err != nil {
+		t.Fatalf("save sem-only obs: %v", err)
+	}
+	setObservationFields(t, database, semOnly.ID, map[string]any{
+		"importance": 1.0,
+		"created_at": "datetime('now')",
+	})
+	setEmbedding(t, database, semOnly.ID, makeTestVector(10, 4))
+
+	provider := &testEmbedProvider{dims: 4, queryVector: makeTestVector(10, 4)}
+	engine := NewEngine(database, WithEmbedder(provider))
+
+	results, err := engine.Search(ctx, SearchOptions{
+		Query: "auth",
+		Limit: 10,
+	})
+	if err != nil {
+		t.Fatalf("Search returned error: %v", err)
+	}
+
+	if len(results) > 10 {
+		t.Fatalf("len(results) = %d, want <= 10 (limit)", len(results))
+	}
+
+	// The semantic-only obs must be in results. Pre-fix it would be missing
+	// because Phase 2 of the merge is gated on len(candidates) < limit.
+	found := false
+	for _, r := range results {
+		if r.ID == semOnly.ID {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("semantic-only obs %q missing from results (limit-saturation bug). Got IDs: %v",
+			semOnly.ID, resultIDs(results))
+	}
+
+	t.Logf("Limit saturation: 10 FTS + 1 sem-only, limit=10 → sem-only in results (len=%d)", len(results))
+}
+
+// TestUnionMerge_NoRegression_FTSUnderLimit verifies the existing FTS-under-limit
+// behavior is preserved. FTS returns fewer than `limit` candidates, and semantic
+// fill completes the result set up to the limit.
+func TestUnionMerge_NoRegression_FTSUnderLimit(t *testing.T) {
+	ctx := context.Background()
+	databasePath := filepath.Join(t.TempDir(), "neurox.db")
+	database, err := db.Open(ctx, databasePath)
+	if err != nil {
+		t.Fatalf("db.Open: %v", err)
+	}
+	defer database.Close()
+
+	store := observation.NewStore(database, nil)
+
+	// 3 FTS-matching observations.
+	ftsIDs := make([]string, 0, 3)
+	for i := 0; i < 3; i++ {
+		obs, err := store.Save(ctx, observation.Observation{
+			Title:   fmt.Sprintf("Auth obs %d", i),
+			Content: fmt.Sprintf("auth detail %d", i),
+		})
+		if err != nil {
+			t.Fatalf("save fts obs %d: %v", i, err)
+		}
+		ftsIDs = append(ftsIDs, obs.ID)
+		setEmbedding(t, database, obs.ID, makeTestVector(7, 4))
+	}
+
+	// 1 semantic-only observation.
+	semOnly, err := store.Save(ctx, observation.Observation{
+		Title:   "Login mechanism",
+		Content: "Login uses session cookies",
+	})
+	if err != nil {
+		t.Fatalf("save sem-only obs: %v", err)
+	}
+	setEmbedding(t, database, semOnly.ID, makeTestVector(7, 4))
+
+	provider := &testEmbedProvider{dims: 4, queryVector: makeTestVector(7, 4)}
+	engine := NewEngine(database, WithEmbedder(provider))
+
+	results, err := engine.Search(ctx, SearchOptions{
+		Query: "auth",
+		Limit: 10,
+	})
+	if err != nil {
+		t.Fatalf("Search returned error: %v", err)
+	}
+
+	// All 4 should be in results: 3 FTS + 1 sem fill, total < limit.
+	if len(results) < 4 {
+		t.Fatalf("len(results) = %d, want >= 4 (3 FTS + 1 sem fill)", len(results))
+	}
+	if len(results) > 10 {
+		t.Fatalf("len(results) = %d, want <= 10 (limit)", len(results))
+	}
+
+	resultSet := make(map[string]struct{}, len(results))
+	for _, r := range results {
+		resultSet[r.ID] = struct{}{}
+	}
+	for _, id := range ftsIDs {
+		if _, ok := resultSet[id]; !ok {
+			t.Errorf("FTS obs %q missing from results", id)
+		}
+	}
+	if _, ok := resultSet[semOnly.ID]; !ok {
+		t.Error("sem-only obs missing from results")
+	}
+
+	t.Logf("FTS under limit: 3 FTS + 1 sem, limit=10 → all 4 in results (len=%d)", len(results))
+}
+
+// TestUnionMerge_NoEmbeddings verifies that when no embedding provider is
+// configured, the union merge is a no-op for the semantic channel: the engine
+// returns the FTS-only result set unchanged. Rank derivation does not run.
+func TestUnionMerge_NoEmbeddings(t *testing.T) {
+	engine, store, database := newTestEngine(t) // no embedder
+	defer database.Close()
+
+	ctx := context.Background()
+	for i := 0; i < 3; i++ {
+		_, err := store.Save(ctx, observation.Observation{
+			Title:   fmt.Sprintf("Auth obs %d", i),
+			Content: fmt.Sprintf("auth detail %d", i),
+		})
+		if err != nil {
+			t.Fatalf("save obs %d: %v", i, err)
+		}
+	}
+
+	// Save one obs without "auth" — must NOT appear (no semantic fallback).
+	_, err := store.Save(ctx, observation.Observation{
+		Title:   "Login mechanism",
+		Content: "Login uses session cookies",
+	})
+	if err != nil {
+		t.Fatalf("save sem-only: %v", err)
+	}
+
+	results, err := engine.Search(ctx, SearchOptions{
+		Query: "auth",
+		Limit: 10,
+	})
+	if err != nil {
+		t.Fatalf("Search returned error: %v", err)
+	}
+
+	// Without embedder, only FTS-matching obs are returned (3, not 4).
+	if len(results) != 3 {
+		t.Fatalf("len(results) = %d, want 3 (FTS-only, no semantic fallback)", len(results))
+	}
+	for _, r := range results {
+		if !strings.Contains(r.Content, "auth") {
+			t.Errorf("non-FTS obs %q in results without embedder", r.ID)
+		}
+	}
+
+	t.Log("Without embedder: FTS-only path preserved, 3 results")
+}
+
+// TestUnionMerge_DisableBackfill_SuppressesBackfill is the end-to-end test for
+// the DisableBackfill flag. With flag=true, shouldNamespaceBackfill returns
+// false and loadNamespaceBackfill is not called, so backfill candidates do
+// not appear in results.
+func TestUnionMerge_DisableBackfill_SuppressesBackfill(t *testing.T) {
+	engine, store, database := newTestEngine(t)
+	defer database.Close()
+
+	ctx := context.Background()
+	// 1 FTS-matching observation in namespace "team-memory".
+	direct, err := store.Save(ctx, observation.Observation{
+		Title:           "Coding style conventions",
+		Content:         "Document the coding style conventions for the project.",
+		Namespace:       "team-memory",
+		ObservationType: observation.ObservationTypePattern,
+		Retention:       observation.RetentionDurable,
+	})
+	if err != nil {
+		t.Fatalf("save direct: %v", err)
+	}
+
+	// 1 backfill candidate in same namespace but different content.
+	backfill, err := store.Save(ctx, observation.Observation{
+		Title:           "Redis deployment note",
+		Content:         "Redis cluster runs in three availability zones.",
+		Namespace:       "team-memory",
+		ObservationType: observation.ObservationTypeDiscovery,
+		Retention:       observation.RetentionDurable,
+	})
+	if err != nil {
+		t.Fatalf("save backfill candidate: %v", err)
+	}
+
+	// First: with DisableBackfill=false (default), backfill should fill.
+	defaultEngine := engine
+	defaultResults, err := defaultEngine.Search(ctx, SearchOptions{
+		Query:     "project architecture infrastructure stack",
+		Namespace: "team-memory",
+		Limit:     5,
+	})
+	if err != nil {
+		t.Fatalf("default Search: %v", err)
+	}
+	foundBackfillDefault := false
+	for _, r := range defaultResults {
+		if r.ID == backfill.ID {
+			foundBackfillDefault = true
+			break
+		}
+	}
+	if !foundBackfillDefault {
+		t.Fatalf("baseline: backfill obs %q expected in default results, got %d results",
+			backfill.ID, len(defaultResults))
+	}
+	_ = direct
+
+	// Now: with DisableBackfill=true, backfill must be suppressed.
+	diagEngine := NewEngine(database, WithDisableBackfill(true))
+	diagResults, err := diagEngine.Search(ctx, SearchOptions{
+		Query:     "project architecture infrastructure stack",
+		Namespace: "team-memory",
+		Limit:     5,
+	})
+	if err != nil {
+		t.Fatalf("diag Search: %v", err)
+	}
+	for _, r := range diagResults {
+		if r.ID == backfill.ID {
+			t.Errorf("backfill obs %q present in results despite DisableBackfill=true", backfill.ID)
+		}
+	}
+}
+
+// TestShouldNamespaceBackfill_DisableBackfillTrue verifies the function-level
+// short-circuit: when the flag is true, the function returns false regardless
+// of namespace, count, files, or query length conditions.
+func TestShouldNamespaceBackfill_DisableBackfillTrue(t *testing.T) {
+	options := SearchOptions{
+		Namespace: "test-ns",
+		Query:     "broad query with many words",
+		Limit:     10,
+	}
+	// All conditions would normally return true (namespace set, count<limit,
+	// no files, >=3 words). With disableBackfill=true, must return false.
+	if shouldNamespaceBackfill(options, 0, true) {
+		t.Error("shouldNamespaceBackfill returned true with disableBackfill=true, want false")
+	}
+	// Even with explicit namespace, the function must still return false.
+	if shouldNamespaceBackfill(options, 0, true) {
+		t.Error("shouldNamespaceBackfill returned true with explicit namespace + disableBackfill=true, want false")
+	}
+}
+
+// TestShouldNamespaceBackfill_DisableBackfillFalse verifies the flag does not
+// change existing behavior when set to false. With all backfill conditions met
+// and disableBackfill=false, the function returns true.
+func TestShouldNamespaceBackfill_DisableBackfillFalse(t *testing.T) {
+	options := SearchOptions{
+		Namespace: "test-ns",
+		Query:     "broad query with many words",
+		Limit:     10,
+	}
+	if !shouldNamespaceBackfill(options, 0, false) {
+		t.Error("shouldNamespaceBackfill returned false with disableBackfill=false and all conditions met, want true")
+	}
 }
