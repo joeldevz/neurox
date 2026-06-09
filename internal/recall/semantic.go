@@ -13,6 +13,7 @@ import (
 const (
 	crossSignalBoost       = 1.2   // multiplier when result appears in both FTS and semantic
 	maxEmbeddingsPerSearch = 10000 // hard cap to prevent excessive memory usage
+	minSemanticSimilarity  = 0.4   // minimum cosine similarity threshold (conservative, typically 0.4-0.7 for related content)
 )
 
 // semanticFilter contains prefilter parameters for semantic search.
@@ -86,7 +87,7 @@ func semanticSearch(ctx context.Context, db *sql.DB, provider embed.Provider, qu
 			continue
 		}
 		sim := embed.CosineSimilarity(queryVec, vec)
-		if sim > 0.1 { // minimum threshold
+		if sim > minSemanticSimilarity {
 			candidates = append(candidates, scored{id: id, score: sim})
 		}
 	}

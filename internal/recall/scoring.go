@@ -61,8 +61,10 @@ func applyScores(items []candidate, weights ScoreWeights, now time.Time, intent 
 
 		// Hybrid: Reciprocal Rank Fusion replaces max(FTS, semantic).
 		// FTS-only, semantic-only, and dual-channel docs all contribute via ranks.
+		// Raw RRF is ~0.011-0.033 (scale [0, 2/(k+1)]), while recency/importance are [0,1].
+		// Normalize RRF to [0,1]: raw * (k+1) / 2.0 → rank-1-both ≈ 1.0, rank-1-single ≈ 0.5.
 		rrf := rrfScore(items[index].FTSRank, items[index].SemRank, rrfK)
-		relevance := rrf
+		relevance := rrf * float64(rrfK+1) / 2.0
 
 		items[index].Score = (weights.Recency * recency) + (weights.Importance * items[index].Importance) + (weights.Relevance * relevance)
 

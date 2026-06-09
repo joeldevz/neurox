@@ -212,12 +212,38 @@ func (e *Engine) Search(ctx context.Context, options SearchOptions) ([]Result, e
 				}
 			}
 
-			// Step 4: Collect ALL semantic-only IDs (union, not gated on FTS count).
-			semanticOnlyIDs := make([]string, 0)
+			// Step 4: Collect semantic-only IDs and CAP at normalized.Limit by semScore.
+			// This prevents pool flooding: if 30 weak semantic-only candidates are available,
+			// we take only the top-normalized.Limit by semScore (sorted descending), selected
+			// and added to avoid displacing stronger FTS results.
+			type semOnlyID struct {
+				id    string
+				score float64
+			}
+			semanticOnlyList := make([]semOnlyID, 0)
 			for id := range semScores {
 				if _, inFTS := ftsRanks[id]; !inFTS {
-					semanticOnlyIDs = append(semanticOnlyIDs, id)
+					semanticOnlyList = append(semanticOnlyList, semOnlyID{id: id, score: semScores[id]})
 				}
+			}
+
+			// Sort by semScore descending and take top-limit candidates.
+			sort.Slice(semanticOnlyList, func(i, j int) bool {
+				if semanticOnlyList[i].score != semanticOnlyList[j].score {
+					return semanticOnlyList[i].score > semanticOnlyList[j].score
+				}
+				// Stable tie-break by ID ascending for determinism.
+				return semanticOnlyList[i].id < semanticOnlyList[j].id
+			})
+
+			// Take at most normalized.Limit semantic-only candidates.
+			if len(semanticOnlyList) > normalized.Limit {
+				semanticOnlyList = semanticOnlyList[:normalized.Limit]
+			}
+
+			semanticOnlyIDs := make([]string, len(semanticOnlyList))
+			for i, item := range semanticOnlyList {
+				semanticOnlyIDs[i] = item.id
 			}
 
 			// Step 5: Load semantic-only candidates and assign ranks.
