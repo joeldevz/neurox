@@ -230,6 +230,71 @@ func printSetupUsage() {
 
 // --- CLI subcommands ---
 
+// recallFlags holds the parsed recall flags.
+type recallFlags struct {
+	obsType      string
+	kind         string
+	namespace    string
+	files        []string
+	includeStale bool
+	debug        bool
+	limit        int
+}
+
+// parseRecallArgs parses CLI args for the recall command using iterative flag parsing.
+// It handles positional arguments (the query) that appear before or after valued flags.
+// The algorithm respects which flags consume values, so "3" after "--limit" is correctly
+// treated as the limit value, not as a positional argument.
+func parseRecallArgs(args []string) (query string, opts recallFlags, err error) {
+	// Define flags once before the loop.
+	fs := flag.NewFlagSet("recall", flag.ContinueOnError)
+	obsType := fs.String("type", "", "Filter by observation type")
+	kind := fs.String("kind", "", "Filter by memory kind")
+	namespace := fs.String("namespace", "", "Filter by namespace")
+	filesFlag := fs.String("files", "", "Filter by file paths (comma-separated)")
+	includeStale := fs.Bool("include-stale", false, "Include stale/expired observations")
+	debug := fs.Bool("debug", false, "Include score breakdown per result")
+	limit := fs.Int("limit", 10, "Max results")
+	
+	var positionals []string
+	rest := args
+	
+	// Iteratively parse: fs.Parse stops at first non-flag, then we collect positionals.
+	for len(rest) > 0 {
+		// Parse the next chunk. ContinueOnError allows us to handle errors gracefully.
+		if parseErr := fs.Parse(rest); parseErr != nil {
+			err = parseErr
+			return
+		}
+		rest = fs.Args() // Get remaining args after the first non-flag token.
+		if len(rest) > 0 {
+			positionals = append(positionals, rest[0])
+			rest = rest[1:]
+		}
+	}
+	
+	// Join positional arguments as the query.
+	if len(positionals) == 0 {
+		return "", recallFlags{}, nil // Empty query
+	}
+	query = strings.Join(positionals, " ")
+	
+	opts = recallFlags{
+		obsType:      *obsType,
+		kind:         *kind,
+		namespace:    *namespace,
+		includeStale: *includeStale,
+		debug:        *debug,
+		limit:        *limit,
+	}
+	
+	if *filesFlag != "" {
+		opts.files = splitCSV(*filesFlag)
+	}
+	
+	return
+}
+
 func runSave(ctx context.Context, database *sql.DB, cfg config.Config) {
 	fs := flag.NewFlagSet("save", flag.ExitOnError)
 	content := fs.String("content", "", "Structured content (What/Why/Where/Learned)")
@@ -332,38 +397,13 @@ func runSave(ctx context.Context, database *sql.DB, cfg config.Config) {
 }
 
 func runRecall(ctx context.Context, database *sql.DB, cfg config.Config) {
-	// Separate positional query from flags to allow flags anywhere on the command line.
-	// Go's flag package stops at first positional, so we extract the query first.
-	args := os.Args[2:]
-	var query string
-	var flagArgs []string
-
-	// Find the first non-flag argument (the query)
-	for i, arg := range args {
-		if !strings.HasPrefix(arg, "-") {
-			query = arg
-			// Collect all other args (both flags before and after the query)
-			flagArgs = append(flagArgs, args[:i]...)
-			flagArgs = append(flagArgs, args[i+1:]...)
-			break
-		}
-	}
-
-	if query == "" {
+	// Parse recall args using iterative flag parsing to handle positionals before/after valued flags.
+	query, flags, err := parseRecallArgs(os.Args[2:])
+	if err != nil || query == "" {
 		fmt.Fprintln(os.Stderr, "Usage: neurox recall \"query\" [flags]")
 		fmt.Fprintln(os.Stderr, "Flags can appear before or after the query.")
 		os.Exit(1)
 	}
-
-	fs := flag.NewFlagSet("recall", flag.ExitOnError)
-	obsType := fs.String("type", "", "Filter by observation type")
-	kind := fs.String("kind", "", "Filter by memory kind")
-	namespace := fs.String("namespace", "", "Filter by namespace")
-	filesFlag := fs.String("files", "", "Filter by file paths (comma-separated)")
-	includeStale := fs.Bool("include-stale", false, "Include stale/expired observations")
-	debug := fs.Bool("debug", false, "Include score breakdown per result")
-	limit := fs.Int("limit", 10, "Max results")
-	fs.Parse(flagArgs)
 
 	embedder := embed.AutoDetect(ctx, cfg.Embeddings.Provider, embed.OllamaConfig{URL: cfg.Embeddings.OllamaURL, Model: cfg.Embeddings.OllamaModel}, embed.RemoteConfig{
 		URL: cfg.Embeddings.RemoteURL, APIKey: cfg.Embeddings.RemoteKey,
@@ -373,20 +413,20 @@ func runRecall(ctx context.Context, database *sql.DB, cfg config.Config) {
 	factStore := facts.NewStore(database, idGen)
 	engine := recall.NewEngine(database, recall.WithEmbedder(embedder), recall.WithFactStore(factStore))
 
-	opts := recall.SearchOptions{
+	searchOpts := recall.SearchOptions{
 		Query:           query,
-		ObservationType: observation.ObservationType(*obsType),
-		Kind:            observation.Kind(*kind),
-		Namespace:       *namespace,
-		IncludeStale:    *includeStale,
-		Debug:           *debug,
-		Limit:           *limit,
+		ObservationType: observation.ObservationType(flags.obsType),
+		Kind:            observation.Kind(flags.kind),
+		Namespace:       flags.namespace,
+		IncludeStale:    flags.includeStale,
+		Debug:           flags.debug,
+		Limit:           flags.limit,
 	}
-	if *filesFlag != "" {
-		opts.Files = splitCSV(*filesFlag)
+	if len(flags.files) > 0 {
+		searchOpts.Files = flags.files
 	}
 
-	results, err := engine.Search(ctx, opts)
+	results, err := engine.Search(ctx, searchOpts)
 	if err != nil {
 		log.Fatalf("recall: %v", err)
 	}
