@@ -2,6 +2,7 @@ package recall
 
 import (
 	"math"
+	"sort"
 	"strings"
 	"time"
 
@@ -34,7 +35,7 @@ func (w ScoreWeights) withDefaults() ScoreWeights {
 	return w
 }
 
-func applyScores(items []candidate, weights ScoreWeights, now time.Time, intent TemporalIntent, mentionMap map[string][]mentionInfo, debug bool, query string) {
+func applyScores(items []candidate, weights ScoreWeights, now time.Time, intent TemporalIntent, mentionMap map[string][]mentionInfo, debug bool, query string, rrfK int) {
 	if len(items) == 0 {
 		return
 	}
@@ -58,11 +59,12 @@ func applyScores(items []candidate, weights ScoreWeights, now time.Time, intent 
 		recency := recencyScore(items[index], now)
 		ftsRelevance := normalizeRelevance(items[index].RawRelevance, minRelevance, maxRelevance)
 
-		// Hybrid: use max(FTS relevance, semantic cosine similarity) as relevance
-		relevance := ftsRelevance
-		if items[index].SemanticScore > relevance {
-			relevance = items[index].SemanticScore
-		}
+		// Hybrid: Reciprocal Rank Fusion replaces max(FTS, semantic).
+		// FTS-only, semantic-only, and dual-channel docs all contribute via ranks.
+		// Raw RRF is ~0.011-0.033 (scale [0, 2/(k+1)]), while recency/importance are [0,1].
+		// Normalize RRF to [0,1]: raw * (k+1) / 2.0 → rank-1-both ≈ 1.0, rank-1-single ≈ 0.5.
+		rrf := rrfScore(items[index].FTSRank, items[index].SemRank, rrfK)
+		relevance := rrf * float64(rrfK+1) / 2.0
 
 		items[index].Score = (weights.Recency * recency) + (weights.Importance * items[index].Importance) + (weights.Relevance * relevance)
 
@@ -98,6 +100,7 @@ func applyScores(items []candidate, weights ScoreWeights, now time.Time, intent 
 				Recency:            recency,
 				Importance:         items[index].Importance,
 				Relevance:          relevance,
+				RRFScore:           rrf,
 				SemanticScore:      items[index].SemanticScore,
 				TemporalMultiplier: tempMult,
 				CrossSignalBoost:   csBoost,
@@ -197,4 +200,45 @@ func detectTypeIntent(query string) observation.ObservationType {
 	}
 
 	return ""
+}
+
+// rrfScore computes the Reciprocal Rank Fusion score for a single document.
+// Returns 1/(k+rank_fts) + 1/(k+rank_sem), where rank_fts and rank_sem are
+// 1-based integers; 0 means absent in that channel and contributes nothing.
+// k is the smoothing constant (60 is the zero-shot production default,
+// Cormack et al. 2009, Bruch et al. 2022).
+func rrfScore(ftsRank, semRank, k int) float64 {
+	score := 0.0
+	if ftsRank > 0 {
+		score += 1.0 / float64(k+ftsRank)
+	}
+	if semRank > 0 {
+		score += 1.0 / float64(k+semRank)
+	}
+	return score
+}
+
+// deriveSemanticRanks produces 1-based ranks from a cosine-similarity map.
+// Highest score = rank 1. Ties are broken by ID ascending for determinism.
+// Returns a map from observation ID to rank.
+func deriveSemanticRanks(semScores map[string]float64) map[string]int {
+	type idScore struct {
+		id    string
+		score float64
+	}
+	sorted := make([]idScore, 0, len(semScores))
+	for id, score := range semScores {
+		sorted = append(sorted, idScore{id, score})
+	}
+	sort.Slice(sorted, func(i, j int) bool {
+		if sorted[i].score != sorted[j].score {
+			return sorted[i].score > sorted[j].score
+		}
+		return sorted[i].id < sorted[j].id
+	})
+	ranks := make(map[string]int, len(sorted))
+	for i, item := range sorted {
+		ranks[item.id] = i + 1
+	}
+	return ranks
 }

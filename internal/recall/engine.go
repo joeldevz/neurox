@@ -20,9 +20,11 @@ const (
 )
 
 type Engine struct {
-	db        *sql.DB
-	embedder  embed.Provider
-	factStore *facts.Store
+	db              *sql.DB
+	embedder        embed.Provider
+	factStore       *facts.Store
+	disableBackfill bool
+	rrfK            int
 }
 
 type SearchOptions struct {
@@ -46,6 +48,7 @@ type ScoreBreakdown struct {
 	Recency            float64 `json:"recency"`
 	Importance         float64 `json:"importance"`
 	Relevance          float64 `json:"relevance"`
+	RRFScore           float64 `json:"rrf_score"`
 	SemanticScore      float64 `json:"semantic_score"`
 	TemporalMultiplier float64 `json:"temporal_multiplier"`
 	CrossSignalBoost   float64 `json:"cross_signal_boost"`
@@ -83,10 +86,12 @@ type candidate struct {
 	AccessCount       int
 	rowID             int64
 	index             int
+	FTSRank           int // 1-based rank in FTS results; 0 if not in FTS
+	SemRank           int // 1-based rank in semantic results; 0 if not in semantic
 }
 
 func NewEngine(database *sql.DB, opts ...EngineOption) *Engine {
-	e := &Engine{db: database, embedder: embed.Disabled{}}
+	e := &Engine{db: database, embedder: embed.Disabled{}, rrfK: 60}
 	for _, opt := range opts {
 		opt(e)
 	}
@@ -111,6 +116,34 @@ func WithFactStore(s *facts.Store) EngineOption {
 		e.factStore = s
 	}
 }
+
+// WithDisableBackfill suppresses the namespace backfill band-aid. Diagnostic
+// only — used by the benchmark runner to measure recall without the backfill
+// safety net. Production code should not set this flag.
+func WithDisableBackfill(v bool) EngineOption {
+	return func(e *Engine) {
+		e.disableBackfill = v
+	}
+}
+
+// WithRRFK overrides the Reciprocal Rank Fusion smoothing constant k. Default
+// is 60 (zero-shot production consensus). k must be > 0; values <= 0 are
+// ignored to preserve the default.
+func WithRRFK(k int) EngineOption {
+	return func(e *Engine) {
+		if k > 0 {
+			e.rrfK = k
+		}
+	}
+}
+
+// DisableBackfill reports whether the namespace backfill band-aid is
+// suppressed on this engine. Exposed for diagnostic and test purposes.
+func (e *Engine) DisableBackfill() bool { return e.disableBackfill }
+
+// RRFK reports the Reciprocal Rank Fusion smoothing constant in use on this
+// engine. Exposed for diagnostic and test purposes.
+func (e *Engine) RRFK() int { return e.rrfK }
 
 func (e *Engine) Search(ctx context.Context, options SearchOptions) ([]Result, error) {
 	if e == nil || e.db == nil {
@@ -149,8 +182,9 @@ func (e *Engine) Search(ctx context.Context, options SearchOptions) ([]Result, e
 		return nil, fmt.Errorf("iterate recall rows: %w", err)
 	}
 
-	// Hybrid: if embeddings available, boost FTS candidates with semantic scores
-	// and fill remaining slots with semantic-only results when FTS returns few.
+	// Hybrid: if embeddings available, compute union of FTS and semantic results.
+	// Semantic-only candidates enter the pool regardless of len(FTS) vs limit.
+	// Truncation happens after applyScores sorts by final score.
 	if embed.IsAvailable(e.embedder) {
 		semFilter := semanticFilter{
 			Namespace:    normalized.Namespace,
@@ -159,51 +193,70 @@ func (e *Engine) Search(ctx context.Context, options SearchOptions) ([]Result, e
 		}
 		semScores, semErr := semanticSearch(ctx, e.db, e.embedder, normalized.Query, normalized.Limit*2, semFilter)
 		if semErr == nil && len(semScores) > 0 {
-			// Boost existing FTS candidates that also appear in semantic results
-			ftsIDs := make(map[string]struct{}, len(candidates))
+			// Step 1: Derive FTS ranks (1-based, scan order). Scan order from
+			// buildSearchQuery is BM25-asc (best first), so rank 1 = best match.
+			ftsRanks := make(map[string]int, len(candidates))
 			for i := range candidates {
-				ftsIDs[candidates[i].ID] = struct{}{}
-				if semScore, ok := semScores[candidates[i].ID]; ok {
-					if semScore > 0 {
-						candidates[i].SemanticScore = semScore
-					}
+				ftsRanks[candidates[i].ID] = i + 1
+				candidates[i].FTSRank = i + 1
+			}
+
+			// Step 2: Derive semantic ranks via the ranking helper.
+			semRanks := deriveSemanticRanks(semScores)
+
+			// Step 3: Boost FTS candidates that also appear in semantic results.
+			for i := range candidates {
+				if semScore, ok := semScores[candidates[i].ID]; ok && semScore > 0 {
+					candidates[i].SemanticScore = semScore
+					candidates[i].SemRank = semRanks[candidates[i].ID]
 				}
 			}
 
-			// Fill remaining slots with semantic-only results when FTS returned fewer than limit
-			if len(candidates) < normalized.Limit {
-				remaining := normalized.Limit - len(candidates)
-				semanticOnlyIDs := make([]string, 0, remaining)
-				semanticOnlyScores := make(map[string]float64, remaining)
+			// Step 4: Collect semantic-only IDs and CAP at normalized.Limit by semScore.
+			// This prevents pool flooding: if 30 weak semantic-only candidates are available,
+			// we take only the top-normalized.Limit by semScore (sorted descending), selected
+			// and added to avoid displacing stronger FTS results.
+			type semOnlyID struct {
+				id    string
+				score float64
+			}
+			semanticOnlyList := make([]semOnlyID, 0)
+			for id := range semScores {
+				if _, inFTS := ftsRanks[id]; !inFTS {
+					semanticOnlyList = append(semanticOnlyList, semOnlyID{id: id, score: semScores[id]})
+				}
+			}
 
-				// Collect semantic results NOT already in FTS candidates, sorted by score desc
-				type idScore struct {
-					id    string
-					score float64
+			// Sort by semScore descending and take top-limit candidates.
+			sort.Slice(semanticOnlyList, func(i, j int) bool {
+				if semanticOnlyList[i].score != semanticOnlyList[j].score {
+					return semanticOnlyList[i].score > semanticOnlyList[j].score
 				}
-				var semOnly []idScore
-				for id, score := range semScores {
-					if _, inFTS := ftsIDs[id]; !inFTS {
-						semOnly = append(semOnly, idScore{id: id, score: score})
-					}
-				}
-				sort.Slice(semOnly, func(i, j int) bool {
-					return semOnly[i].score > semOnly[j].score
-				})
-				for i := 0; i < remaining && i < len(semOnly); i++ {
-					semanticOnlyIDs = append(semanticOnlyIDs, semOnly[i].id)
-					semanticOnlyScores[semOnly[i].id] = semOnly[i].score
-				}
+				// Stable tie-break by ID ascending for determinism.
+				return semanticOnlyList[i].id < semanticOnlyList[j].id
+			})
 
-				if len(semanticOnlyIDs) > 0 {
-					semCandidates, loadErr := loadObservationsByIDs(ctx, e.db, semanticOnlyIDs, normalized)
-					if loadErr == nil {
-						for i := range semCandidates {
-							semCandidates[i].SemanticScore = semanticOnlyScores[semCandidates[i].ID]
-							semCandidates[i].RawRelevance = 0 // no FTS match
-						}
-						candidates = append(candidates, semCandidates...)
+			// Take at most normalized.Limit semantic-only candidates.
+			if len(semanticOnlyList) > normalized.Limit {
+				semanticOnlyList = semanticOnlyList[:normalized.Limit]
+			}
+
+			semanticOnlyIDs := make([]string, len(semanticOnlyList))
+			for i, item := range semanticOnlyList {
+				semanticOnlyIDs[i] = item.id
+			}
+
+			// Step 5: Load semantic-only candidates and assign ranks.
+			if len(semanticOnlyIDs) > 0 {
+				semCandidates, loadErr := loadObservationsByIDs(ctx, e.db, semanticOnlyIDs, normalized)
+				if loadErr == nil {
+					for i := range semCandidates {
+						semCandidates[i].SemanticScore = semScores[semCandidates[i].ID]
+						semCandidates[i].RawRelevance = 0 // no FTS match
+						semCandidates[i].FTSRank = 0
+						semCandidates[i].SemRank = semRanks[semCandidates[i].ID]
 					}
+					candidates = append(candidates, semCandidates...)
 				}
 			}
 		}
@@ -231,7 +284,7 @@ func (e *Engine) Search(ctx context.Context, options SearchOptions) ([]Result, e
 		}
 	}
 
-	if shouldNamespaceBackfill(normalized, len(candidates)) {
+	if shouldNamespaceBackfill(normalized, len(candidates), e.disableBackfill) {
 		existingIDs := make(map[string]struct{}, len(candidates))
 		for _, c := range candidates {
 			existingIDs[c.ID] = struct{}{}
@@ -252,7 +305,7 @@ func (e *Engine) Search(ctx context.Context, options SearchOptions) ([]Result, e
 	}
 	mentionMap, _ := loadCandidateMentions(ctx, e.db, candidateIDs)
 
-	applyScores(candidates, normalized.Weights, normalized.Now, intent, mentionMap, normalized.Debug, normalized.Query)
+	applyScores(candidates, normalized.Weights, normalized.Now, intent, mentionMap, normalized.Debug, normalized.Query, e.rrfK)
 	sort.SliceStable(candidates, func(i int, j int) bool {
 		if candidates[i].Score == candidates[j].Score {
 			if candidates[i].RawRelevance == candidates[j].RawRelevance {
@@ -262,6 +315,13 @@ func (e *Engine) Search(ctx context.Context, options SearchOptions) ([]Result, e
 		}
 		return candidates[i].Score > candidates[j].Score
 	})
+
+	// Truncate to limit after sort. The union merge can produce more than
+	// `limit` candidates when FTS returns exactly `limit` and semantic-only
+	// candidates are also added — the highest-scoring `limit` are kept.
+	if len(candidates) > normalized.Limit {
+		candidates = candidates[:normalized.Limit]
+	}
 
 	results := make([]Result, 0, len(candidates))
 	ids := make([]string, 0, len(candidates))
@@ -315,7 +375,10 @@ func normalizeLimit(limit int) int {
 	return limit
 }
 
-func shouldNamespaceBackfill(options SearchOptions, currentCount int) bool {
+func shouldNamespaceBackfill(options SearchOptions, currentCount int, disableBackfill bool) bool {
+	if disableBackfill {
+		return false
+	}
 	if options.Namespace == "" || currentCount >= options.Limit {
 		return false
 	}

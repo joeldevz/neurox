@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 
 	"github.com/joeldevz/neurox/internal/consolidate"
 	"github.com/joeldevz/neurox/internal/db"
@@ -89,11 +91,26 @@ func NewBenchEnv(ctx context.Context, scale ScaleConfig) (*BenchEnv, error) {
 	factStore := facts.NewStore(database, idGen)
 
 	// --- recall engine ---
-	recallEngine := recall.NewEngine(
-		database,
+	// Honor NEUROX_RECALL_DISABLE_BACKFILL (used by the G6 stretch gate to
+	// measure cross-session recall without the namespace backfill band-aid).
+	disableBackfill := false
+	if v := strings.TrimSpace(os.Getenv("NEUROX_RECALL_DISABLE_BACKFILL")); v != "" {
+		if parsed, err := strconv.ParseBool(v); err == nil {
+			disableBackfill = parsed
+		}
+	}
+	recallOpts := []recall.EngineOption{
 		recall.WithEmbedder(fakeEmbedder),
 		recall.WithFactStore(factStore),
-	)
+		recall.WithDisableBackfill(disableBackfill),
+	}
+	// Honor NEUROX_RECALL_RRF_K (k override for the RRF formula).
+	if v := strings.TrimSpace(os.Getenv("NEUROX_RECALL_RRF_K")); v != "" {
+		if k, err := strconv.Atoi(v); err == nil && k > 0 {
+			recallOpts = append(recallOpts, recall.WithRRFK(k))
+		}
+	}
+	recallEngine := recall.NewEngine(database, recallOpts...)
 
 	// --- links ---
 	linkStore := links.NewStore(database, idGen)
