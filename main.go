@@ -332,6 +332,29 @@ func runSave(ctx context.Context, database *sql.DB, cfg config.Config) {
 }
 
 func runRecall(ctx context.Context, database *sql.DB, cfg config.Config) {
+	// Separate positional query from flags to allow flags anywhere on the command line.
+	// Go's flag package stops at first positional, so we extract the query first.
+	args := os.Args[2:]
+	var query string
+	var flagArgs []string
+
+	// Find the first non-flag argument (the query)
+	for i, arg := range args {
+		if !strings.HasPrefix(arg, "-") {
+			query = arg
+			// Collect all other args (both flags before and after the query)
+			flagArgs = append(flagArgs, args[:i]...)
+			flagArgs = append(flagArgs, args[i+1:]...)
+			break
+		}
+	}
+
+	if query == "" {
+		fmt.Fprintln(os.Stderr, "Usage: neurox recall \"query\" [flags]")
+		fmt.Fprintln(os.Stderr, "Flags can appear before or after the query.")
+		os.Exit(1)
+	}
+
 	fs := flag.NewFlagSet("recall", flag.ExitOnError)
 	obsType := fs.String("type", "", "Filter by observation type")
 	kind := fs.String("kind", "", "Filter by memory kind")
@@ -340,14 +363,7 @@ func runRecall(ctx context.Context, database *sql.DB, cfg config.Config) {
 	includeStale := fs.Bool("include-stale", false, "Include stale/expired observations")
 	debug := fs.Bool("debug", false, "Include score breakdown per result")
 	limit := fs.Int("limit", 10, "Max results")
-	fs.Parse(os.Args[2:])
-
-	if fs.NArg() < 1 {
-		fmt.Fprintln(os.Stderr, "Usage: neurox recall \"query\" [flags]")
-		fs.PrintDefaults()
-		os.Exit(1)
-	}
-	query := fs.Arg(0)
+	fs.Parse(flagArgs)
 
 	embedder := embed.AutoDetect(ctx, cfg.Embeddings.Provider, embed.OllamaConfig{URL: cfg.Embeddings.OllamaURL, Model: cfg.Embeddings.OllamaModel}, embed.RemoteConfig{
 		URL: cfg.Embeddings.RemoteURL, APIKey: cfg.Embeddings.RemoteKey,
