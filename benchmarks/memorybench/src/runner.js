@@ -182,6 +182,7 @@ export async function runBenchmark(options = {}) {
     limit = null,
     stratified = false,
     noIngest = false,
+    contextFormat = 'raw',
     judgeProvider = 'auto',
     judgeModel = null,
     answerModel = null,
@@ -308,17 +309,17 @@ export async function runBenchmark(options = {}) {
       const latencies = [];
 
       for (let i = 0; i < checkpoint.results.length; i++) {
-        const result = checkpoint.results[i];
-        const question = result.question;
-        const namespace = result.namespace; // Use question-specific namespace
+         const result = checkpoint.results[i];
+         const question = result.question;
+         const namespace = result.namespace; // Use question-specific namespace
 
-        const t0 = Date.now();
-        const context = await provider.search(question, namespace, 10); // top-10 from this question's haystack
-        const latency = Date.now() - t0;
+         const t0 = Date.now();
+         const context = await provider.search(question, namespace, 10, { contextFormat }); // top-10 from this question's haystack
+         const latency = Date.now() - t0;
 
-        result.context = context;
-        result.latency_ms = latency;
-        latencies.push(latency);
+         result.context = context;
+         result.latency_ms = latency;
+         latencies.push(latency);
 
         if ((i + 1) % 10 === 0) {
           console.log(`  Searched ${i + 1}/${checkpoint.results.length} questions`);
@@ -354,12 +355,12 @@ export async function runBenchmark(options = {}) {
         const context = result.context || '';
 
         try {
-          // Generate answer using LLM (or fallback to context extraction)
-          const answer = await generateAnswer(result.question, context, {
-            provider: answerProvider,
-            model: answerModel,
-            temperature: 0.5,
-          });
+           // Generate answer using LLM (or fallback to context extraction)
+           const answer = await generateAnswer(result.question, context, {
+             provider: answerProvider,
+             model: answerModel,
+             temperature: 0,
+           });
 
           result.predicted = answer;
           answeredCount++;
@@ -434,6 +435,7 @@ export async function runBenchmark(options = {}) {
         benchmark: 'LongMemEval-S',
         provider: 'Neurox',
         provider_url: provider.baseUrl,
+        context_format: contextFormat,
         judge_provider: judgeProvider,
         judge_mode: judgeProvider === 'exact' ? 'exact-match ⚠️  NOT COMPARABLE' : `llm (${judgeProvider})`,
         total_questions: checkpoint.results.length,

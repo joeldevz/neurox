@@ -108,11 +108,44 @@ export class NeuroxProvider {
     return ingestedIds;
   }
 
-  /**
-   * Search for context given a query
-   * Uses FTS5 semantic search endpoint
+/**
+   * Format search results as LLM-ready context with metadata
+   * @param {Array} results - Search results from Neurox API
+   * @returns {string} Formatted context string
    */
-  async search(query, namespace, limit = 5) {
+  _formatAsLLMContext(results) {
+    if (!results || results.length === 0) {
+      return '';
+    }
+
+    const formatted = results
+      .map((r, index) => {
+        const rank = index + 1;
+        const stalenessLabel = r.staleness || 'unknown';
+        const kindLabel = r.kind || 'unknown';
+        const obsTypeLabel = r.observation_type || 'unknown';
+        const confidence = r.confidence ? r.confidence.toFixed(2) : 'unknown';
+        const tags = (r.tags || []).join(', ') || 'none';
+
+        return `${rank}. [Rank #${rank} | Kind: ${kindLabel} | Confidence: ${confidence} | Staleness: ${stalenessLabel}]
+   **Title**: ${r.title || '(no title)'}
+   **Tags**: ${tags}
+   **Observation Type**: ${obsTypeLabel}
+   **Content**:
+   > ${r.content || '(no content)'}`;
+      })
+      .join('\n\n');
+
+    return `**Retrieved Memories (${results.length})**\n\n${formatted}`;
+  }
+
+  /**
+  * Search for context given a query
+  * Uses FTS5 semantic search endpoint
+  */
+  async search(query, namespace, limit = 5, options = {}) {
+    const { contextFormat = 'raw' } = options;
+
     try {
       const params = new URLSearchParams({
         q: query,
@@ -131,8 +164,12 @@ export class NeuroxProvider {
         return '';
       }
 
-      // Aggregate results into context string
-      // Each result has: id, title, content, score, ...
+      // Format based on context format option
+      if (contextFormat === 'llm') {
+        return this._formatAsLLMContext(data.results);
+      }
+
+      // Default raw format: concatenate content only
       const context = data.results
         .map((r) => r.content)
         .join('\n\n---\n\n');

@@ -13,7 +13,7 @@ import { callLLM } from './judge.js';
  * @returns {Promise<string>} Generated answer
  */
 export async function generateAnswer(question, context, config = {}) {
-  const { provider = 'anthropic', model = null, temperature = 0.5 } = config;
+  const { provider = 'anthropic', model = null, temperature = 0 } = config;
 
   // If no context, return early
   if (!context || context.trim().length === 0) {

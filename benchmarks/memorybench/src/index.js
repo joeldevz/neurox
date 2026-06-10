@@ -37,6 +37,11 @@ program
   .option('--stratified', 'Sample proportionally across question types (default: false)', false)
   .option('--no-ingest', 'Skip ingest phase')
   .option(
+    '--context-format <format>',
+    'Context format: raw (default) or llm (LLM-ready with metadata)',
+    'raw'
+  )
+  .option(
     '--judge-provider <provider>',
     'Judge provider: anthropic|openai|gateway|exact|auto',
     'auto'
@@ -95,9 +100,20 @@ program
       const stratified = options.stratified === true;
       const noIngest = options.noIngest === true;
 
+      // Validate context format
+      const validFormats = ['raw', 'llm'];
+      if (!validFormats.includes(options.contextFormat)) {
+        console.error(
+          `Error: Invalid context format: ${options.contextFormat}. ` +
+          `Must be one of: ${validFormats.join(', ')}`
+        );
+        process.exit(1);
+      }
+
       console.log(`\nStarting benchmark: ${runId}`);
       console.log(`Limit: ${limit || 'all'}`);
       console.log(`Sampling: ${stratified ? 'stratified (proportional)' : 'first-N (sequential)'}`);
+      console.log(`Context format: ${options.contextFormat}`);
       console.log(`Judge provider: ${options.judgeProvider}`);
       if (options.judgeModel) console.log(`Judge model: ${options.judgeModel}`);
       if (options.answerModel) console.log(`Answer model: ${options.answerModel}`);
@@ -109,6 +125,7 @@ program
         limit,
         stratified,
         noIngest,
+        contextFormat: options.contextFormat,
         judgeProvider: options.judgeProvider,
         judgeModel: options.judgeModel,
         answerModel: options.answerModel,
