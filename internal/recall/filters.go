@@ -36,7 +36,7 @@ func buildSearchQuery(options SearchOptions, intent TemporalIntent) (string, []a
 		clauses = append(clauses, "o.staleness = ?")
 		args = append(args, options.Staleness)
 	} else if !options.IncludeStale {
-		clauses = append(clauses, "o.staleness <> 'expired'")
+		clauses = append(clauses, "o.staleness NOT IN ('stale', 'expired')")
 	}
 	if options.Retention != "" {
 		clauses = append(clauses, "o.retention = ?")

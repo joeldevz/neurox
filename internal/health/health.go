@@ -234,7 +234,26 @@ func checkEmbedProvider(deps Deps) Dimension {
 	if deps.Embedder != nil && embed.IsAvailable(deps.Embedder) {
 		dim.Score = 10
 		dim.Status = "healthy"
-		dim.Detail = fmt.Sprintf("Provider: %s", deps.Embedder.Name())
+		providerName := deps.Embedder.Name()
+		actualDims := deps.Embedder.Dimensions()
+		
+		// Read stored dimensions from db_settings for comparison
+		var storedDims string
+		if deps.DB != nil {
+			_ = deps.DB.QueryRow(`
+				SELECT value FROM db_settings WHERE key = 'embed_dims'
+			`).Scan(&storedDims)
+		}
+		
+		// Check for dimension mismatch
+		if actualDims > 0 && storedDims != "" && storedDims != fmt.Sprintf("%d", actualDims) {
+			dim.Score = 8
+			dim.Status = "warning"
+			dim.Detail = fmt.Sprintf("Embedding provider active (%s), but dim mismatch: stored=%s actual=%d", providerName, storedDims, actualDims)
+			dim.Recommendation = "Run a recall to trigger dim reconciliation, or re-configure embed.dimensions in config.yaml"
+		} else {
+			dim.Detail = fmt.Sprintf("Provider: %s, dimensions: %d", providerName, actualDims)
+		}
 	} else if deps.EmbedderName != "" && deps.EmbedderName != "disabled" {
 		dim.Score = 10
 		dim.Status = "healthy"

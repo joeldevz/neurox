@@ -48,7 +48,7 @@ func semanticSearch(ctx context.Context, db *sql.DB, provider embed.Provider, qu
 		clauses = append(clauses, "staleness = ?")
 		args = append(args, filter.Staleness)
 	} else if !filter.IncludeStale {
-		clauses = append(clauses, "staleness <> 'expired'")
+		clauses = append(clauses, "staleness NOT IN ('stale', 'expired')")
 	}
 
 	q := `SELECT id, embedding FROM observations WHERE ` +
@@ -144,7 +144,7 @@ func loadObservationsByIDs(ctx context.Context, db *sql.DB, ids []string, option
 		clauses = append(clauses, "o.staleness = ?")
 		args = append(args, options.Staleness)
 	} else if !options.IncludeStale {
-		clauses = append(clauses, "o.staleness <> 'expired'")
+		clauses = append(clauses, "o.staleness NOT IN ('stale', 'expired')")
 	}
 	if options.Retention != "" {
 		clauses = append(clauses, "o.retention = ?")
@@ -247,7 +247,7 @@ func loadNamespaceBackfill(ctx context.Context, db *sql.DB, options SearchOption
 		clauses = append(clauses, "o.staleness = ?")
 		args = append(args, options.Staleness)
 	} else if !options.IncludeStale {
-		clauses = append(clauses, "o.staleness <> 'expired'")
+		clauses = append(clauses, "o.staleness NOT IN ('stale', 'expired')")
 	}
 	clauses = append(clauses, "(o.valid_until IS NULL OR o.valid_until > datetime('now'))")
 

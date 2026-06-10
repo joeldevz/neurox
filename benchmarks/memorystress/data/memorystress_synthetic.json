@@ -1,0 +1,1753 @@
+{
+  "facts": [
+    {
+      "id": "f001",
+      "category": "preference",
+      "text": "User prefers dark mode"
+    },
+    {
+      "id": "f002",
+      "category": "preference",
+      "text": "User prefers light mode"
+    },
+    {
+      "id": "f003",
+      "category": "preference",
+      "text": "User prefers dark mode"
+    },
+    {
+      "id": "f004",
+      "category": "preference",
+      "text": "User prefers light mode"
+    },
+    {
+      "id": "f005",
+      "category": "preference",
+      "text": "User prefers dark mode"
+    },
+    {
+      "id": "f006",
+      "category": "preference",
+      "text": "User likes VSCode for editing"
+    },
+    {
+      "id": "f007",
+      "category": "preference",
+      "text": "User likes Vim for debugging"
+    },
+    {
+      "id": "f008",
+      "category": "preference",
+      "text": "User likes Neovim for refactoring"
+    },
+    {
+      "id": "f009",
+      "category": "preference",
+      "text": "User likes IntelliJ for editing"
+    },
+    {
+      "id": "f010",
+      "category": "preference",
+      "text": "User likes VSCode for debugging"
+    },
+    {
+      "id": "f011",
+      "category": "decision",
+      "text": "Team decided on TDD methodology"
+    },
+    {
+      "id": "f012",
+      "category": "decision",
+      "text": "Team decided on BDD methodology"
+    },
+    {
+      "id": "f013",
+      "category": "decision",
+      "text": "Team decided on DDD methodology"
+    },
+    {
+      "id": "f014",
+      "category": "decision",
+      "text": "Team decided on Agile methodology"
+    },
+    {
+      "id": "f015",
+      "category": "decision",
+      "text": "Team decided on TDD methodology"
+    },
+    {
+      "id": "f016",
+      "category": "technical_fact",
+      "text": "The API is written in Go"
+    },
+    {
+      "id": "f017",
+      "category": "technical_fact",
+      "text": "The Database is written in Go"
+    },
+    {
+      "id": "f018",
+      "category": "technical_fact",
+      "text": "The Frontend is written in Go"
+    },
+    {
+      "id": "f019",
+      "category": "technical_fact",
+      "text": "The Cache is written in Go"
+    },
+    {
+      "id": "f020",
+      "category": "technical_fact",
+      "text": "The API is written in Go"
+    },
+    {
+      "id": "f021",
+      "category": "personal_info",
+      "text": "User has 3 years of experience"
+    },
+    {
+      "id": "f022",
+      "category": "personal_info",
+      "text": "User has 4 years of experience"
+    },
+    {
+      "id": "f023",
+      "category": "personal_info",
+      "text": "User has 5 years of experience"
+    },
+    {
+      "id": "f024",
+      "category": "event",
+      "text": "Team shipped feature Feature-1"
+    },
+    {
+      "id": "f025",
+      "category": "event",
+      "text": "Team shipped feature Feature-2"
+    },
+    {
+      "id": "f026",
+      "category": "event",
+      "text": "Team shipped feature Feature-3"
+    },
+    {
+      "id": "f027",
+      "category": "relationship",
+      "text": "User works with Alice on the backend team"
+    },
+    {
+      "id": "f028",
+      "category": "relationship",
+      "text": "User works with Bob on the backend team"
+    },
+    {
+      "id": "f029",
+      "category": "relationship",
+      "text": "User works with Charlie on the backend team"
+    },
+    {
+      "id": "f030",
+      "category": "relationship",
+      "text": "User works with Diana on the backend team"
+    }
+  ],
+  "sessions": [
+    {
+      "session_id": 1,
+      "date_offset_days": 0,
+      "turns": [
+        {
+          "role": "user",
+          "content": "How should I handle error handling?"
+        },
+        {
+          "role": "assistant",
+          "content": "Based on your preferences, I recommend using TDD. You mentioned you prefer dark mode and Go."
+        },
+        {
+          "role": "user",
+          "content": "That makes sense. But I'm thinking about testing strategies."
+        },
+        {
+          "role": "assistant",
+          "content": "That's a good point. Let me consider the context..."
+        },
+        {
+          "role": "user",
+          "content": "What do you remember about the release plan?"
+        }
+      ],
+      "facts_introduced": [],
+      "facts_contradicted": []
+    },
+    {
+      "session_id": 2,
+      "date_offset_days": 6,
+      "turns": [
+        {
+          "role": "user",
+          "content": "How should I handle error handling?"
+        },
+        {
+          "role": "assistant",
+          "content": "Based on your preferences, I recommend using TDD. You mentioned you prefer dark mode and Go."
+        },
+        {
+          "role": "user",
+          "content": "That makes sense. But I'm thinking about testing strategies."
+        },
+        {
+          "role": "assistant",
+          "content": "That's a good point. Let me consider the context..."
+        },
+        {
+          "role": "user",
+          "content": "What do you remember about the release plan?"
+        },
+        {
+          "role": "assistant",
+          "content": "I recall that you prefer dark mode and automated tests. Has anything changed?"
+        }
+      ],
+      "facts_introduced": [],
+      "facts_contradicted": []
+    },
+    {
+      "session_id": 3,
+      "date_offset_days": 12,
+      "turns": [
+        {
+          "role": "user",
+          "content": "How should I handle error handling?"
+        },
+        {
+          "role": "assistant",
+          "content": "Based on your preferences, I recommend using TDD. You mentioned you prefer dark mode and Go."
+        },
+        {
+          "role": "user",
+          "content": "That makes sense. But I'm thinking about testing strategies."
+        },
+        {
+          "role": "assistant",
+          "content": "That's a good point. Let me consider the context..."
+        }
+      ],
+      "facts_introduced": [],
+      "facts_contradicted": []
+    },
+    {
+      "session_id": 4,
+      "date_offset_days": 18,
+      "turns": [
+        {
+          "role": "user",
+          "content": "How should I handle error handling?"
+        },
+        {
+          "role": "assistant",
+          "content": "Based on your preferences, I recommend using TDD. You mentioned you prefer dark mode and Go."
+        },
+        {
+          "role": "user",
+          "content": "That makes sense. But I'm thinking about testing strategies."
+        },
+        {
+          "role": "assistant",
+          "content": "That's a good point. Let me consider the context..."
+        },
+        {
+          "role": "user",
+          "content": "What do you remember about the release plan?"
+        }
+      ],
+      "facts_introduced": [],
+      "facts_contradicted": []
+    },
+    {
+      "session_id": 5,
+      "date_offset_days": 24,
+      "turns": [
+        {
+          "role": "user",
+          "content": "How should I handle error handling?"
+        },
+        {
+          "role": "assistant",
+          "content": "Based on your preferences, I recommend using TDD. You mentioned you prefer dark mode and Go."
+        },
+        {
+          "role": "user",
+          "content": "That makes sense. But I'm thinking about testing strategies."
+        },
+        {
+          "role": "assistant",
+          "content": "That's a good point. Let me consider the context..."
+        },
+        {
+          "role": "user",
+          "content": "What do you remember about the release plan?"
+        },
+        {
+          "role": "assistant",
+          "content": "I recall that you prefer dark mode and automated tests. Has anything changed?"
+        }
+      ],
+      "facts_introduced": [
+        "f002"
+      ],
+      "facts_contradicted": []
+    },
+    {
+      "session_id": 6,
+      "date_offset_days": 30,
+      "turns": [
+        {
+          "role": "user",
+          "content": "How should I handle error handling?"
+        },
+        {
+          "role": "assistant",
+          "content": "Based on your preferences, I recommend using TDD. You mentioned you prefer dark mode and Go."
+        },
+        {
+          "role": "user",
+          "content": "That makes sense. But I'm thinking about testing strategies."
+        },
+        {
+          "role": "assistant",
+          "content": "That's a good point. Let me consider the context..."
+        }
+      ],
+      "facts_introduced": [],
+      "facts_contradicted": []
+    },
+    {
+      "session_id": 7,
+      "date_offset_days": 36,
+      "turns": [
+        {
+          "role": "user",
+          "content": "How should I handle error handling?"
+        },
+        {
+          "role": "assistant",
+          "content": "Based on your preferences, I recommend using TDD. You mentioned you prefer dark mode and Go."
+        },
+        {
+          "role": "user",
+          "content": "That makes sense. But I'm thinking about testing strategies."
+        },
+        {
+          "role": "assistant",
+          "content": "That's a good point. Let me consider the context..."
+        },
+        {
+          "role": "user",
+          "content": "What do you remember about the release plan?"
+        }
+      ],
+      "facts_introduced": [],
+      "facts_contradicted": []
+    },
+    {
+      "session_id": 8,
+      "date_offset_days": 42,
+      "turns": [
+        {
+          "role": "user",
+          "content": "How should I handle error handling?"
+        },
+        {
+          "role": "assistant",
+          "content": "Based on your preferences, I recommend using TDD. You mentioned you prefer dark mode and Go."
+        },
+        {
+          "role": "user",
+          "content": "That makes sense. But I'm thinking about testing strategies."
+        },
+        {
+          "role": "assistant",
+          "content": "That's a good point. Let me consider the context..."
+        },
+        {
+          "role": "user",
+          "content": "What do you remember about the release plan?"
+        },
+        {
+          "role": "assistant",
+          "content": "I recall that you prefer dark mode and automated tests. Has anything changed?"
+        }
+      ],
+      "facts_introduced": [],
+      "facts_contradicted": []
+    },
+    {
+      "session_id": 9,
+      "date_offset_days": 48,
+      "turns": [
+        {
+          "role": "user",
+          "content": "How should I handle error handling?"
+        },
+        {
+          "role": "assistant",
+          "content": "Based on your preferences, I recommend using TDD. You mentioned you prefer dark mode and Go."
+        },
+        {
+          "role": "user",
+          "content": "That makes sense. But I'm thinking about testing strategies."
+        },
+        {
+          "role": "assistant",
+          "content": "That's a good point. Let me consider the context..."
+        }
+      ],
+      "facts_introduced": [],
+      "facts_contradicted": []
+    },
+    {
+      "session_id": 10,
+      "date_offset_days": 54,
+      "turns": [
+        {
+          "role": "user",
+          "content": "How should I handle error handling?"
+        },
+        {
+          "role": "assistant",
+          "content": "Based on your preferences, I recommend using TDD. You mentioned you prefer dark mode and Go."
+        },
+        {
+          "role": "user",
+          "content": "That makes sense. But I'm thinking about testing strategies."
+        },
+        {
+          "role": "assistant",
+          "content": "That's a good point. Let me consider the context..."
+        },
+        {
+          "role": "user",
+          "content": "What do you remember about the release plan?"
+        }
+      ],
+      "facts_introduced": [
+        "f003"
+      ],
+      "facts_contradicted": []
+    },
+    {
+      "session_id": 11,
+      "date_offset_days": 60,
+      "turns": [
+        {
+          "role": "user",
+          "content": "How should I handle error handling?"
+        },
+        {
+          "role": "assistant",
+          "content": "Based on your preferences, I recommend using TDD. You mentioned you prefer dark mode and Go."
+        },
+        {
+          "role": "user",
+          "content": "That makes sense. But I'm thinking about testing strategies."
+        },
+        {
+          "role": "assistant",
+          "content": "That's a good point. Let me consider the context..."
+        },
+        {
+          "role": "user",
+          "content": "What do you remember about the release plan?"
+        },
+        {
+          "role": "assistant",
+          "content": "I recall that you prefer dark mode and automated tests. Has anything changed?"
+        }
+      ],
+      "facts_introduced": [],
+      "facts_contradicted": []
+    },
+    {
+      "session_id": 12,
+      "date_offset_days": 66,
+      "turns": [
+        {
+          "role": "user",
+          "content": "How should I handle error handling?"
+        },
+        {
+          "role": "assistant",
+          "content": "Based on your preferences, I recommend using TDD. You mentioned you prefer dark mode and Go."
+        },
+        {
+          "role": "user",
+          "content": "That makes sense. But I'm thinking about testing strategies."
+        },
+        {
+          "role": "assistant",
+          "content": "That's a good point. Let me consider the context..."
+        }
+      ],
+      "facts_introduced": [],
+      "facts_contradicted": []
+    },
+    {
+      "session_id": 13,
+      "date_offset_days": 72,
+      "turns": [
+        {
+          "role": "user",
+          "content": "How should I handle error handling?"
+        },
+        {
+          "role": "assistant",
+          "content": "Based on your preferences, I recommend using TDD. You mentioned you prefer dark mode and Go."
+        },
+        {
+          "role": "user",
+          "content": "That makes sense. But I'm thinking about testing strategies."
+        },
+        {
+          "role": "assistant",
+          "content": "That's a good point. Let me consider the context..."
+        },
+        {
+          "role": "user",
+          "content": "What do you remember about the release plan?"
+        }
+      ],
+      "facts_introduced": [],
+      "facts_contradicted": []
+    },
+    {
+      "session_id": 14,
+      "date_offset_days": 78,
+      "turns": [
+        {
+          "role": "user",
+          "content": "How should I handle error handling?"
+        },
+        {
+          "role": "assistant",
+          "content": "Based on your preferences, I recommend using TDD. You mentioned you prefer dark mode and Go."
+        },
+        {
+          "role": "user",
+          "content": "That makes sense. But I'm thinking about testing strategies."
+        },
+        {
+          "role": "assistant",
+          "content": "That's a good point. Let me consider the context..."
+        },
+        {
+          "role": "user",
+          "content": "What do you remember about the release plan?"
+        },
+        {
+          "role": "assistant",
+          "content": "I recall that you prefer dark mode and automated tests. Has anything changed?"
+        }
+      ],
+      "facts_introduced": [],
+      "facts_contradicted": []
+    },
+    {
+      "session_id": 15,
+      "date_offset_days": 84,
+      "turns": [
+        {
+          "role": "user",
+          "content": "How should I handle error handling?"
+        },
+        {
+          "role": "assistant",
+          "content": "Based on your preferences, I recommend using TDD. You mentioned you prefer dark mode and Go."
+        },
+        {
+          "role": "user",
+          "content": "That makes sense. But I'm thinking about testing strategies."
+        },
+        {
+          "role": "assistant",
+          "content": "That's a good point. Let me consider the context..."
+        }
+      ],
+      "facts_introduced": [
+        "f004"
+      ],
+      "facts_contradicted": []
+    },
+    {
+      "session_id": 16,
+      "date_offset_days": 90,
+      "turns": [
+        {
+          "role": "user",
+          "content": "How should I handle error handling?"
+        },
+        {
+          "role": "assistant",
+          "content": "Based on your preferences, I recommend using TDD. You mentioned you prefer dark mode and Go."
+        },
+        {
+          "role": "user",
+          "content": "That makes sense. But I'm thinking about testing strategies."
+        },
+        {
+          "role": "assistant",
+          "content": "That's a good point. Let me consider the context..."
+        },
+        {
+          "role": "user",
+          "content": "What do you remember about the release plan?"
+        }
+      ],
+      "facts_introduced": [],
+      "facts_contradicted": []
+    },
+    {
+      "session_id": 17,
+      "date_offset_days": 96,
+      "turns": [
+        {
+          "role": "user",
+          "content": "How should I handle error handling?"
+        },
+        {
+          "role": "assistant",
+          "content": "Based on your preferences, I recommend using TDD. You mentioned you prefer dark mode and Go."
+        },
+        {
+          "role": "user",
+          "content": "That makes sense. But I'm thinking about testing strategies."
+        },
+        {
+          "role": "assistant",
+          "content": "That's a good point. Let me consider the context..."
+        },
+        {
+          "role": "user",
+          "content": "What do you remember about the release plan?"
+        },
+        {
+          "role": "assistant",
+          "content": "I recall that you prefer dark mode and automated tests. Has anything changed?"
+        }
+      ],
+      "facts_introduced": [],
+      "facts_contradicted": []
+    },
+    {
+      "session_id": 18,
+      "date_offset_days": 102,
+      "turns": [
+        {
+          "role": "user",
+          "content": "How should I handle error handling?"
+        },
+        {
+          "role": "assistant",
+          "content": "Based on your preferences, I recommend using TDD. You mentioned you prefer dark mode and Go."
+        },
+        {
+          "role": "user",
+          "content": "That makes sense. But I'm thinking about testing strategies."
+        },
+        {
+          "role": "assistant",
+          "content": "That's a good point. Let me consider the context..."
+        }
+      ],
+      "facts_introduced": [],
+      "facts_contradicted": []
+    },
+    {
+      "session_id": 19,
+      "date_offset_days": 108,
+      "turns": [
+        {
+          "role": "user",
+          "content": "How should I handle error handling?"
+        },
+        {
+          "role": "assistant",
+          "content": "Based on your preferences, I recommend using TDD. You mentioned you prefer dark mode and Go."
+        },
+        {
+          "role": "user",
+          "content": "That makes sense. But I'm thinking about testing strategies."
+        },
+        {
+          "role": "assistant",
+          "content": "That's a good point. Let me consider the context..."
+        },
+        {
+          "role": "user",
+          "content": "What do you remember about the release plan?"
+        }
+      ],
+      "facts_introduced": [],
+      "facts_contradicted": []
+    },
+    {
+      "session_id": 20,
+      "date_offset_days": 114,
+      "turns": [
+        {
+          "role": "user",
+          "content": "How should I handle error handling?"
+        },
+        {
+          "role": "assistant",
+          "content": "Based on your preferences, I recommend using TDD. You mentioned you prefer dark mode and Go."
+        },
+        {
+          "role": "user",
+          "content": "That makes sense. But I'm thinking about testing strategies."
+        },
+        {
+          "role": "assistant",
+          "content": "That's a good point. Let me consider the context..."
+        },
+        {
+          "role": "user",
+          "content": "What do you remember about the release plan?"
+        },
+        {
+          "role": "assistant",
+          "content": "I recall that you prefer dark mode and automated tests. Has anything changed?"
+        }
+      ],
+      "facts_introduced": [
+        "f005"
+      ],
+      "facts_contradicted": []
+    },
+    {
+      "session_id": 21,
+      "date_offset_days": 120,
+      "turns": [
+        {
+          "role": "user",
+          "content": "How should I handle error handling?"
+        },
+        {
+          "role": "assistant",
+          "content": "Based on your preferences, I recommend using TDD. You mentioned you prefer dark mode and Go."
+        },
+        {
+          "role": "user",
+          "content": "That makes sense. But I'm thinking about testing strategies."
+        },
+        {
+          "role": "assistant",
+          "content": "That's a good point. Let me consider the context..."
+        }
+      ],
+      "facts_introduced": [],
+      "facts_contradicted": []
+    },
+    {
+      "session_id": 22,
+      "date_offset_days": 126,
+      "turns": [
+        {
+          "role": "user",
+          "content": "How should I handle error handling?"
+        },
+        {
+          "role": "assistant",
+          "content": "Based on your preferences, I recommend using TDD. You mentioned you prefer dark mode and Go."
+        },
+        {
+          "role": "user",
+          "content": "That makes sense. But I'm thinking about testing strategies."
+        },
+        {
+          "role": "assistant",
+          "content": "That's a good point. Let me consider the context..."
+        },
+        {
+          "role": "user",
+          "content": "What do you remember about the release plan?"
+        }
+      ],
+      "facts_introduced": [],
+      "facts_contradicted": []
+    },
+    {
+      "session_id": 23,
+      "date_offset_days": 132,
+      "turns": [
+        {
+          "role": "user",
+          "content": "How should I handle error handling?"
+        },
+        {
+          "role": "assistant",
+          "content": "Based on your preferences, I recommend using TDD. You mentioned you prefer dark mode and Go."
+        },
+        {
+          "role": "user",
+          "content": "That makes sense. But I'm thinking about testing strategies."
+        },
+        {
+          "role": "assistant",
+          "content": "That's a good point. Let me consider the context..."
+        },
+        {
+          "role": "user",
+          "content": "What do you remember about the release plan?"
+        },
+        {
+          "role": "assistant",
+          "content": "I recall that you prefer dark mode and automated tests. Has anything changed?"
+        }
+      ],
+      "facts_introduced": [],
+      "facts_contradicted": []
+    },
+    {
+      "session_id": 24,
+      "date_offset_days": 138,
+      "turns": [
+        {
+          "role": "user",
+          "content": "How should I handle error handling?"
+        },
+        {
+          "role": "assistant",
+          "content": "Based on your preferences, I recommend using TDD. You mentioned you prefer dark mode and Go."
+        },
+        {
+          "role": "user",
+          "content": "That makes sense. But I'm thinking about testing strategies."
+        },
+        {
+          "role": "assistant",
+          "content": "That's a good point. Let me consider the context..."
+        }
+      ],
+      "facts_introduced": [],
+      "facts_contradicted": []
+    },
+    {
+      "session_id": 25,
+      "date_offset_days": 144,
+      "turns": [
+        {
+          "role": "user",
+          "content": "How should I handle error handling?"
+        },
+        {
+          "role": "assistant",
+          "content": "Based on your preferences, I recommend using TDD. You mentioned you prefer dark mode and Go."
+        },
+        {
+          "role": "user",
+          "content": "That makes sense. But I'm thinking about testing strategies."
+        },
+        {
+          "role": "assistant",
+          "content": "That's a good point. Let me consider the context..."
+        },
+        {
+          "role": "user",
+          "content": "What do you remember about the release plan?"
+        }
+      ],
+      "facts_introduced": [
+        "f006"
+      ],
+      "facts_contradicted": []
+    },
+    {
+      "session_id": 26,
+      "date_offset_days": 150,
+      "turns": [
+        {
+          "role": "user",
+          "content": "How should I handle error handling?"
+        },
+        {
+          "role": "assistant",
+          "content": "Based on your preferences, I recommend using TDD. You mentioned you prefer dark mode and Go."
+        },
+        {
+          "role": "user",
+          "content": "That makes sense. But I'm thinking about testing strategies."
+        },
+        {
+          "role": "assistant",
+          "content": "That's a good point. Let me consider the context..."
+        },
+        {
+          "role": "user",
+          "content": "What do you remember about the release plan?"
+        },
+        {
+          "role": "assistant",
+          "content": "I recall that you prefer dark mode and automated tests. Has anything changed?"
+        }
+      ],
+      "facts_introduced": [],
+      "facts_contradicted": []
+    },
+    {
+      "session_id": 27,
+      "date_offset_days": 156,
+      "turns": [
+        {
+          "role": "user",
+          "content": "How should I handle error handling?"
+        },
+        {
+          "role": "assistant",
+          "content": "Based on your preferences, I recommend using TDD. You mentioned you prefer dark mode and Go."
+        },
+        {
+          "role": "user",
+          "content": "That makes sense. But I'm thinking about testing strategies."
+        },
+        {
+          "role": "assistant",
+          "content": "That's a good point. Let me consider the context..."
+        }
+      ],
+      "facts_introduced": [],
+      "facts_contradicted": []
+    },
+    {
+      "session_id": 28,
+      "date_offset_days": 162,
+      "turns": [
+        {
+          "role": "user",
+          "content": "How should I handle error handling?"
+        },
+        {
+          "role": "assistant",
+          "content": "Based on your preferences, I recommend using TDD. You mentioned you prefer dark mode and Go."
+        },
+        {
+          "role": "user",
+          "content": "That makes sense. But I'm thinking about testing strategies."
+        },
+        {
+          "role": "assistant",
+          "content": "That's a good point. Let me consider the context..."
+        },
+        {
+          "role": "user",
+          "content": "What do you remember about the release plan?"
+        }
+      ],
+      "facts_introduced": [],
+      "facts_contradicted": []
+    },
+    {
+      "session_id": 29,
+      "date_offset_days": 168,
+      "turns": [
+        {
+          "role": "user",
+          "content": "How should I handle error handling?"
+        },
+        {
+          "role": "assistant",
+          "content": "Based on your preferences, I recommend using TDD. You mentioned you prefer dark mode and Go."
+        },
+        {
+          "role": "user",
+          "content": "That makes sense. But I'm thinking about testing strategies."
+        },
+        {
+          "role": "assistant",
+          "content": "That's a good point. Let me consider the context..."
+        },
+        {
+          "role": "user",
+          "content": "What do you remember about the release plan?"
+        },
+        {
+          "role": "assistant",
+          "content": "I recall that you prefer dark mode and automated tests. Has anything changed?"
+        }
+      ],
+      "facts_introduced": [],
+      "facts_contradicted": []
+    },
+    {
+      "session_id": 30,
+      "date_offset_days": 174,
+      "turns": [
+        {
+          "role": "user",
+          "content": "How should I handle error handling?"
+        },
+        {
+          "role": "assistant",
+          "content": "Based on your preferences, I recommend using TDD. You mentioned you prefer dark mode and Go."
+        },
+        {
+          "role": "user",
+          "content": "That makes sense. But I'm thinking about testing strategies."
+        },
+        {
+          "role": "assistant",
+          "content": "That's a good point. Let me consider the context..."
+        }
+      ],
+      "facts_introduced": [
+        "f007"
+      ],
+      "facts_contradicted": [
+        "f003"
+      ]
+    },
+    {
+      "session_id": 31,
+      "date_offset_days": 180,
+      "turns": [
+        {
+          "role": "user",
+          "content": "How should I handle error handling?"
+        },
+        {
+          "role": "assistant",
+          "content": "Based on your preferences, I recommend using TDD. You mentioned you prefer dark mode and Go."
+        },
+        {
+          "role": "user",
+          "content": "That makes sense. But I'm thinking about testing strategies."
+        },
+        {
+          "role": "assistant",
+          "content": "That's a good point. Let me consider the context..."
+        },
+        {
+          "role": "user",
+          "content": "What do you remember about the release plan?"
+        }
+      ],
+      "facts_introduced": [],
+      "facts_contradicted": []
+    },
+    {
+      "session_id": 32,
+      "date_offset_days": 186,
+      "turns": [
+        {
+          "role": "user",
+          "content": "How should I handle error handling?"
+        },
+        {
+          "role": "assistant",
+          "content": "Based on your preferences, I recommend using TDD. You mentioned you prefer dark mode and Go."
+        },
+        {
+          "role": "user",
+          "content": "That makes sense. But I'm thinking about testing strategies."
+        },
+        {
+          "role": "assistant",
+          "content": "That's a good point. Let me consider the context..."
+        },
+        {
+          "role": "user",
+          "content": "What do you remember about the release plan?"
+        },
+        {
+          "role": "assistant",
+          "content": "I recall that you prefer dark mode and automated tests. Has anything changed?"
+        }
+      ],
+      "facts_introduced": [],
+      "facts_contradicted": []
+    },
+    {
+      "session_id": 33,
+      "date_offset_days": 192,
+      "turns": [
+        {
+          "role": "user",
+          "content": "How should I handle error handling?"
+        },
+        {
+          "role": "assistant",
+          "content": "Based on your preferences, I recommend using TDD. You mentioned you prefer dark mode and Go."
+        },
+        {
+          "role": "user",
+          "content": "That makes sense. But I'm thinking about testing strategies."
+        },
+        {
+          "role": "assistant",
+          "content": "That's a good point. Let me consider the context..."
+        }
+      ],
+      "facts_introduced": [],
+      "facts_contradicted": []
+    },
+    {
+      "session_id": 34,
+      "date_offset_days": 198,
+      "turns": [
+        {
+          "role": "user",
+          "content": "How should I handle error handling?"
+        },
+        {
+          "role": "assistant",
+          "content": "Based on your preferences, I recommend using TDD. You mentioned you prefer dark mode and Go."
+        },
+        {
+          "role": "user",
+          "content": "That makes sense. But I'm thinking about testing strategies."
+        },
+        {
+          "role": "assistant",
+          "content": "That's a good point. Let me consider the context..."
+        },
+        {
+          "role": "user",
+          "content": "What do you remember about the release plan?"
+        }
+      ],
+      "facts_introduced": [],
+      "facts_contradicted": []
+    },
+    {
+      "session_id": 35,
+      "date_offset_days": 204,
+      "turns": [
+        {
+          "role": "user",
+          "content": "How should I handle error handling?"
+        },
+        {
+          "role": "assistant",
+          "content": "Based on your preferences, I recommend using TDD. You mentioned you prefer dark mode and Go."
+        },
+        {
+          "role": "user",
+          "content": "That makes sense. But I'm thinking about testing strategies."
+        },
+        {
+          "role": "assistant",
+          "content": "That's a good point. Let me consider the context..."
+        },
+        {
+          "role": "user",
+          "content": "What do you remember about the release plan?"
+        },
+        {
+          "role": "assistant",
+          "content": "I recall that you prefer dark mode and automated tests. Has anything changed?"
+        }
+      ],
+      "facts_introduced": [
+        "f008"
+      ],
+      "facts_contradicted": []
+    },
+    {
+      "session_id": 36,
+      "date_offset_days": 210,
+      "turns": [
+        {
+          "role": "user",
+          "content": "How should I handle error handling?"
+        },
+        {
+          "role": "assistant",
+          "content": "Based on your preferences, I recommend using TDD. You mentioned you prefer dark mode and Go."
+        },
+        {
+          "role": "user",
+          "content": "That makes sense. But I'm thinking about testing strategies."
+        },
+        {
+          "role": "assistant",
+          "content": "That's a good point. Let me consider the context..."
+        }
+      ],
+      "facts_introduced": [],
+      "facts_contradicted": []
+    },
+    {
+      "session_id": 37,
+      "date_offset_days": 216,
+      "turns": [
+        {
+          "role": "user",
+          "content": "How should I handle error handling?"
+        },
+        {
+          "role": "assistant",
+          "content": "Based on your preferences, I recommend using TDD. You mentioned you prefer dark mode and Go."
+        },
+        {
+          "role": "user",
+          "content": "That makes sense. But I'm thinking about testing strategies."
+        },
+        {
+          "role": "assistant",
+          "content": "That's a good point. Let me consider the context..."
+        },
+        {
+          "role": "user",
+          "content": "What do you remember about the release plan?"
+        }
+      ],
+      "facts_introduced": [],
+      "facts_contradicted": []
+    },
+    {
+      "session_id": 38,
+      "date_offset_days": 222,
+      "turns": [
+        {
+          "role": "user",
+          "content": "How should I handle error handling?"
+        },
+        {
+          "role": "assistant",
+          "content": "Based on your preferences, I recommend using TDD. You mentioned you prefer dark mode and Go."
+        },
+        {
+          "role": "user",
+          "content": "That makes sense. But I'm thinking about testing strategies."
+        },
+        {
+          "role": "assistant",
+          "content": "That's a good point. Let me consider the context..."
+        },
+        {
+          "role": "user",
+          "content": "What do you remember about the release plan?"
+        },
+        {
+          "role": "assistant",
+          "content": "I recall that you prefer dark mode and automated tests. Has anything changed?"
+        }
+      ],
+      "facts_introduced": [],
+      "facts_contradicted": []
+    },
+    {
+      "session_id": 39,
+      "date_offset_days": 228,
+      "turns": [
+        {
+          "role": "user",
+          "content": "How should I handle error handling?"
+        },
+        {
+          "role": "assistant",
+          "content": "Based on your preferences, I recommend using TDD. You mentioned you prefer dark mode and Go."
+        },
+        {
+          "role": "user",
+          "content": "That makes sense. But I'm thinking about testing strategies."
+        },
+        {
+          "role": "assistant",
+          "content": "That's a good point. Let me consider the context..."
+        }
+      ],
+      "facts_introduced": [],
+      "facts_contradicted": []
+    },
+    {
+      "session_id": 40,
+      "date_offset_days": 234,
+      "turns": [
+        {
+          "role": "user",
+          "content": "How should I handle error handling?"
+        },
+        {
+          "role": "assistant",
+          "content": "Based on your preferences, I recommend using TDD. You mentioned you prefer dark mode and Go."
+        },
+        {
+          "role": "user",
+          "content": "That makes sense. But I'm thinking about testing strategies."
+        },
+        {
+          "role": "assistant",
+          "content": "That's a good point. Let me consider the context..."
+        },
+        {
+          "role": "user",
+          "content": "What do you remember about the release plan?"
+        }
+      ],
+      "facts_introduced": [
+        "f009"
+      ],
+      "facts_contradicted": []
+    },
+    {
+      "session_id": 41,
+      "date_offset_days": 240,
+      "turns": [
+        {
+          "role": "user",
+          "content": "How should I handle error handling?"
+        },
+        {
+          "role": "assistant",
+          "content": "Based on your preferences, I recommend using TDD. You mentioned you prefer dark mode and Go."
+        },
+        {
+          "role": "user",
+          "content": "That makes sense. But I'm thinking about testing strategies."
+        },
+        {
+          "role": "assistant",
+          "content": "That's a good point. Let me consider the context..."
+        },
+        {
+          "role": "user",
+          "content": "What do you remember about the release plan?"
+        },
+        {
+          "role": "assistant",
+          "content": "I recall that you prefer dark mode and automated tests. Has anything changed?"
+        }
+      ],
+      "facts_introduced": [],
+      "facts_contradicted": []
+    },
+    {
+      "session_id": 42,
+      "date_offset_days": 246,
+      "turns": [
+        {
+          "role": "user",
+          "content": "How should I handle error handling?"
+        },
+        {
+          "role": "assistant",
+          "content": "Based on your preferences, I recommend using TDD. You mentioned you prefer dark mode and Go."
+        },
+        {
+          "role": "user",
+          "content": "That makes sense. But I'm thinking about testing strategies."
+        },
+        {
+          "role": "assistant",
+          "content": "That's a good point. Let me consider the context..."
+        }
+      ],
+      "facts_introduced": [],
+      "facts_contradicted": []
+    },
+    {
+      "session_id": 43,
+      "date_offset_days": 252,
+      "turns": [
+        {
+          "role": "user",
+          "content": "How should I handle error handling?"
+        },
+        {
+          "role": "assistant",
+          "content": "Based on your preferences, I recommend using TDD. You mentioned you prefer dark mode and Go."
+        },
+        {
+          "role": "user",
+          "content": "That makes sense. But I'm thinking about testing strategies."
+        },
+        {
+          "role": "assistant",
+          "content": "That's a good point. Let me consider the context..."
+        },
+        {
+          "role": "user",
+          "content": "What do you remember about the release plan?"
+        }
+      ],
+      "facts_introduced": [],
+      "facts_contradicted": []
+    },
+    {
+      "session_id": 44,
+      "date_offset_days": 258,
+      "turns": [
+        {
+          "role": "user",
+          "content": "How should I handle error handling?"
+        },
+        {
+          "role": "assistant",
+          "content": "Based on your preferences, I recommend using TDD. You mentioned you prefer dark mode and Go."
+        },
+        {
+          "role": "user",
+          "content": "That makes sense. But I'm thinking about testing strategies."
+        },
+        {
+          "role": "assistant",
+          "content": "That's a good point. Let me consider the context..."
+        },
+        {
+          "role": "user",
+          "content": "What do you remember about the release plan?"
+        },
+        {
+          "role": "assistant",
+          "content": "I recall that you prefer dark mode and automated tests. Has anything changed?"
+        }
+      ],
+      "facts_introduced": [],
+      "facts_contradicted": []
+    },
+    {
+      "session_id": 45,
+      "date_offset_days": 264,
+      "turns": [
+        {
+          "role": "user",
+          "content": "How should I handle error handling?"
+        },
+        {
+          "role": "assistant",
+          "content": "Based on your preferences, I recommend using TDD. You mentioned you prefer dark mode and Go."
+        },
+        {
+          "role": "user",
+          "content": "That makes sense. But I'm thinking about testing strategies."
+        },
+        {
+          "role": "assistant",
+          "content": "That's a good point. Let me consider the context..."
+        }
+      ],
+      "facts_introduced": [
+        "f010"
+      ],
+      "facts_contradicted": [
+        "f004"
+      ]
+    },
+    {
+      "session_id": 46,
+      "date_offset_days": 270,
+      "turns": [
+        {
+          "role": "user",
+          "content": "How should I handle error handling?"
+        },
+        {
+          "role": "assistant",
+          "content": "Based on your preferences, I recommend using TDD. You mentioned you prefer dark mode and Go."
+        },
+        {
+          "role": "user",
+          "content": "That makes sense. But I'm thinking about testing strategies."
+        },
+        {
+          "role": "assistant",
+          "content": "That's a good point. Let me consider the context..."
+        },
+        {
+          "role": "user",
+          "content": "What do you remember about the release plan?"
+        }
+      ],
+      "facts_introduced": [],
+      "facts_contradicted": []
+    },
+    {
+      "session_id": 47,
+      "date_offset_days": 276,
+      "turns": [
+        {
+          "role": "user",
+          "content": "How should I handle error handling?"
+        },
+        {
+          "role": "assistant",
+          "content": "Based on your preferences, I recommend using TDD. You mentioned you prefer dark mode and Go."
+        },
+        {
+          "role": "user",
+          "content": "That makes sense. But I'm thinking about testing strategies."
+        },
+        {
+          "role": "assistant",
+          "content": "That's a good point. Let me consider the context..."
+        },
+        {
+          "role": "user",
+          "content": "What do you remember about the release plan?"
+        },
+        {
+          "role": "assistant",
+          "content": "I recall that you prefer dark mode and automated tests. Has anything changed?"
+        }
+      ],
+      "facts_introduced": [],
+      "facts_contradicted": []
+    },
+    {
+      "session_id": 48,
+      "date_offset_days": 282,
+      "turns": [
+        {
+          "role": "user",
+          "content": "How should I handle error handling?"
+        },
+        {
+          "role": "assistant",
+          "content": "Based on your preferences, I recommend using TDD. You mentioned you prefer dark mode and Go."
+        },
+        {
+          "role": "user",
+          "content": "That makes sense. But I'm thinking about testing strategies."
+        },
+        {
+          "role": "assistant",
+          "content": "That's a good point. Let me consider the context..."
+        }
+      ],
+      "facts_introduced": [],
+      "facts_contradicted": []
+    },
+    {
+      "session_id": 49,
+      "date_offset_days": 288,
+      "turns": [
+        {
+          "role": "user",
+          "content": "How should I handle error handling?"
+        },
+        {
+          "role": "assistant",
+          "content": "Based on your preferences, I recommend using TDD. You mentioned you prefer dark mode and Go."
+        },
+        {
+          "role": "user",
+          "content": "That makes sense. But I'm thinking about testing strategies."
+        },
+        {
+          "role": "assistant",
+          "content": "That's a good point. Let me consider the context..."
+        },
+        {
+          "role": "user",
+          "content": "What do you remember about the release plan?"
+        }
+      ],
+      "facts_introduced": [],
+      "facts_contradicted": []
+    },
+    {
+      "session_id": 50,
+      "date_offset_days": 294,
+      "turns": [
+        {
+          "role": "user",
+          "content": "How should I handle error handling?"
+        },
+        {
+          "role": "assistant",
+          "content": "Based on your preferences, I recommend using TDD. You mentioned you prefer dark mode and Go."
+        },
+        {
+          "role": "user",
+          "content": "That makes sense. But I'm thinking about testing strategies."
+        },
+        {
+          "role": "assistant",
+          "content": "That's a good point. Let me consider the context..."
+        },
+        {
+          "role": "user",
+          "content": "What do you remember about the release plan?"
+        },
+        {
+          "role": "assistant",
+          "content": "I recall that you prefer dark mode and automated tests. Has anything changed?"
+        }
+      ],
+      "facts_introduced": [
+        "f011"
+      ],
+      "facts_contradicted": []
+    }
+  ],
+  "contradiction_chains": [
+    {
+      "chain_id": "c001",
+      "fact_id": "f001",
+      "updates": [
+        {
+          "session": 0,
+          "value": "User prefers dark mode",
+          "type": "original"
+        },
+        {
+          "session": 15,
+          "value": "User prefers light mode",
+          "type": "update"
+        }
+      ]
+    },
+    {
+      "chain_id": "c002",
+      "fact_id": "f002",
+      "updates": [
+        {
+          "session": 0,
+          "value": "User prefers light mode",
+          "type": "original"
+        },
+        {
+          "session": 25,
+          "value": "User now dislikes light mode",
+          "type": "reversal"
+        }
+      ]
+    },
+    {
+      "chain_id": "c003",
+      "fact_id": "f003",
+      "updates": [
+        {
+          "session": 0,
+          "value": "User prefers dark mode",
+          "type": "original"
+        },
+        {
+          "session": 40,
+          "value": "User prefers dark mode (but considering alternatives)",
+          "type": "partial_change"
+        }
+      ]
+    },
+    {
+      "chain_id": "c004",
+      "fact_id": "f004",
+      "updates": [
+        {
+          "session": 0,
+          "value": "User prefers light mode",
+          "type": "original"
+        },
+        {
+          "session": 45,
+          "value": "User prefers light mode along with several other tools",
+          "type": "accumulation"
+        }
+      ]
+    },
+    {
+      "chain_id": "c005",
+      "fact_id": "f005",
+      "updates": [
+        {
+          "session": 0,
+          "value": "User prefers dark mode",
+          "type": "original"
+        },
+        {
+          "session": 50,
+          "value": "User prefers light mode",
+          "type": "update"
+        }
+      ]
+    }
+  ],
+  "checkpoints": [
+    {
+      "at_session": 50,
+      "questions": [
+        {
+          "q_id": "q0000",
+          "type": "direct-recall",
+          "question": "What display mode does the user prefer?",
+          "answer": "dark mode",
+          "introduced_at_session": 48,
+          "last_updated_session": 50
+        },
+        {
+          "q_id": "q0001",
+          "type": "cross-session",
+          "question": "What tool does the user use for editing?",
+          "answer": "VSCode",
+          "introduced_at_session": 49,
+          "last_updated_session": 40
+        },
+        {
+          "q_id": "q0002",
+          "type": "temporal-order",
+          "question": "What was the first decision the team made?",
+          "answer": "TDD methodology",
+          "introduced_at_session": 50,
+          "last_updated_session": 30
+        },
+        {
+          "q_id": "q0003",
+          "type": "contradiction",
+          "question": "Has the user's preference changed? If so, how?",
+          "answer": "Yes, updated to light mode",
+          "introduced_at_session": 48,
+          "last_updated_session": 50
+        },
+        {
+          "q_id": "q0004",
+          "type": "cold-start-recovery",
+          "question": "Summarize the user's technical background.",
+          "answer": "Go and Python developer, prefers dark mode",
+          "introduced_at_session": 49,
+          "last_updated_session": 40
+        },
+        {
+          "q_id": "q0005",
+          "type": "preference-drift",
+          "question": "How have the user's tool preferences evolved?",
+          "answer": "Started with VSCode, considered alternatives",
+          "introduced_at_session": 50,
+          "last_updated_session": 30
+        },
+        {
+          "q_id": "q0006",
+          "type": "relationship-chain",
+          "question": "Who does the user work with and on what?",
+          "answer": "Alice, Bob, Charlie on backend",
+          "introduced_at_session": 48,
+          "last_updated_session": 50
+        },
+        {
+          "q_id": "q0007",
+          "type": "direct-recall",
+          "question": "What display mode does the user prefer?",
+          "answer": "dark mode",
+          "introduced_at_session": 49,
+          "last_updated_session": 40
+        },
+        {
+          "q_id": "q0008",
+          "type": "cross-session",
+          "question": "What tool does the user use for editing?",
+          "answer": "VSCode",
+          "introduced_at_session": 50,
+          "last_updated_session": 30
+        },
+        {
+          "q_id": "q0009",
+          "type": "temporal-order",
+          "question": "What was the first decision the team made?",
+          "answer": "TDD methodology",
+          "introduced_at_session": 48,
+          "last_updated_session": 50
+        }
+      ]
+    }
+  ]
+}

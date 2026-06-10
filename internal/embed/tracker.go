@@ -54,7 +54,16 @@ func (t *ModelTracker) CheckAndMigrate(ctx context.Context, provider Provider) e
 
 	// Check if model changed
 	if storedModel == currentModel {
-		// No change
+		// Reconcile dims if provider has resolved actual dimensions
+		if provider.Dimensions() > 0 {
+			actualDims := strconv.Itoa(provider.Dimensions())
+			if storedDims != actualDims {
+				log.Printf("embed dims mismatch: stored=%s actual=%s, correcting", storedDims, actualDims)
+				if err := t.storeDims(ctx, actualDims); err != nil {
+					log.Printf("WARNING: could not update embed_dims: %v", err)
+				}
+			}
+		}
 		return nil
 	}
 
@@ -94,7 +103,11 @@ func (t *ModelTracker) storeModel(ctx context.Context, model, dims string) error
 		return fmt.Errorf("store embed_model: %w", err)
 	}
 
-	_, err = t.db.ExecContext(ctx, `
+	return t.storeDims(ctx, dims)
+}
+
+func (t *ModelTracker) storeDims(ctx context.Context, dims string) error {
+	_, err := t.db.ExecContext(ctx, `
 		INSERT INTO db_settings(key, value, updated_at)
 		VALUES('embed_dims', ?, datetime('now'))
 		ON CONFLICT(key) DO UPDATE SET
@@ -104,6 +117,5 @@ func (t *ModelTracker) storeModel(ctx context.Context, model, dims string) error
 	if err != nil {
 		return fmt.Errorf("store embed_dims: %w", err)
 	}
-
 	return nil
 }

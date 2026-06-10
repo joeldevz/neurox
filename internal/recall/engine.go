@@ -192,7 +192,10 @@ func (e *Engine) Search(ctx context.Context, options SearchOptions) ([]Result, e
 			Staleness:    normalized.Staleness,
 		}
 		semScores, semErr := semanticSearch(ctx, e.db, e.embedder, normalized.Query, normalized.Limit*2, semFilter)
-		if semErr == nil && len(semScores) > 0 {
+		if semErr != nil {
+			log.Printf("WARNING: semantic search unavailable (provider=%s, query=%q): %v — falling back to FTS-only",
+				e.embedder.Name(), truncateQuery(normalized.Query, 60), semErr)
+		} else if len(semScores) > 0 {
 			// Step 1: Derive FTS ranks (1-based, scan order). Scan order from
 			// buildSearchQuery is BM25-asc (best first), so rank 1 = best match.
 			ftsRanks := make(map[string]int, len(candidates))
@@ -547,4 +550,13 @@ func parseSQLiteTime(value string) (time.Time, error) {
 		}
 	}
 	return time.Time{}, fmt.Errorf("unsupported sqlite time %q", value)
+}
+
+// truncateQuery returns at most n runes of q followed by "…" if truncated.
+func truncateQuery(q string, n int) string {
+	runes := []rune(q)
+	if len(runes) <= n {
+		return q
+	}
+	return string(runes[:n]) + "…"
 }

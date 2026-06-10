@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"time"
+	"sync/atomic"
 )
 
 // RemoteConfig configures an OpenAI-compatible embedding API.
@@ -19,25 +19,24 @@ type RemoteConfig struct {
 }
 
 type Remote struct {
-	url        string
-	apiKey     string
-	model      string
-	dimensions int
-	client     *http.Client
+	url    string
+	apiKey string
+	model  string
+	dims   atomic.Int32
+	client *http.Client
 }
 
 func NewRemote(cfg RemoteConfig) *Remote {
-	dims := cfg.Dimensions
-	if dims == 0 {
-		dims = 1536
+	r := &Remote{
+		url:    cfg.URL,
+		apiKey: cfg.APIKey,
+		model:  cfg.Model,
+		client: &http.Client{Timeout: embedTimeout()},
 	}
-	return &Remote{
-		url:        cfg.URL,
-		apiKey:     cfg.APIKey,
-		model:      cfg.Model,
-		dimensions: dims,
-		client:     &http.Client{Timeout: 30 * time.Second},
+	if cfg.Dimensions > 0 {
+		r.dims.Store(int32(cfg.Dimensions))
 	}
+	return r
 }
 
 func (r *Remote) Embed(ctx context.Context, text string) ([]float32, error) {
@@ -95,8 +94,14 @@ func (r *Remote) EmbedBatch(ctx context.Context, texts []string) ([][]float32, e
 	for i, d := range result.Data {
 		embeddings[i] = d.Embedding
 	}
+	
+	// Detect actual embedding dimensions from the first response
+	if len(embeddings) > 0 && len(embeddings[0]) > 0 {
+		r.dims.CompareAndSwap(0, int32(len(embeddings[0])))
+	}
+	
 	return embeddings, nil
 }
 
-func (r *Remote) Dimensions() int { return r.dimensions }
+func (r *Remote) Dimensions() int { return int(r.dims.Load()) }
 func (r *Remote) Name() string    { return "remote/" + r.model }
