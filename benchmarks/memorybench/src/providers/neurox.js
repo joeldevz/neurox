@@ -47,10 +47,13 @@ export class NeuroxProvider {
   }
 
   /**
-   * Ingest sessions as observations into Neurox
-   * Each session becomes an episodic observation
-   */
-  async ingest(sessions, namespace) {
+    * Ingest sessions as observations into Neurox
+    * Each session becomes an episodic observation
+    * @param {Array} sessions - Array of conversation sessions
+    * @param {string} namespace - Namespace for these observations
+    * @param {Array} sessionDates - Optional array of dates (ISO 8601) corresponding to sessions
+    */
+  async ingest(sessions, namespace, sessionDates = []) {
     const ingestedIds = [];
     for (let i = 0; i < sessions.length; i++) {
       const session = sessions[i];
@@ -77,6 +80,20 @@ export class NeuroxProvider {
         ? titleParts.join(' | ')
         : `Session ${i}`;
 
+      // Build tags with optional date tag
+      const tags = [`session-${i}`, 'longmemeval', 'haystack', 'conversation'];
+      if (sessionDates && sessionDates[i]) {
+        // Extract date in YYYY-MM-DD format and add as tag
+        const dateStr = sessionDates[i];
+        if (dateStr) {
+          // Handle ISO 8601 dates: extract just the date part (YYYY-MM-DD)
+          const dateMatch = dateStr.match(/(\d{4}-\d{2}-\d{2})/);
+          if (dateMatch) {
+            tags.push(`date-${dateMatch[1]}`);
+          }
+        }
+      }
+
       try {
         const res = await fetch(`${this.baseUrl}/api/v1/observations`, {
           method: 'POST',
@@ -87,7 +104,7 @@ export class NeuroxProvider {
             namespace,
             kind: 'episodic',
             observation_type: 'discovery',
-            tags: [`session-${i}`, 'longmemeval', 'haystack', 'conversation'],
+            tags,
             confidence: 0.8,
           }),
         });
@@ -127,12 +144,33 @@ export class NeuroxProvider {
         const confidence = r.confidence ? r.confidence.toFixed(2) : 'unknown';
         const tags = (r.tags || []).join(', ') || 'none';
 
+        // Extract date from created_at or fall back to date tag
+        let dateStr = '';
+        if (r.created_at) {
+          // Format created_at as Date: YYYY-MM-DD HH:MM:SS
+          const dateObj = new Date(r.created_at);
+          if (!isNaN(dateObj.getTime())) {
+            dateStr = dateObj.toISOString().split('T')[0]; // YYYY-MM-DD
+          }
+        } else if (r.tags) {
+          // Fall back to extracting date from date-YYYY-MM-DD tag pattern
+          const dateTag = r.tags.find(t => t.match(/^date-\d{4}-\d{2}-\d{2}$/));
+          if (dateTag) {
+            dateStr = dateTag.substring(5); // Remove 'date-' prefix
+          }
+        }
+
+        let dateSection = '';
+        if (dateStr) {
+          dateSection = `\n    **Date**: ${dateStr}`;
+        }
+
         return `${rank}. [Rank #${rank} | Kind: ${kindLabel} | Confidence: ${confidence} | Staleness: ${stalenessLabel}]
-   **Title**: ${r.title || '(no title)'}
-   **Tags**: ${tags}
-   **Observation Type**: ${obsTypeLabel}
-   **Content**:
-   > ${r.content || '(no content)'}`;
+    **Title**: ${r.title || '(no title)'}
+    **Tags**: ${tags}${dateSection}
+    **Observation Type**: ${obsTypeLabel}
+    **Content**:
+    > ${r.content || '(no content)'}`;
       })
       .join('\n\n');
 

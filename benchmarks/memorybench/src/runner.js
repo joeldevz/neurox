@@ -233,8 +233,8 @@ export async function runBenchmark(options = {}) {
         // Initialize session for this question's namespace
         await provider.initialize(questionNamespace);
 
-        // Ingest ONLY this question's haystack sessions
-        const obsIds = await provider.ingest(sessions, questionNamespace);
+        // Ingest ONLY this question's haystack sessions with optional dates
+        const obsIds = await provider.ingest(sessions, questionNamespace, q.haystack_dates);
         
         totalIngested += obsIds.length;
         

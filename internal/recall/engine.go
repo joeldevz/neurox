@@ -72,6 +72,7 @@ type Result struct {
 	SourceSurface   string                      `json:"source_surface,omitempty"`
 	SourceSessionID string                      `json:"source_session_id,omitempty"`
 	SourceTool      string                      `json:"source_tool,omitempty"`
+	CreatedAt       string                      `json:"created_at,omitempty"` // RFC3339 format
 	Breakdown       *ScoreBreakdown             `json:"score_breakdown,omitempty"` // non-nil only when debug mode is enabled
 }
 
@@ -329,7 +330,9 @@ func (e *Engine) Search(ctx context.Context, options SearchOptions) ([]Result, e
 	results := make([]Result, 0, len(candidates))
 	ids := make([]string, 0, len(candidates))
 	for _, item := range candidates {
-		results = append(results, item.Result)
+		result := item.Result
+		result.CreatedAt = item.CreatedAt.Format(time.RFC3339)
+		results = append(results, result)
 		ids = append(ids, item.ID)
 	}
 

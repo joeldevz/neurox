@@ -50,6 +50,7 @@ export class LongMemEvalBenchmark {
       question_type: item.question_type,
       question_date: item.question_date,
       haystack_sessions: item.haystack_sessions || [],
+      haystack_dates: item.haystack_dates || [],
       answer_session_ids: item.answer_session_ids || [],
     }));
 

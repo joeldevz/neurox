@@ -188,6 +188,9 @@ func (s *Server) handleRecall(w http.ResponseWriter, r *http.Request) {
 			"staleness": res.Staleness, "linked_files": res.LinkedFiles,
 			"retention": res.Retention,
 		}
+		if res.CreatedAt != "" {
+			item["created_at"] = res.CreatedAt
+		}
 		if res.SourceSurface != "" {
 			item["source_surface"] = res.SourceSurface
 		}
