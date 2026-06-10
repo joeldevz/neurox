@@ -5,6 +5,13 @@
 
 import fetch from 'node-fetch';
 
+/**
+ * Helper: sleep for ms milliseconds
+ */
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 export class NeuroxProvider {
   constructor(baseUrl = 'http://localhost:7438') {
     this.baseUrl = baseUrl;
@@ -47,13 +54,15 @@ export class NeuroxProvider {
   }
 
   /**
-    * Ingest sessions as observations into Neurox
-    * Each session becomes an episodic observation
-    * @param {Array} sessions - Array of conversation sessions
-    * @param {string} namespace - Namespace for these observations
-    * @param {Array} sessionDates - Optional array of dates (ISO 8601) corresponding to sessions
-    */
-  async ingest(sessions, namespace, sessionDates = []) {
+     * Ingest sessions as observations into Neurox
+     * Each session becomes an episodic observation
+     * @param {Array} sessions - Array of conversation sessions
+     * @param {string} namespace - Namespace for these observations
+     * @param {Array} sessionDates - Optional array of dates (ISO 8601) corresponding to sessions
+     * @param {Object} options - Options including ingestDelayMs for throttling
+     */
+  async ingest(sessions, namespace, sessionDates = [], options = {}) {
+    const { ingestDelayMs = 0 } = options;
     const ingestedIds = [];
     for (let i = 0; i < sessions.length; i++) {
       const session = sessions[i];
@@ -118,6 +127,11 @@ export class NeuroxProvider {
         const data = await res.json();
         ingestedIds.push(data.id);
         this.observations.set(data.id, { title, content, index: i });
+        
+        // Apply throttling delay if specified
+        if (ingestDelayMs > 0) {
+          await sleep(ingestDelayMs);
+        }
       } catch (err) {
         console.warn(`Warning: Exception ingesting session ${i}: ${err.message}`);
       }

@@ -186,6 +186,7 @@ export async function runBenchmark(options = {}) {
     judgeProvider = 'auto',
     judgeModel = null,
     answerModel = null,
+    ingestDelayMs = 50,
     dataDir = './data',
   } = options;
 
@@ -234,7 +235,7 @@ export async function runBenchmark(options = {}) {
         await provider.initialize(questionNamespace);
 
         // Ingest ONLY this question's haystack sessions with optional dates
-        const obsIds = await provider.ingest(sessions, questionNamespace, q.haystack_dates);
+        const obsIds = await provider.ingest(sessions, questionNamespace, q.haystack_dates, { ingestDelayMs });
         
         totalIngested += obsIds.length;
         

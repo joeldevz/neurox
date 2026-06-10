@@ -56,6 +56,11 @@ program
     'Answer generation model (same provider as judge)',
     null
   )
+  .option(
+    '--ingest-delay-ms <ms>',
+    'Delay in milliseconds between ingest POSTs (default: 50, 0 = no delay)',
+    '50'
+  )
   .action(async (options) => {
     try {
       // Validate provider
@@ -118,6 +123,7 @@ program
       if (options.judgeModel) console.log(`Judge model: ${options.judgeModel}`);
       if (options.answerModel) console.log(`Answer model: ${options.answerModel}`);
 
+      const ingestDelayMs = parseInt(options.ingestDelayMs, 10);
       const report = await runBenchmark({
         provider,
         benchmark,
@@ -129,6 +135,7 @@ program
         judgeProvider: options.judgeProvider,
         judgeModel: options.judgeModel,
         answerModel: options.answerModel,
+        ingestDelayMs,
         dataDir: path.join(__dirname, '..', 'data'),
       });
 
