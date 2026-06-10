@@ -58,3 +58,25 @@ export function formatDuration(ms) {
 export function formatPercent(value) {
   return `${(value * 100).toFixed(1)}%`;
 }
+
+/**
+ * Detect temporal intent in a query
+ * Returns true if the query contains temporal reasoning keywords
+ * @param {string} query - The query/question to analyze
+ * @returns {boolean} true if temporal intent detected
+ */
+export function detectTemporalIntent(query) {
+  if (!query || typeof query !== 'string') {
+    return false;
+  }
+  
+  const lowerQuery = query.toLowerCase();
+  const temporalKeywords = [
+    'first', 'last', 'before', 'after', 'when',
+    'earliest', 'latest', 'how long', 'how many days',
+    'how many weeks', 'how many months', 'since', 'until',
+    'ago', 'between'
+  ];
+  
+  return temporalKeywords.some(keyword => lowerQuery.includes(keyword));
+}

@@ -61,6 +61,11 @@ program
     'Delay in milliseconds between ingest POSTs (default: 50, 0 = no delay)',
     '50'
   )
+  .option(
+    '--no-temporal-branch',
+    'Disable temporal reasoning branch (changes 3-6 disabled; bugfixes 1-2 always remain)',
+    false
+  )
   .action(async (options) => {
     try {
       // Validate provider
@@ -124,6 +129,7 @@ program
       if (options.answerModel) console.log(`Answer model: ${options.answerModel}`);
 
       const ingestDelayMs = parseInt(options.ingestDelayMs, 10);
+      const noTemporalBranch = options.noTemporalBranch === true;
       const report = await runBenchmark({
         provider,
         benchmark,
@@ -136,6 +142,7 @@ program
         judgeModel: options.judgeModel,
         answerModel: options.answerModel,
         ingestDelayMs,
+        noTemporalBranch,
         dataDir: path.join(__dirname, '..', 'data'),
       });
 

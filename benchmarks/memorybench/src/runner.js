@@ -187,6 +187,7 @@ export async function runBenchmark(options = {}) {
     judgeModel = null,
     answerModel = null,
     ingestDelayMs = 50,
+    noTemporalBranch = false,
     dataDir = './data',
   } = options;
 
@@ -245,6 +246,7 @@ export async function runBenchmark(options = {}) {
           question: q.question,
           answer: q.answer,
           question_type: q.question_type,
+          question_date: q.question_date,
           namespace: questionNamespace,
           haystack_count: sessions.length,
           observation_ids: obsIds,
@@ -309,14 +311,14 @@ export async function runBenchmark(options = {}) {
 
       const latencies = [];
 
-      for (let i = 0; i < checkpoint.results.length; i++) {
-         const result = checkpoint.results[i];
-         const question = result.question;
-         const namespace = result.namespace; // Use question-specific namespace
+       for (let i = 0; i < checkpoint.results.length; i++) {
+          const result = checkpoint.results[i];
+          const question = result.question;
+          const namespace = result.namespace; // Use question-specific namespace
 
-         const t0 = Date.now();
-         const context = await provider.search(question, namespace, 10, { contextFormat }); // top-10 from this question's haystack
-         const latency = Date.now() - t0;
+          const t0 = Date.now();
+          const context = await provider.search(question, namespace, 10, { contextFormat, noTemporalBranch }); // top-10 from this question's haystack
+          const latency = Date.now() - t0;
 
          result.context = context;
          result.latency_ms = latency;
@@ -351,17 +353,19 @@ export async function runBenchmark(options = {}) {
       // If judge is "exact", we still need anthropic for answer generation
       let answerProvider = judgeProvider === 'auto' || judgeProvider === 'exact' ? 'anthropic' : judgeProvider;
 
-      for (let i = 0; i < checkpoint.results.length; i++) {
-        const result = checkpoint.results[i];
-        const context = result.context || '';
+       for (let i = 0; i < checkpoint.results.length; i++) {
+         const result = checkpoint.results[i];
+         const context = result.context || '';
 
-        try {
-           // Generate answer using LLM (or fallback to context extraction)
-           const answer = await generateAnswer(result.question, context, {
-             provider: answerProvider,
-             model: answerModel,
-             temperature: 0,
-           });
+         try {
+            // Generate answer using LLM (or fallback to context extraction)
+            const answer = await generateAnswer(result.question, context, {
+              provider: answerProvider,
+              model: answerModel,
+              temperature: 0,
+              questionDate: result.question_date,
+              noTemporalBranch,
+            });
 
           result.predicted = answer;
           answeredCount++;

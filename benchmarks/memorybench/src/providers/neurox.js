@@ -4,6 +4,7 @@
  */
 
 import fetch from 'node-fetch';
+import { detectTemporalIntent } from '../utils.js';
 
 /**
  * Helper: sleep for ms milliseconds
@@ -89,19 +90,19 @@ export class NeuroxProvider {
         ? titleParts.join(' | ')
         : `Session ${i}`;
 
-      // Build tags with optional date tag
-      const tags = [`session-${i}`, 'longmemeval', 'haystack', 'conversation'];
-      if (sessionDates && sessionDates[i]) {
-        // Extract date in YYYY-MM-DD format and add as tag
-        const dateStr = sessionDates[i];
-        if (dateStr) {
-          // Handle ISO 8601 dates: extract just the date part (YYYY-MM-DD)
-          const dateMatch = dateStr.match(/(\d{4}-\d{2}-\d{2})/);
-          if (dateMatch) {
-            tags.push(`date-${dateMatch[1]}`);
-          }
-        }
-      }
+       // Build tags with optional date tag
+       const tags = [`session-${i}`, 'longmemeval', 'haystack', 'conversation'];
+       if (sessionDates && sessionDates[i]) {
+         // Extract date in YYYY-MM-DD format and add as tag
+         const dateStr = sessionDates[i];
+         if (dateStr) {
+           // Handle both slash (2023/05/20) and hyphen (2023-05-20) date formats
+           const dateMatch = dateStr.match(/(\d{4})[\/-](\d{2})[\/-](\d{2})/);
+           if (dateMatch) {
+             tags.push(`date-${dateMatch[1]}-${dateMatch[2]}-${dateMatch[3]}`);
+           }
+         }
+       }
 
       try {
         const res = await fetch(`${this.baseUrl}/api/v1/observations`, {
@@ -158,21 +159,22 @@ export class NeuroxProvider {
         const confidence = r.confidence ? r.confidence.toFixed(2) : 'unknown';
         const tags = (r.tags || []).join(', ') || 'none';
 
-        // Extract date from created_at or fall back to date tag
-        let dateStr = '';
-        if (r.created_at) {
-          // Format created_at as Date: YYYY-MM-DD HH:MM:SS
-          const dateObj = new Date(r.created_at);
-          if (!isNaN(dateObj.getTime())) {
-            dateStr = dateObj.toISOString().split('T')[0]; // YYYY-MM-DD
-          }
-        } else if (r.tags) {
-          // Fall back to extracting date from date-YYYY-MM-DD tag pattern
-          const dateTag = r.tags.find(t => t.match(/^date-\d{4}-\d{2}-\d{2}$/));
-          if (dateTag) {
-            dateStr = dateTag.substring(5); // Remove 'date-' prefix
-          }
-        }
+         // Extract date: prefer session date tag (event date), fall back to created_at
+         let dateStr = '';
+         if (r.tags) {
+           // First priority: extract date from date-YYYY-MM-DD tag pattern (session/event date)
+           const dateTag = r.tags.find(t => t.match(/^date-\d{4}-\d{2}-\d{2}$/));
+           if (dateTag) {
+             dateStr = dateTag.substring(5); // Remove 'date-' prefix
+           }
+         }
+         if (!dateStr && r.created_at) {
+           // Fall back to created_at (ingest date) only if no session date tag
+           const dateObj = new Date(r.created_at);
+           if (!isNaN(dateObj.getTime())) {
+             dateStr = dateObj.toISOString().split('T')[0]; // YYYY-MM-DD
+           }
+         }
 
         let dateSection = '';
         if (dateStr) {
@@ -192,46 +194,85 @@ export class NeuroxProvider {
   }
 
   /**
-  * Search for context given a query
-  * Uses FTS5 semantic search endpoint
-  */
-  async search(query, namespace, limit = 5, options = {}) {
-    const { contextFormat = 'raw' } = options;
-
-    try {
-      const params = new URLSearchParams({
-        q: query,
-        namespace,
-        limit: String(limit),
-      });
-
-      const res = await fetch(`${this.baseUrl}/api/v1/observations/search?${params}`);
-      if (!res.ok) {
-        console.warn(`Search request failed: ${res.status} ${res.statusText}`);
-        return '';
+   * Sort results chronologically by session date (from date tag), with undated results last
+   * @param {Array} results - Search results
+   * @returns {Array} Sorted results
+   */
+  _sortBySessionDate(results) {
+    const withDate = [];
+    const withoutDate = [];
+    
+    for (const r of results) {
+      const dateTag = (r.tags || []).find(t => t.match(/^date-\d{4}-\d{2}-\d{2}$/));
+      if (dateTag) {
+        const dateStr = dateTag.substring(5); // Remove 'date-' prefix
+        withDate.push({ result: r, date: dateStr });
+      } else {
+        withoutDate.push(r);
       }
-
-      const data = await res.json();
-      if (!data.results || data.results.length === 0) {
-        return '';
-      }
-
-      // Format based on context format option
-      if (contextFormat === 'llm') {
-        return this._formatAsLLMContext(data.results);
-      }
-
-      // Default raw format: concatenate content only
-      const context = data.results
-        .map((r) => r.content)
-        .join('\n\n---\n\n');
-
-      return context;
-    } catch (err) {
-      console.warn(`Search error: ${err.message}`);
-      return '';
     }
+    
+    // Sort with-date results chronologically (ascending)
+    withDate.sort((a, b) => a.date.localeCompare(b.date));
+    
+    // Combine: dated results first (chronologically), then undated (preserving relevance order)
+    return [...withDate.map(d => d.result), ...withoutDate];
   }
+
+  /**
+   * Search for context given a query
+   * Uses FTS5 semantic search endpoint
+   */
+   async search(query, namespace, limit = 5, options = {}) {
+     const { contextFormat = 'raw', noTemporalBranch = false } = options;
+
+     try {
+       const params = new URLSearchParams({
+         q: query,
+         namespace,
+         limit: String(limit),
+       });
+
+       // Detect temporal intent and add include_stale if temporal (CHANGE 6)
+       const hasTemporalIntent = !noTemporalBranch && detectTemporalIntent(query);
+       if (hasTemporalIntent) {
+         params.append('include_stale', 'true');
+       }
+
+       const res = await fetch(`${this.baseUrl}/api/v1/observations/search?${params}`);
+       if (!res.ok) {
+         console.warn(`Search request failed: ${res.status} ${res.statusText}`);
+         return '';
+       }
+
+       const data = await res.json();
+       if (!data.results || data.results.length === 0) {
+         return '';
+       }
+
+       let results = data.results;
+       
+       // Apply chronological sort if temporal intent detected (CHANGE 4)
+       if (hasTemporalIntent) {
+         results = this._sortBySessionDate(results);
+       }
+
+       // Format based on context format option
+       if (contextFormat === 'llm') {
+         return this._formatAsLLMContext(results);
+       }
+
+       // Default raw format: concatenate content only
+       const context = results
+         .map((r) => r.content)
+         .join('\n\n---\n\n');
+
+       return context;
+     } catch (err) {
+       console.warn(`Search error: ${err.message}`);
+       return '';
+     }
+   }
 
   /**
    * Clear all observations in a namespace
