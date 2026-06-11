@@ -59,26 +59,120 @@ async function waitForIndexing(provider, namespace, expectedCount, timeoutMs = 6
 
 /**
  * Wait for embeddings to be generated in namespace
- * Polls /search endpoint with debug=true and checks if any result has semantic_score > 0
- * Falls back to a fixed delay if debug mode isn't available or takes too long
  * 
- * Strategy: Polling with debug=true for semantic_score detection (1.5s interval)
- * Reason: Allows dynamic detection of when embeddings are ready without hardcoding delays
- * Fallback: Math.min(60000, numObs * 400) ms for safety if polling fails
+ * PRIMARY STRATEGY: Poll /api/v1/status endpoint for embeddings_pending field.
+ * When embeddings_pending reaches 0, embeddings are done.
  * 
- * @param {Object} provider - Provider with baseUrl
+ * STALL DETECTION: If embeddings_pending is > 0 and hasn't decreased for 30s,
+ * the embedder is likely broken/disabled. Fall back to legacy strategy.
+ * 
+ * FALLBACK: Use semantic_score > 0 heuristic via /search with debug=true,
+ * or fixed delay if polling fails.
+ * 
+ * @param {Object} provider - Provider with baseUrl and optional getStatus() method
  * @param {string} namespace - Namespace to check
- * @param {string} sampleQuery - Query to use for debug polling (e.g., the question)
+ * @param {string} sampleQuery - Query to use for debug polling (fallback)
  * @param {number} numObs - Number of observations in namespace
- * @param {number} timeoutMs - Maximum wait time
- * @returns {Promise<boolean>} true if embeddings detected, false on timeout
+ * @param {number} timeoutMs - Maximum wait time (scales to 150ms per obs, max 10min)
+ * @returns {Promise<boolean>} true if embeddings ready, false on timeout/fallback
  */
 async function waitForEmbeddings(provider, namespace, sampleQuery, numObs, timeoutMs = 60000) {
+  // Compute effective timeout: scale by 150ms per observation, capped at 10 min
+  const scaledTimeout = Math.max(timeoutMs, numObs * 150);
+  const effectiveTimeout = Math.min(scaledTimeout, 600000); // 600s = 10 min
+  
+  // PRIMARY: Try status endpoint polling if provider supports getStatus
+  if (typeof provider.getStatus === 'function') {
+    const result = await _waitViaStatus(provider, effectiveTimeout);
+    if (result.success) {
+      process.stdout.write(`✓ embeddings ready`);
+      return true;
+    }
+    if (result.stalled) {
+      process.stdout.write(`⚠ stalled (embedder disabled)`);
+    } else {
+      process.stdout.write(`⚠ timeout`);
+    }
+  }
+  
+  // FALLBACK: Use legacy semantic_score detection
+  process.stdout.write(` → fallback`);
+  return _waitViaSemanticScore(provider, namespace, sampleQuery, numObs, effectiveTimeout);
+}
+
+/**
+ * Poll /api/v1/status for embeddings_pending field
+ * Returns { success: true } when pending hits 0
+ * Returns { stalled: true } if pending frozen > 30s
+ * Returns { success: false } on timeout
+ */
+async function _waitViaStatus(provider, timeoutMs) {
+  const pollInterval = 2000; // 2 second polling
+  const stallWindow = 30000;  // 30 seconds (default, used in stall detection)
+  const startTime = Date.now();
+  let lastPending = null;
+  let lastPendingTime = startTime;
+  let logNextAt = startTime + 10000; // Log progress every ~10s
+  
+  while (Date.now() - startTime < timeoutMs) {
+    try {
+      const status = await provider.getStatus();
+      if (!status) {
+        // Status endpoint error, fall back
+        return { success: false };
+      }
+      
+      const pending = status.embeddings_pending;
+      const total = status.embeddings_total;
+      
+      // Edge case: no embeddings configured at all
+      if (total === 0 && pending === 0) {
+        console.warn(`[embeddings] disabled (total=0, pending=0)`);
+        return { success: true };
+      }
+      
+      // Check for immediate completion
+      if (pending === 0 && total > 0) {
+        return { success: true };
+      }
+      
+      // Log progress periodically
+      if (Date.now() >= logNextAt) {
+        process.stdout.write(`[${pending}/${total}]`);
+        logNextAt = Date.now() + 10000;
+      }
+      
+      // Stall detection: pending hasn't decreased in 30s
+      if (pending > 0) {
+        if (lastPending !== null && pending === lastPending) {
+          if (Date.now() - lastPendingTime > stallWindow) {
+            return { stalled: true };
+          }
+        } else if (pending < (lastPending ?? Infinity)) {
+          // Pending decreased, reset stall timer
+          lastPending = pending;
+          lastPendingTime = Date.now();
+        }
+      }
+    } catch (err) {
+      // Silently continue
+    }
+    
+    await new Promise((resolve) => setTimeout(resolve, pollInterval));
+  }
+  
+  // Timeout
+  return { success: false };
+}
+
+/**
+ * FALLBACK: Poll /search with debug=true, check for semantic_score > 0
+ */
+async function _waitViaSemanticScore(provider, namespace, sampleQuery, numObs, timeoutMs) {
   const pollInterval = 1500; // 1.5 second polling
   const startTime = Date.now();
   let pollAttempts = 0;
   
-  // Try polling with debug=true for semantic_score detection
   while (Date.now() - startTime < timeoutMs) {
     try {
       const params = new URLSearchParams({
@@ -99,7 +193,7 @@ async function waitForEmbeddings(provider, namespace, sampleQuery, numObs, timeo
         );
         
         if (hasSemanticScore) {
-          process.stdout.write(`✓ embeddings detected`);
+          process.stdout.write(`✓`);
           return true;
         }
         
@@ -115,10 +209,9 @@ async function waitForEmbeddings(provider, namespace, sampleQuery, numObs, timeo
     await new Promise((resolve) => setTimeout(resolve, pollInterval));
   }
   
-  // Polling timeout — fall back to fixed delay
-  console.log(`\n    ⚠ embedding detection timed out, using fixed delay fallback`);
+  // Fallback timeout — use fixed delay
   const fallbackDelayMs = Math.min(60000, Math.max(5000, numObs * 400));
-  console.log(`    Waiting ${fallbackDelayMs}ms for async embeddings...`);
+  console.log(`\n    Waiting ${fallbackDelayMs}ms for async embeddings (fallback)...`);
   await new Promise((resolve) => setTimeout(resolve, fallbackDelayMs));
   
   return false;

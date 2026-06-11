@@ -33,6 +33,20 @@ export class NeuroxProvider {
   }
 
   /**
+   * Get status from Neurox API (embeddings_pending, embeddings_total, etc)
+   * @returns {Object|null} Status object with embeddings_pending/embeddings_total, or null on error
+   */
+  async getStatus() {
+    try {
+      const res = await fetch(`${this.baseUrl}/api/v1/status`);
+      if (!res.ok) return null;
+      return await res.json();
+    } catch {
+      return null;
+    }
+  }
+
+  /**
    * Initialize a new session
    */
   async initialize(namespace) {
