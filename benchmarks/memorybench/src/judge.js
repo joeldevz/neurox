@@ -1,17 +1,19 @@
 /**
  * Evaluation Judge & LLM Interface
- * Multi-provider LLM abstraction (Anthropic, OpenAI, Gateway)
+ * Multi-provider LLM abstraction (Anthropic, OpenAI, Gateway, OpenCode)
  * Deterministic question-answering evaluation
  */
 
 import fetch from 'node-fetch';
+import { callOpencodeModel } from './llm-opencode.js';
 
 /**
  * Normalize text for fuzzy matching
  */
 function normalize(text) {
   if (!text) return '';
-  return text
+  const str = String(text ?? '');
+  return str
     .toLowerCase()
     .trim()
     .replace(/[^\w\s]/g, '') // Remove punctuation
@@ -57,11 +59,11 @@ export function exactMatch(predicted, answer) {
 
 /**
  * Multi-provider LLM call abstraction
- * Supports: anthropic (Claude), openai (GPT), gateway (OpenAI-compatible)
+ * Supports: anthropic (Claude), openai (GPT), gateway (OpenAI-compatible), opencode (local CLI)
  *
  * @param {Array<{role, content}>} messages - Chat messages
  * @param {object} config - Configuration
- *   - provider: 'anthropic'|'openai'|'gateway'
+ *   - provider: 'anthropic'|'openai'|'gateway'|'opencode'
  *   - model: model name (defaults based on provider)
  *   - temperature: 0-1 (default 0 for judging)
  *   - max_tokens: number
@@ -81,6 +83,8 @@ export async function callLLM(messages, config = {}) {
     return callOpenAI(messages, { model, temperature, max_tokens });
   } else if (provider === 'gateway') {
     return callGateway(messages, { model, temperature, max_tokens });
+  } else if (provider === 'opencode') {
+    return callOpencodeModel(messages, { model, temperature, max_tokens });
   } else {
     throw new Error(`Unknown LLM provider: ${provider}`);
   }
@@ -251,7 +255,7 @@ Respond with ONLY a JSON object: {"correct": true|false, "reason": "<one short s
     }
 
     // Fallback: search for key words in response
-    const lowerResponse = response.toLowerCase();
+    const lowerResponse = String(response ?? '').toLowerCase();
     const correct = lowerResponse.includes('true') || 
                     lowerResponse.includes('correct') ||
                     (lowerResponse.includes('yes') && !lowerResponse.includes('no'));
@@ -294,7 +298,7 @@ export function createJudge(mode = 'auto', judgeConfig = {}) {
     }
   }
 
-  if (mode === 'llm' || ['anthropic', 'openai', 'gateway'].includes(mode)) {
+  if (mode === 'llm' || ['anthropic', 'openai', 'gateway', 'opencode'].includes(mode)) {
     const provider = mode === 'llm' ? (process.env.JUDGE_PROVIDER || 'anthropic') : mode;
     const config = { ...judgeConfig, provider };
     return (predicted, answer, question) => llmJudge(predicted, answer, question, config);

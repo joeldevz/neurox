@@ -1,6 +1,7 @@
 /**
  * Answer Generation Module
  * Generates answers from retrieved context using LLM
+ * Supports: anthropic, openai, gateway, opencode providers
  */
 
 import { callLLM } from './judge.js';
@@ -41,16 +42,17 @@ export async function generateAnswer(question, context, config = {}) {
     return "I don't know.";
   }
 
-  // Normalize question date if provided
+  // Normalize question date if provided (CHANGE 2: unconditional normalization)
   let normalizedDate = null;
-  if (questionDate && !noTemporalBranch) {
+  if (questionDate) {
     normalizedDate = normalizeQuestionDate(questionDate);
   }
 
-  // Build prompt with optional current date section (CHANGE 3)
+  // Build prompt with best-effort extraction semantics (CHANGE 1: reworded instructions)
   let promptParts = [
-    'You are answering a question based ONLY on the provided memory context.',
-    'If the context does not contain the answer, say "I don\'t know".',
+    'You are answering a question about the user\'s personal history, based on their memory context. Each memory shows the Date when that conversation happened.',
+    'Give the best-supported answer from the context. Quote or cite the relevant memory when possible.',
+    'Say "I don\'t know" ONLY if nothing in the context is relevant to the question. NEVER prefix or hedge a substantive answer with "I don\'t know" — if you found relevant information, state the answer directly.',
     'Be concise and specific.'
   ];
 

@@ -11,6 +11,88 @@ import { createJudge } from './judge.js';
 import { generateAnswer } from './answer.js';
 
 /**
+ * Typed error for ingest verification failure
+ * Signals to top-level handler that the run must abort with exit code 1
+ */
+class IngestVerificationError extends Error {
+  constructor(reason) {
+    super(reason);
+    this.name = 'IngestVerificationError';
+  }
+}
+
+/**
+ * Verify ingest persistence: poll for durability with timeout
+ * Polls status.total until >= expectedCount, with progress logging every ~10s
+ * @param {Object} provider - Provider with getStatus() method
+ * @param {number} expectedCount - Expected observation count
+ * @param {number} failedCount - Failed saves (real error if > 0)
+ * @param {Object} opts - { pollIntervalMs, timeoutMs } for testability
+ * @returns {Object} { ok: boolean, reason: string }
+ */
+async function verifyIngestPersistence(provider, expectedCount, failedCount, opts = {}) {
+  const pollIntervalMs = opts.pollIntervalMs ?? 2000;
+  const timeoutMs = opts.timeoutMs ?? Math.max(30000, expectedCount * 100, 120000);
+  
+  // Real error: client-side save failures
+  if (failedCount > 0) {
+    return { 
+      ok: false, 
+      reason: `ingest persistence: ${failedCount} client-side save failure(s) detected; aborting` 
+    };
+  }
+  
+  const startTime = Date.now();
+  let logNextAt = startTime + 10000;
+  let isFirstPoll = true;
+  
+  while (Date.now() - startTime < timeoutMs) {
+    try {
+      const status = await provider.getStatus();
+      
+      if (!status || typeof status.total !== 'number') {
+        // Status unavailable, degrade gracefully
+        console.warn(`[ingest] Could not verify ingest persistence (status unavailable); continuing`);
+        return { ok: true, reason: null };
+      }
+      
+      const serverTotal = status.total;
+      
+      // Pre-existing data on first poll (clean DB assumption violated)
+      if (isFirstPoll && serverTotal > expectedCount) {
+        const preExistingCount = serverTotal - expectedCount;
+        console.warn(`[ingest] Pre-existing observations detected (+${preExistingCount}); gate assumes clean DB`);
+        return { ok: true, reason: null };
+      }
+      
+      // Success: server has at least expected count
+      if (serverTotal >= expectedCount) {
+        return { ok: true, reason: null };
+      }
+      
+      // Log progress every 10s
+      if (Date.now() >= logNextAt) {
+        const elapsed = Math.round((Date.now() - startTime) / 1000);
+        console.log(`[ingest] durability: server ${serverTotal} / expected ${expectedCount} (${elapsed}s)`);
+        logNextAt = Date.now() + 10000;
+      }
+      
+      isFirstPoll = false;
+    } catch (err) {
+      // Transient error, retry
+    }
+    
+    await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
+  }
+  
+  // Timeout: genuine loss
+  return {
+    ok: false,
+    reason: `ingest persistence: server has fewer observations than expected after ${Math.round(timeoutMs / 1000)}s — observations lost (not just lagging); aborting`
+  };
+}
+
+/**
  * Wait for observations to be indexed in namespace
  * Polls /search endpoint with a generic query until count >= expected or timeout
  */
@@ -278,9 +360,11 @@ export async function runBenchmark(options = {}) {
     contextFormat = 'raw',
     judgeProvider = 'auto',
     judgeModel = null,
+    answerProvider = 'anthropic',
     answerModel = null,
     ingestDelayMs = 50,
     noTemporalBranch = false,
+    skipIngestVerification = false,
     dataDir = './data',
   } = options;
 
@@ -309,64 +393,83 @@ export async function runBenchmark(options = {}) {
       saveCheckpoint(checkpointPath, checkpoint);
     }
 
-    // Phase 1: Per-Question Ingest & Wait
-    // LongMemEval protocol: each question gets its own namespace with only its haystack
-    if (checkpoint.phase_index <= 0 && !noIngest) {
-      console.log('\n[ingest] Ingesting per-question haystacks into Neurox...');
-      checkpoint.phase = 'ingest';
-      checkpoint.timestamps.ingest_start = Date.now();
+     // Phase 1: Per-Question Ingest & Wait
+     // LongMemEval protocol: each question gets its own namespace with only its haystack
+     if (checkpoint.phase_index <= 0 && !noIngest) {
+       console.log('\n[ingest] Ingesting per-question haystacks into Neurox...');
+       checkpoint.phase = 'ingest';
+       checkpoint.timestamps.ingest_start = Date.now();
 
-      let totalIngested = 0;
-      
-      for (let i = 0; i < checkpoint.questions.length; i++) {
-        const q = checkpoint.questions[i];
-        const sessions = q.haystack_sessions || [];
-        
-        // Per-question namespace
-        const questionNamespace = `${runId}-q${i}`;
-        
-        // Initialize session for this question's namespace
-        await provider.initialize(questionNamespace);
+       let totalIngested = 0;
+       let totalFailedSaves = 0;
+       
+       for (let i = 0; i < checkpoint.questions.length; i++) {
+         const q = checkpoint.questions[i];
+         const sessions = q.haystack_sessions || [];
+         
+         // Per-question namespace
+         const questionNamespace = `${runId}-q${i}`;
+         
+         // Initialize session for this question's namespace
+         await provider.initialize(questionNamespace);
 
-        // Ingest ONLY this question's haystack sessions with optional dates
-        const obsIds = await provider.ingest(sessions, questionNamespace, q.haystack_dates, { ingestDelayMs });
-        
-        totalIngested += obsIds.length;
-        
-        // Store mapping for later search
-        checkpoint.results.push({
-          question_id: q.question_id,
-          question: q.question,
-          answer: q.answer,
-          question_type: q.question_type,
-          question_date: q.question_date,
-          namespace: questionNamespace,
-          haystack_count: sessions.length,
-          observation_ids: obsIds,
-          context: null,
-          predicted: null,
-          correct: null,
-          latency_ms: 0,
-          error: null,
-        });
+         // Ingest ONLY this question's haystack sessions with optional dates
+         const ingestResult = await provider.ingest(sessions, questionNamespace, q.haystack_dates, { ingestDelayMs });
+         const obsIds = ingestResult.ids || [];
+         
+         totalIngested += obsIds.length;
+         totalFailedSaves += ingestResult.failedCount || 0;
+         
+         // Store mapping for later search
+         checkpoint.results.push({
+           question_id: q.question_id,
+           question: q.question,
+           answer: q.answer,
+           question_type: q.question_type,
+           question_date: q.question_date,
+           namespace: questionNamespace,
+           haystack_count: sessions.length,
+           observation_ids: obsIds,
+           context: null,
+           predicted: null,
+           correct: null,
+           latency_ms: 0,
+           error: null,
+         });
 
-        if ((i + 1) % 10 === 0) {
-          console.log(`  Ingested ${i + 1}/${checkpoint.questions.length} questions`);
+         if ((i + 1) % 10 === 0) {
+           console.log(`  Ingested ${i + 1}/${checkpoint.questions.length} questions`);
+         }
+       }
+
+       checkpoint.ingested = totalIngested;
+       checkpoint.failed_saves = totalFailedSaves;
+       checkpoint.phase_index = 1;
+       checkpoint.timestamps.ingest_end = Date.now();
+       console.log(`Ingested ${totalIngested} session observations across ${checkpoint.questions.length} question namespaces`);
+       if (totalFailedSaves > 0) {
+         console.log(`  ⚠ ${totalFailedSaves} save(s) failed after retries`);
+       }
+       saveCheckpoint(checkpointPath, checkpoint);
+     }
+
+      // Phase 1.5: Verify ingest persistence before proceeding
+      if (checkpoint.phase_index === 1 && !options.skipIngestVerification) {
+        const verification = await verifyIngestPersistence(provider, checkpoint.ingested, checkpoint.failed_saves || 0);
+        if (!verification.ok) {
+          console.error(`\n[ERROR] ${verification.reason}`);
+          checkpoint.phase = 'ingest_verification_failed';
+          saveCheckpoint(checkpointPath, checkpoint);
+          // Throw typed error that propagates to top-level handler for clean exit
+          throw new IngestVerificationError(verification.reason);
         }
       }
 
-      checkpoint.ingested = totalIngested;
-      checkpoint.phase_index = 1;
-      checkpoint.timestamps.ingest_end = Date.now();
-      console.log(`Ingested ${totalIngested} session observations across ${checkpoint.questions.length} question namespaces`);
-      saveCheckpoint(checkpointPath, checkpoint);
-    }
-
-    // Phase 2: Wait for indexing per question
-    if (checkpoint.phase_index <= 1) {
-      console.log('\n[wait] Waiting for FTS5 indexing per question...');
-      checkpoint.phase = 'wait';
-      checkpoint.timestamps.wait_start = Date.now();
+     // Phase 2: Wait for indexing per question
+     if (checkpoint.phase_index <= 1) {
+       console.log('\n[wait] Waiting for FTS5 indexing per question...');
+       checkpoint.phase = 'wait';
+       checkpoint.timestamps.wait_start = Date.now();
       
       for (let i = 0; i < checkpoint.results.length; i++) {
         const result = checkpoint.results[i];
@@ -442,9 +545,9 @@ export async function runBenchmark(options = {}) {
 
       let answeredCount = 0;
       
-      // Determine the answer provider (for LLM, not judge)
-      // If judge is "exact", we still need anthropic for answer generation
-      let answerProvider = judgeProvider === 'auto' || judgeProvider === 'exact' ? 'anthropic' : judgeProvider;
+      // Answer provider is now independent from judge provider
+      // This allows judge and answer-gen to use different LLM providers
+      // (e.g., judge=opencode, answer=anthropic)
 
        for (let i = 0; i < checkpoint.results.length; i++) {
          const result = checkpoint.results[i];
@@ -485,31 +588,39 @@ export async function runBenchmark(options = {}) {
       saveCheckpoint(checkpointPath, checkpoint);
     }
 
-    // Phase 5: Evaluate
-    if (checkpoint.phase_index <= 4) {
-      console.log('\n[evaluate] Evaluating answers...');
-      checkpoint.phase = 'evaluate';
-      checkpoint.timestamps.eval_start = Date.now();
+     // Phase 5: Evaluate
+     if (checkpoint.phase_index <= 4) {
+       console.log('\n[evaluate] Evaluating answers...');
+       checkpoint.phase = 'evaluate';
+       checkpoint.timestamps.eval_start = Date.now();
 
-      const judge = createJudge(judgeProvider, { model: judgeModel });
-      let evalCount = 0;
+       const judge = createJudge(judgeProvider, { model: judgeModel });
+       let evalCount = 0;
 
-      for (const result of checkpoint.results) {
-        const evaluation = await judge(result.predicted, result.answer, result.question);
-        result.correct = evaluation.correct;
-        result.judge_reason = evaluation.reason;
+       for (let i = 0; i < checkpoint.results.length; i++) {
+         const result = checkpoint.results[i];
+         try {
+           const evaluation = await judge(result.predicted, result.answer, result.question);
+           result.correct = evaluation.correct;
+           result.judge_reason = evaluation.reason;
+           evalCount++;
+         } catch (err) {
+           console.warn(`[evaluate] question ${i} (${result.question_id}) judge error: ${err.message}`);
+           result.correct = false;
+           result.judge_reason = `error: ${err.message}`;
+           result.error = true;
+         }
 
-        evalCount++;
-        if (evalCount % 10 === 0) {
-          console.log(`  Evaluated ${evalCount}/${checkpoint.results.length}`);
-        }
-      }
+         if (evalCount % 10 === 0) {
+           console.log(`  Evaluated ${evalCount}/${checkpoint.results.length}`);
+         }
+       }
 
-      checkpoint.evaluated = evalCount;
-      checkpoint.phase_index = 5;
-      checkpoint.timestamps.eval_end = Date.now();
-      saveCheckpoint(checkpointPath, checkpoint);
-    }
+       checkpoint.evaluated = evalCount;
+       checkpoint.phase_index = 5;
+       checkpoint.timestamps.eval_end = Date.now();
+       saveCheckpoint(checkpointPath, checkpoint);
+     }
 
     // Phase 6: Report
     if (checkpoint.phase_index <= 5) {
@@ -624,3 +735,6 @@ function printReport(report) {
   console.log(`\nMemScore: ${overallPct}% / ${report.latency_stats.avg.toFixed(0)}ms / ${Math.round(report.total_tokens)}tok`);
   console.log('='.repeat(60) + '\n');
 }
+
+// Export for use in index.js
+export { IngestVerificationError };

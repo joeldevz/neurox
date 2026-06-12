@@ -13,7 +13,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { NeuroxProvider } from './providers/neurox.js';
 import { LongMemEvalBenchmark } from './benchmarks/longmemeval.js';
-import { runBenchmark } from './runner.js';
+import { runBenchmark, IngestVerificationError } from './runner.js';
 import { generateRunId, loadJSON } from './utils.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -43,7 +43,7 @@ program
   )
   .option(
     '--judge-provider <provider>',
-    'Judge provider: anthropic|openai|gateway|exact|auto',
+    'Judge provider: anthropic|openai|gateway|opencode|exact|auto',
     'auto'
   )
   .option(
@@ -52,8 +52,13 @@ program
     null
   )
   .option(
+    '--answer-provider <provider>',
+    'Answer generation provider: anthropic|openai|gateway|opencode (default: anthropic)',
+    'anthropic'
+  )
+  .option(
     '--answer-model <model>',
-    'Answer generation model (same provider as judge)',
+    'Answer generation model (optional; uses provider default if omitted)',
     null
   )
   .option(
@@ -61,34 +66,106 @@ program
     'Delay in milliseconds between ingest POSTs (default: 50, 0 = no delay)',
     '50'
   )
+   .option(
+     '--no-temporal-branch',
+     'Disable temporal reasoning: gates chronological sort, include_stale, and TEMPORAL REASONING INSTRUCTIONS block. Current date anchor always injected when question_date exists.',
+     false
+   )
   .option(
-    '--no-temporal-branch',
-    'Disable temporal reasoning branch (changes 3-6 disabled; bugfixes 1-2 always remain)',
+    '--skip-ingest-verification',
+    'Skip post-ingest persistence verification gate (for debugging)',
     false
   )
-  .action(async (options) => {
-    try {
-      // Validate provider
-      if (options.provider !== 'neurox') {
-        console.error(`Error: Unknown provider: ${options.provider}`);
-        process.exit(1);
-      }
+   .action(async (options) => {
+     try {
+       // Validate provider
+       if (options.provider !== 'neurox') {
+         console.error(`Error: Unknown provider: ${options.provider}`);
+         process.exit(1);
+       }
 
-      // Validate benchmark
-      if (options.benchmark !== 'longmemeval') {
-        console.error(`Error: Unknown benchmark: ${options.benchmark}`);
-        process.exit(1);
-      }
+       // Validate benchmark
+       if (options.benchmark !== 'longmemeval') {
+         console.error(`Error: Unknown benchmark: ${options.benchmark}`);
+         process.exit(1);
+       }
 
-      // Validate judge provider
-      const validJudgeProviders = ['anthropic', 'openai', 'gateway', 'exact', 'auto'];
-      if (!validJudgeProviders.includes(options.judgeProvider)) {
-        console.error(
-          `Error: Invalid judge provider: ${options.judgeProvider}. ` +
-          `Must be one of: ${validJudgeProviders.join(', ')}`
-        );
-        process.exit(1);
-      }
+        // Validate judge provider
+        const validJudgeProviders = ['anthropic', 'openai', 'gateway', 'opencode', 'exact', 'auto'];
+        if (!validJudgeProviders.includes(options.judgeProvider)) {
+          console.error(
+            `Error: Invalid judge provider: ${options.judgeProvider}. ` +
+            `Must be one of: ${validJudgeProviders.join(', ')}`
+          );
+          process.exit(1);
+        }
+
+        // Fail-fast on missing API keys / CLI tools (before any work)
+        if (options.judgeProvider === 'anthropic' && !process.env.ANTHROPIC_API_KEY) {
+          console.error('Error: Judge provider is "anthropic" but ANTHROPIC_API_KEY is not set');
+          process.exit(1);
+        }
+        if (options.judgeProvider === 'openai' && !process.env.OPENAI_API_KEY) {
+          console.error('Error: Judge provider is "openai" but OPENAI_API_KEY is not set');
+          process.exit(1);
+        }
+        if (options.judgeProvider === 'gateway' && !process.env.GATEWAY_API_KEY) {
+          console.error('Error: Judge provider is "gateway" but GATEWAY_API_KEY is not set');
+          process.exit(1);
+        }
+        if (options.judgeProvider === 'opencode') {
+          const { execSync } = await import('child_process');
+          try {
+            execSync('opencode --version', { stdio: 'pipe' });
+          } catch (e) {
+            console.error('Error: Judge provider is "opencode" but opencode CLI is not available');
+            console.error('Make sure opencode is installed and in PATH: npm install -g opencode');
+            process.exit(1);
+          }
+        }
+         // Validate answer provider
+         const validAnswerProviders = ['anthropic', 'openai', 'gateway', 'opencode'];
+         if (!validAnswerProviders.includes(options.answerProvider)) {
+           console.error(
+             `Error: Invalid answer provider: ${options.answerProvider}. ` +
+             `Must be one of: ${validAnswerProviders.join(', ')}`
+           );
+           process.exit(1);
+         }
+
+         // Fail-fast on missing API keys for answer provider
+         if (options.answerProvider === 'anthropic' && !process.env.ANTHROPIC_API_KEY) {
+           console.error('Error: Answer provider is "anthropic" but ANTHROPIC_API_KEY is not set');
+           process.exit(1);
+         }
+         if (options.answerProvider === 'openai' && !process.env.OPENAI_API_KEY) {
+           console.error('Error: Answer provider is "openai" but OPENAI_API_KEY is not set');
+           process.exit(1);
+         }
+         if (options.answerProvider === 'gateway' && !process.env.GATEWAY_API_KEY) {
+           console.error('Error: Answer provider is "gateway" but GATEWAY_API_KEY is not set');
+           process.exit(1);
+         }
+         if (options.answerProvider === 'opencode') {
+           const { execSync } = await import('child_process');
+           try {
+             execSync('opencode --version', { stdio: 'pipe' });
+           } catch (e) {
+             console.error('Error: Answer provider is "opencode" but opencode CLI is not available');
+             process.exit(1);
+           }
+         }
+
+         // For judge 'auto': check if any key is available; if not, show prominent warning
+         if (options.judgeProvider === 'auto') {
+           const hasAnyKey = process.env.ANTHROPIC_API_KEY || process.env.OPENAI_API_KEY || process.env.GATEWAY_API_KEY;
+           if (!hasAnyKey) {
+             console.warn('\n⚠️  WARNING: Judge provider is "auto" and NO LLM API keys are set.');
+             console.warn('⚠️  Will degrade to exact-match (fuzzy string matching).');
+             console.warn('⚠️  Results with exact-match are NOT comparable with Mem0, Zep, Supermemory.');
+             console.warn('⚠️  To get comparable results, set ANTHROPIC_API_KEY, OPENAI_API_KEY, or GATEWAY_API_KEY\n');
+           }
+         }
 
       // Initialize provider
       const provider = new NeuroxProvider(process.env.NEUROX_BASE_URL);
@@ -128,41 +205,52 @@ program
       if (options.judgeModel) console.log(`Judge model: ${options.judgeModel}`);
       if (options.answerModel) console.log(`Answer model: ${options.answerModel}`);
 
-      const ingestDelayMs = parseInt(options.ingestDelayMs, 10);
-      const noTemporalBranch = options.noTemporalBranch === true;
-      const report = await runBenchmark({
-        provider,
-        benchmark,
-        runId,
-        limit,
-        stratified,
-        noIngest,
-        contextFormat: options.contextFormat,
-        judgeProvider: options.judgeProvider,
-        judgeModel: options.judgeModel,
-        answerModel: options.answerModel,
-        ingestDelayMs,
-        noTemporalBranch,
-        dataDir: path.join(__dirname, '..', 'data'),
-      });
+       const ingestDelayMs = parseInt(options.ingestDelayMs, 10);
+       const noTemporalBranch = options.noTemporalBranch === true;
+       const skipIngestVerification = options.skipIngestVerification === true;
+       const report = await runBenchmark({
+         provider,
+         benchmark,
+         runId,
+         limit,
+         stratified,
+         noIngest,
+         contextFormat: options.contextFormat,
+         judgeProvider: options.judgeProvider,
+         judgeModel: options.judgeModel,
+         answerProvider: options.answerProvider,
+         answerModel: options.answerModel,
+         ingestDelayMs,
+         noTemporalBranch,
+         skipIngestVerification,
+         dataDir: path.join(__dirname, '..', 'data'),
+       });
 
-      console.log(`\n✓ Benchmark complete!`);
-      console.log(`Report: data/runs/${runId}/report.json`);
-      console.log(`Accuracy: ${(report.accuracy * 100).toFixed(1)}%`);
-      
-      if (report.judge_mode.includes('NOT COMPARABLE')) {
-        console.warn('\n⚠️  WARNING: Results are NOT comparable with commercial systems.');
-        console.warn('⚠️  To get comparable results, set ANTHROPIC_API_KEY or OPENAI_API_KEY');
-      }
+       console.log(`\n✓ Benchmark complete!`);
+       console.log(`Report: data/runs/${runId}/report.json`);
+       console.log(`Accuracy: ${(report.accuracy * 100).toFixed(1)}%`);
+       
+       if (report.judge_mode.includes('NOT COMPARABLE')) {
+         console.warn('\n⚠️  WARNING: Results are NOT comparable with commercial systems.');
+         console.warn('⚠️  To get comparable results, set ANTHROPIC_API_KEY or OPENAI_API_KEY');
+       }
 
-      process.exit(0);
-    } catch (err) {
-      console.error(`Error: ${err.message}`);
-      if (process.env.DEBUG) {
-        console.error(err.stack);
-      }
-      process.exit(1);
-    }
+       process.exitCode = 0;
+       return;
+     } catch (err) {
+       // IngestVerificationError is a controlled abort — no stack trace needed
+       if (err instanceof IngestVerificationError) {
+         process.exitCode = 1;
+         return;
+       }
+       
+       console.error(`Error: ${err.message}`);
+       if (process.env.DEBUG) {
+         console.error(err.stack);
+       }
+       process.exitCode = 1;
+       return;
+     }
   });
 
 /**
