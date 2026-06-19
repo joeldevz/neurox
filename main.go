@@ -43,7 +43,7 @@ import (
 	"github.com/joeldevz/neurox/internal/updatecheck"
 )
 
-var version = "0.5.5"
+var version = "0.5.6"
 
 const (
 	defaultHTTPPort = 7438
