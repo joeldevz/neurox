@@ -1,0 +1,740 @@
+/**
+ * Benchmark Pipeline Runner
+ * Orchestrates 6 phases: ingest → wait → search → answer → evaluate → report
+ * Per-question namespacing for LongMemEval protocol
+ */
+
+import fs from 'fs';
+import path from 'path';
+import fetch from 'node-fetch';
+import { createJudge } from './judge.js';
+import { generateAnswer } from './answer.js';
+
+/**
+ * Typed error for ingest verification failure
+ * Signals to top-level handler that the run must abort with exit code 1
+ */
+class IngestVerificationError extends Error {
+  constructor(reason) {
+    super(reason);
+    this.name = 'IngestVerificationError';
+  }
+}
+
+/**
+ * Verify ingest persistence: poll for durability with timeout
+ * Polls status.total until >= expectedCount, with progress logging every ~10s
+ * @param {Object} provider - Provider with getStatus() method
+ * @param {number} expectedCount - Expected observation count
+ * @param {number} failedCount - Failed saves (real error if > 0)
+ * @param {Object} opts - { pollIntervalMs, timeoutMs } for testability
+ * @returns {Object} { ok: boolean, reason: string }
+ */
+async function verifyIngestPersistence(provider, expectedCount, failedCount, opts = {}) {
+  const pollIntervalMs = opts.pollIntervalMs ?? 2000;
+  const timeoutMs = opts.timeoutMs ?? Math.max(30000, expectedCount * 100, 120000);
+  
+  // Real error: client-side save failures
+  if (failedCount > 0) {
+    return { 
+      ok: false, 
+      reason: `ingest persistence: ${failedCount} client-side save failure(s) detected; aborting` 
+    };
+  }
+  
+  const startTime = Date.now();
+  let logNextAt = startTime + 10000;
+  let isFirstPoll = true;
+  
+  while (Date.now() - startTime < timeoutMs) {
+    try {
+      const status = await provider.getStatus();
+      
+      if (!status || typeof status.total !== 'number') {
+        // Status unavailable, degrade gracefully
+        console.warn(`[ingest] Could not verify ingest persistence (status unavailable); continuing`);
+        return { ok: true, reason: null };
+      }
+      
+      const serverTotal = status.total;
+      
+      // Pre-existing data on first poll (clean DB assumption violated)
+      if (isFirstPoll && serverTotal > expectedCount) {
+        const preExistingCount = serverTotal - expectedCount;
+        console.warn(`[ingest] Pre-existing observations detected (+${preExistingCount}); gate assumes clean DB`);
+        return { ok: true, reason: null };
+      }
+      
+      // Success: server has at least expected count
+      if (serverTotal >= expectedCount) {
+        return { ok: true, reason: null };
+      }
+      
+      // Log progress every 10s
+      if (Date.now() >= logNextAt) {
+        const elapsed = Math.round((Date.now() - startTime) / 1000);
+        console.log(`[ingest] durability: server ${serverTotal} / expected ${expectedCount} (${elapsed}s)`);
+        logNextAt = Date.now() + 10000;
+      }
+      
+      isFirstPoll = false;
+    } catch (err) {
+      // Transient error, retry
+    }
+    
+    await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
+  }
+  
+  // Timeout: genuine loss
+  return {
+    ok: false,
+    reason: `ingest persistence: server has fewer observations than expected after ${Math.round(timeoutMs / 1000)}s — observations lost (not just lagging); aborting`
+  };
+}
+
+/**
+ * Wait for observations to be indexed in namespace
+ * Polls /search endpoint with a generic query until count >= expected or timeout
+ */
+async function waitForIndexing(provider, namespace, expectedCount, timeoutMs = 60000) {
+  const pollInterval = 1000; // 1 second polling
+  const startTime = Date.now();
+  let lastCount = 0;
+  
+  // Initial delay to allow first batch consolidation
+  await new Promise((resolve) => setTimeout(resolve, 2000));
+  
+  while (Date.now() - startTime < timeoutMs) {
+    try {
+      // Use a generic query term to avoid wildcard issues
+      const params = new URLSearchParams({
+        q: 'session',
+        namespace,
+        limit: '1000',
+      });
+      const res = await fetch(`${provider.baseUrl}/api/v1/observations/search?${params}`);
+      
+      if (res.ok) {
+        const data = await res.json();
+        const count = data.results?.length || 0;
+        
+        if (count > lastCount) {
+          lastCount = count;
+          process.stdout.write(`[${count}/${expectedCount}]`);
+        }
+        
+        if (count >= expectedCount) {
+          console.log(` ✓`);
+          return true;
+        }
+      }
+    } catch (err) {
+      // Silently retry
+    }
+    
+    await new Promise((resolve) => setTimeout(resolve, pollInterval));
+  }
+  
+  console.log(` ⚠ (got ${lastCount}/${expectedCount})`);
+  return false;
+}
+
+/**
+ * Wait for embeddings to be generated in namespace
+ * 
+ * PRIMARY STRATEGY: Poll /api/v1/status endpoint for embeddings_pending field.
+ * When embeddings_pending reaches 0, embeddings are done.
+ * 
+ * STALL DETECTION: If embeddings_pending is > 0 and hasn't decreased for 30s,
+ * the embedder is likely broken/disabled. Fall back to legacy strategy.
+ * 
+ * FALLBACK: Use semantic_score > 0 heuristic via /search with debug=true,
+ * or fixed delay if polling fails.
+ * 
+ * @param {Object} provider - Provider with baseUrl and optional getStatus() method
+ * @param {string} namespace - Namespace to check
+ * @param {string} sampleQuery - Query to use for debug polling (fallback)
+ * @param {number} numObs - Number of observations in namespace
+ * @param {number} timeoutMs - Maximum wait time (scales to 150ms per obs, max 10min)
+ * @returns {Promise<boolean>} true if embeddings ready, false on timeout/fallback
+ */
+async function waitForEmbeddings(provider, namespace, sampleQuery, numObs, timeoutMs = 60000) {
+  // Compute effective timeout: scale by 150ms per observation, capped at 10 min
+  const scaledTimeout = Math.max(timeoutMs, numObs * 150);
+  const effectiveTimeout = Math.min(scaledTimeout, 600000); // 600s = 10 min
+  
+  // PRIMARY: Try status endpoint polling if provider supports getStatus
+  if (typeof provider.getStatus === 'function') {
+    const result = await _waitViaStatus(provider, effectiveTimeout);
+    if (result.success) {
+      process.stdout.write(`✓ embeddings ready`);
+      return true;
+    }
+    if (result.stalled) {
+      process.stdout.write(`⚠ stalled (embedder disabled)`);
+    } else {
+      process.stdout.write(`⚠ timeout`);
+    }
+  }
+  
+  // FALLBACK: Use legacy semantic_score detection
+  process.stdout.write(` → fallback`);
+  return _waitViaSemanticScore(provider, namespace, sampleQuery, numObs, effectiveTimeout);
+}
+
+/**
+ * Poll /api/v1/status for embeddings_pending field
+ * Returns { success: true } when pending hits 0
+ * Returns { stalled: true } if pending frozen > 30s
+ * Returns { success: false } on timeout
+ */
+async function _waitViaStatus(provider, timeoutMs) {
+  const pollInterval = 2000; // 2 second polling
+  const stallWindow = 30000;  // 30 seconds (default, used in stall detection)
+  const startTime = Date.now();
+  let lastPending = null;
+  let lastPendingTime = startTime;
+  let logNextAt = startTime + 10000; // Log progress every ~10s
+  
+  while (Date.now() - startTime < timeoutMs) {
+    try {
+      const status = await provider.getStatus();
+      if (!status) {
+        // Status endpoint error, fall back
+        return { success: false };
+      }
+      
+      const pending = status.embeddings_pending;
+      const total = status.embeddings_total;
+      
+      // Edge case: no embeddings configured at all
+      if (total === 0 && pending === 0) {
+        console.warn(`[embeddings] disabled (total=0, pending=0)`);
+        return { success: true };
+      }
+      
+      // Check for immediate completion
+      if (pending === 0 && total > 0) {
+        return { success: true };
+      }
+      
+      // Log progress periodically
+      if (Date.now() >= logNextAt) {
+        process.stdout.write(`[${pending}/${total}]`);
+        logNextAt = Date.now() + 10000;
+      }
+      
+      // Stall detection: pending hasn't decreased in 30s
+      if (pending > 0) {
+        if (lastPending !== null && pending === lastPending) {
+          if (Date.now() - lastPendingTime > stallWindow) {
+            return { stalled: true };
+          }
+        } else if (pending < (lastPending ?? Infinity)) {
+          // Pending decreased, reset stall timer
+          lastPending = pending;
+          lastPendingTime = Date.now();
+        }
+      }
+    } catch (err) {
+      // Silently continue
+    }
+    
+    await new Promise((resolve) => setTimeout(resolve, pollInterval));
+  }
+  
+  // Timeout
+  return { success: false };
+}
+
+/**
+ * FALLBACK: Poll /search with debug=true, check for semantic_score > 0
+ */
+async function _waitViaSemanticScore(provider, namespace, sampleQuery, numObs, timeoutMs) {
+  const pollInterval = 1500; // 1.5 second polling
+  const startTime = Date.now();
+  let pollAttempts = 0;
+  
+  while (Date.now() - startTime < timeoutMs) {
+    try {
+      const params = new URLSearchParams({
+        q: sampleQuery,
+        namespace,
+        limit: '5',
+        debug: 'true',
+      });
+      const res = await fetch(`${provider.baseUrl}/api/v1/observations/search?${params}`);
+      
+      if (res.ok) {
+        const data = await res.json();
+        const results = data.results || [];
+        
+        // Check if any result has semantic_score > 0
+        const hasSemanticScore = results.some(r => 
+          r.score_breakdown?.semantic_score > 0
+        );
+        
+        if (hasSemanticScore) {
+          process.stdout.write(`✓`);
+          return true;
+        }
+        
+        pollAttempts++;
+        if (pollAttempts % 4 === 0) {
+          process.stdout.write('.');
+        }
+      }
+    } catch (err) {
+      // Silently continue polling
+    }
+    
+    await new Promise((resolve) => setTimeout(resolve, pollInterval));
+  }
+  
+  // Fallback timeout — use fixed delay
+  const fallbackDelayMs = Math.min(60000, Math.max(5000, numObs * 400));
+  console.log(`\n    Waiting ${fallbackDelayMs}ms for async embeddings (fallback)...`);
+  await new Promise((resolve) => setTimeout(resolve, fallbackDelayMs));
+  
+  return false;
+}
+
+const PHASES = ['ingest', 'wait', 'search', 'answer', 'evaluate', 'report'];
+
+/**
+ * Load or create checkpoint
+ */
+function loadCheckpoint(checkpointPath) {
+  if (fs.existsSync(checkpointPath)) {
+    const content = fs.readFileSync(checkpointPath, 'utf-8');
+    return JSON.parse(content);
+  }
+  return {
+    phase: 'ingest',
+    phase_index: 0,
+    ingested: 0,
+    searched: 0,
+    answered: 0,
+    evaluated: 0,
+    results: [],
+    errors: [],
+    timestamps: {},
+  };
+}
+
+/**
+ * Save checkpoint
+ */
+function saveCheckpoint(checkpointPath, state) {
+  const dir = path.dirname(checkpointPath);
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true });
+  }
+  fs.writeFileSync(checkpointPath, JSON.stringify(state, null, 2));
+}
+
+/**
+ * Latency statistics
+ */
+function computeStats(latencies) {
+  if (latencies.length === 0) return { avg: 0, p50: 0, p95: 0, p99: 0 };
+  const sorted = latencies.slice().sort((a, b) => a - b);
+  const avg = latencies.reduce((a, b) => a + b, 0) / latencies.length;
+  const p50 = sorted[Math.floor(sorted.length * 0.5)];
+  const p95 = sorted[Math.floor(sorted.length * 0.95)];
+  const p99 = sorted[Math.floor(sorted.length * 0.99)];
+  return { avg, p50, p95, p99 };
+}
+
+/**
+ * Main benchmark runner
+ */
+export async function runBenchmark(options = {}) {
+  const {
+    provider,
+    benchmark,
+    runId = `run-${Date.now()}`,
+    limit = null,
+    stratified = false,
+    noIngest = false,
+    contextFormat = 'raw',
+    judgeProvider = 'auto',
+    judgeModel = null,
+    answerProvider = 'anthropic',
+    answerModel = null,
+    ingestDelayMs = 50,
+    noTemporalBranch = false,
+    skipIngestVerification = false,
+    dataDir = './data',
+  } = options;
+
+  const runDir = path.join(dataDir, 'runs', runId);
+  const checkpointPath = path.join(runDir, 'checkpoint.json');
+  const reportPath = path.join(runDir, 'report.json');
+
+  // Load checkpoint
+  let checkpoint = loadCheckpoint(checkpointPath);
+  console.log(`Starting benchmark. Phase: ${checkpoint.phase}`);
+
+  try {
+    // Phase 0: Load benchmark
+    if (checkpoint.phase_index === 0) {
+      console.log('\n[ingest] Loading benchmark...');
+      const questions = benchmark.getQuestions(limit, stratified);
+      checkpoint.total_questions = questions.length;
+      checkpoint.questions = questions;
+      const distribution = benchmark.getTypeDistribution(limit, stratified);
+      console.log(
+        `Loaded ${questions.length} questions, distribution: ${JSON.stringify(distribution)}`
+      );
+      if (stratified) {
+        console.log('Sampling: stratified (proportional across categories)');
+      }
+      saveCheckpoint(checkpointPath, checkpoint);
+    }
+
+     // Phase 1: Per-Question Ingest & Wait
+     // LongMemEval protocol: each question gets its own namespace with only its haystack
+     if (checkpoint.phase_index <= 0 && !noIngest) {
+       console.log('\n[ingest] Ingesting per-question haystacks into Neurox...');
+       checkpoint.phase = 'ingest';
+       checkpoint.timestamps.ingest_start = Date.now();
+
+       let totalIngested = 0;
+       let totalFailedSaves = 0;
+       
+       for (let i = 0; i < checkpoint.questions.length; i++) {
+         const q = checkpoint.questions[i];
+         const sessions = q.haystack_sessions || [];
+         
+         // Per-question namespace
+         const questionNamespace = `${runId}-q${i}`;
+         
+         // Initialize session for this question's namespace
+         await provider.initialize(questionNamespace);
+
+         // Ingest ONLY this question's haystack sessions with optional dates
+         const ingestResult = await provider.ingest(sessions, questionNamespace, q.haystack_dates, { ingestDelayMs });
+         const obsIds = ingestResult.ids || [];
+         
+         totalIngested += obsIds.length;
+         totalFailedSaves += ingestResult.failedCount || 0;
+         
+         // Store mapping for later search
+         checkpoint.results.push({
+           question_id: q.question_id,
+           question: q.question,
+           answer: q.answer,
+           question_type: q.question_type,
+           question_date: q.question_date,
+           namespace: questionNamespace,
+           haystack_count: sessions.length,
+           observation_ids: obsIds,
+           context: null,
+           predicted: null,
+           correct: null,
+           latency_ms: 0,
+           error: null,
+         });
+
+         if ((i + 1) % 10 === 0) {
+           console.log(`  Ingested ${i + 1}/${checkpoint.questions.length} questions`);
+         }
+       }
+
+       checkpoint.ingested = totalIngested;
+       checkpoint.failed_saves = totalFailedSaves;
+       checkpoint.phase_index = 1;
+       checkpoint.timestamps.ingest_end = Date.now();
+       console.log(`Ingested ${totalIngested} session observations across ${checkpoint.questions.length} question namespaces`);
+       if (totalFailedSaves > 0) {
+         console.log(`  ⚠ ${totalFailedSaves} save(s) failed after retries`);
+       }
+       saveCheckpoint(checkpointPath, checkpoint);
+     }
+
+      // Phase 1.5: Verify ingest persistence before proceeding
+      if (checkpoint.phase_index === 1 && !options.skipIngestVerification) {
+        const verification = await verifyIngestPersistence(provider, checkpoint.ingested, checkpoint.failed_saves || 0);
+        if (!verification.ok) {
+          console.error(`\n[ERROR] ${verification.reason}`);
+          checkpoint.phase = 'ingest_verification_failed';
+          saveCheckpoint(checkpointPath, checkpoint);
+          // Throw typed error that propagates to top-level handler for clean exit
+          throw new IngestVerificationError(verification.reason);
+        }
+      }
+
+     // Phase 2: Wait for indexing per question
+     if (checkpoint.phase_index <= 1) {
+       console.log('\n[wait] Waiting for FTS5 indexing per question...');
+       checkpoint.phase = 'wait';
+       checkpoint.timestamps.wait_start = Date.now();
+      
+      for (let i = 0; i < checkpoint.results.length; i++) {
+        const result = checkpoint.results[i];
+        const expectedCount = result.haystack_count;
+        
+        process.stdout.write(`  Q${i}: `);
+        await waitForIndexing(provider, result.namespace, expectedCount, 60000);
+      }
+      
+      console.log('\n[wait] Waiting for async embeddings per question...');
+      for (let i = 0; i < checkpoint.results.length; i++) {
+        const result = checkpoint.results[i];
+        process.stdout.write(`  Q${i}: `);
+        await waitForEmbeddings(
+          provider,
+          result.namespace,
+          result.question,  // Use the question itself as sample query
+          result.haystack_count,
+          60000
+        );
+        console.log('');  // Newline after embeddings wait
+      }
+      
+      checkpoint.phase_index = 2;
+      checkpoint.timestamps.wait_end = Date.now();
+      console.log('[wait] FTS5 + embeddings ready');
+      saveCheckpoint(checkpointPath, checkpoint);
+    }
+
+    // Phase 3: Search in per-question namespaces
+    if (checkpoint.phase_index <= 2) {
+      console.log('\n[search] Searching for context in per-question namespaces...');
+      checkpoint.phase = 'search';
+      checkpoint.timestamps.search_start = Date.now();
+
+      const latencies = [];
+
+       for (let i = 0; i < checkpoint.results.length; i++) {
+          const result = checkpoint.results[i];
+          const question = result.question;
+          const namespace = result.namespace; // Use question-specific namespace
+
+          const t0 = Date.now();
+          const context = await provider.search(question, namespace, 10, { contextFormat, noTemporalBranch }); // top-10 from this question's haystack
+          const latency = Date.now() - t0;
+
+         result.context = context;
+         result.latency_ms = latency;
+         latencies.push(latency);
+
+        if ((i + 1) % 10 === 0) {
+          console.log(`  Searched ${i + 1}/${checkpoint.results.length} questions`);
+        }
+      }
+
+      checkpoint.searched = checkpoint.results.length;
+      checkpoint.latency_stats = computeStats(latencies);
+      checkpoint.phase_index = 3;
+      checkpoint.timestamps.search_end = Date.now();
+      console.log(
+        `Search latency: avg ${checkpoint.latency_stats.avg.toFixed(0)}ms, ` +
+        `p50 ${checkpoint.latency_stats.p50.toFixed(0)}ms, ` +
+        `p95 ${checkpoint.latency_stats.p95.toFixed(0)}ms`
+      );
+      saveCheckpoint(checkpointPath, checkpoint);
+    }
+
+    // Phase 4: Answer Generation (LLM-based)
+    if (checkpoint.phase_index <= 3) {
+      console.log('\n[answer] Generating answers with LLM...');
+      checkpoint.phase = 'answer';
+      checkpoint.timestamps.answer_start = Date.now();
+
+      let answeredCount = 0;
+      
+      // Answer provider is now independent from judge provider
+      // This allows judge and answer-gen to use different LLM providers
+      // (e.g., judge=opencode, answer=anthropic)
+
+       for (let i = 0; i < checkpoint.results.length; i++) {
+         const result = checkpoint.results[i];
+         const context = result.context || '';
+
+         try {
+            // Generate answer using LLM (or fallback to context extraction)
+            const answer = await generateAnswer(result.question, context, {
+              provider: answerProvider,
+              model: answerModel,
+              temperature: 0,
+              questionDate: result.question_date,
+              noTemporalBranch,
+            });
+
+          result.predicted = answer;
+          answeredCount++;
+        } catch (err) {
+          console.warn(`  Answer generation failed for Q${i}: ${err.message}`);
+          // Fallback: extract first non-empty line from context
+          if (context.length > 0) {
+            const lines = context.split('\n').filter(l => l.trim().length > 10);
+            result.predicted = lines[0]?.substring(0, 200) || 'No context available';
+          } else {
+            result.predicted = 'No context available';
+          }
+        }
+
+        if ((i + 1) % 10 === 0) {
+          console.log(`  Generated ${i + 1}/${checkpoint.results.length} answers`);
+        }
+      }
+
+      checkpoint.answered = answeredCount;
+      checkpoint.phase_index = 4;
+      checkpoint.timestamps.answer_end = Date.now();
+      console.log(`Generated answers for ${answeredCount}/${checkpoint.results.length} questions`);
+      saveCheckpoint(checkpointPath, checkpoint);
+    }
+
+     // Phase 5: Evaluate
+     if (checkpoint.phase_index <= 4) {
+       console.log('\n[evaluate] Evaluating answers...');
+       checkpoint.phase = 'evaluate';
+       checkpoint.timestamps.eval_start = Date.now();
+
+       const judge = createJudge(judgeProvider, { model: judgeModel });
+       let evalCount = 0;
+
+       for (let i = 0; i < checkpoint.results.length; i++) {
+         const result = checkpoint.results[i];
+         try {
+           const evaluation = await judge(result.predicted, result.answer, result.question);
+           result.correct = evaluation.correct;
+           result.judge_reason = evaluation.reason;
+           evalCount++;
+         } catch (err) {
+           console.warn(`[evaluate] question ${i} (${result.question_id}) judge error: ${err.message}`);
+           result.correct = false;
+           result.judge_reason = `error: ${err.message}`;
+           result.error = true;
+         }
+
+         if (evalCount % 10 === 0) {
+           console.log(`  Evaluated ${evalCount}/${checkpoint.results.length}`);
+         }
+       }
+
+       checkpoint.evaluated = evalCount;
+       checkpoint.phase_index = 5;
+       checkpoint.timestamps.eval_end = Date.now();
+       saveCheckpoint(checkpointPath, checkpoint);
+     }
+
+    // Phase 6: Report
+    if (checkpoint.phase_index <= 5) {
+      console.log('\n[report] Generating report...');
+      checkpoint.phase = 'report';
+      checkpoint.timestamps.report_start = Date.now();
+
+      // Compute metrics
+      const accuracy = checkpoint.results.filter((r) => r.correct).length / checkpoint.results.length;
+      const accuracyByType = {};
+      const countByType = {};
+
+      for (const result of checkpoint.results) {
+        const type = result.question_type;
+        countByType[type] = (countByType[type] || 0) + 1;
+        accuracyByType[type] = (accuracyByType[type] || 0) + (result.correct ? 1 : 0);
+      }
+
+      const report = {
+        run_id: runId,
+        benchmark: 'LongMemEval-S',
+        provider: 'Neurox',
+        provider_url: provider.baseUrl,
+        context_format: contextFormat,
+        judge_provider: judgeProvider,
+        judge_mode: judgeProvider === 'exact' ? 'exact-match ⚠️  NOT COMPARABLE' : `llm (${judgeProvider})`,
+        total_questions: checkpoint.results.length,
+        correct: checkpoint.results.filter((r) => r.correct).length,
+        accuracy: accuracy,
+        accuracy_by_type: {},
+        latency_stats: checkpoint.latency_stats,
+        total_tokens: checkpoint.results.reduce((sum, r) => sum + (r.context?.length || 0), 0) / 4, // approx tokens
+        duration_ms: checkpoint.timestamps.report_start - checkpoint.timestamps.ingest_start,
+        results: checkpoint.results,
+        ingested: checkpoint.ingested,
+        searched: checkpoint.searched,
+        answered: checkpoint.answered,
+        evaluated: checkpoint.evaluated,
+      };
+
+      // Compute accuracy by type
+      for (const type in countByType) {
+        const correct = accuracyByType[type];
+        const total = countByType[type];
+        report.accuracy_by_type[type] = {
+          correct,
+          total,
+          accuracy: total > 0 ? correct / total : 0,
+        };
+      }
+
+      checkpoint.timestamps.report_end = Date.now();
+
+      // Write report
+      if (!fs.existsSync(runDir)) {
+        fs.mkdirSync(runDir, { recursive: true });
+      }
+      fs.writeFileSync(reportPath, JSON.stringify(report, null, 2));
+
+      // Print summary
+      printReport(report);
+
+      checkpoint.phase = 'complete';
+      saveCheckpoint(checkpointPath, checkpoint);
+
+      console.log(`\nReport saved to: ${reportPath}`);
+      return report;
+    }
+  } catch (err) {
+    checkpoint.errors.push({
+      phase: checkpoint.phase,
+      timestamp: Date.now(),
+      error: err.message,
+    });
+    saveCheckpoint(checkpointPath, checkpoint);
+    throw err;
+  }
+}
+
+/**
+ * Print human-readable report
+ */
+function printReport(report) {
+  console.log('\n' + '='.repeat(60));
+  console.log('NEUROX MEMORYBENCH REPORT');
+  console.log('='.repeat(60));
+  console.log(`Run ID:    ${report.run_id}`);
+  console.log(`Benchmark: ${report.benchmark}`);
+  console.log(`Provider:  ${report.provider} (${report.provider_url})`);
+  console.log(`Judge:     ${report.judge_mode}`);
+  console.log(`Questions: ${report.total_questions}`);
+
+  console.log('\nACCURACY BY TYPE:');
+  const typeLabels = Object.keys(report.accuracy_by_type).sort();
+  for (const type of typeLabels) {
+    const { correct, total, accuracy } = report.accuracy_by_type[type];
+    const pct = (accuracy * 100).toFixed(1);
+    console.log(`  ${type.padEnd(25)} ${correct}/${total}  (${pct}%)`);
+  }
+
+  const overallPct = (report.accuracy * 100).toFixed(1);
+  console.log(`  ${'─'.repeat(50)}`);
+  console.log(`  ${'OVERALL'.padEnd(25)} ${report.correct}/${report.total_questions}  (${overallPct}%)`);
+
+  console.log('\nLATENCY:');
+  console.log(
+    `  avg search: ${report.latency_stats.avg.toFixed(0)}ms  ` +
+    `p50: ${report.latency_stats.p50.toFixed(0)}ms  ` +
+    `p95: ${report.latency_stats.p95.toFixed(0)}ms`
+  );
+
+  console.log(`\nMemScore: ${overallPct}% / ${report.latency_stats.avg.toFixed(0)}ms / ${Math.round(report.total_tokens)}tok`);
+  console.log('='.repeat(60) + '\n');
+}
+
+// Export for use in index.js
+export { IngestVerificationError };

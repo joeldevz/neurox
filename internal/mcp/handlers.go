@@ -197,6 +197,7 @@ func (d *Deps) handleRecall(ctx context.Context, req mcp.CallToolRequest) (resul
 			SourceSurface:   r.SourceSurface,
 			SourceSessionID: r.SourceSessionID,
 			SourceTool:      r.SourceTool,
+			CreatedAt:       r.CreatedAt,
 		}
 		if r.Breakdown != nil {
 			item.ScoreBreakdown = r.Breakdown
@@ -1023,6 +1024,7 @@ type recallResponseItem struct {
 	SourceSurface   string                 `json:"source_surface,omitempty"`
 	SourceSessionID string                 `json:"source_session_id,omitempty"`
 	SourceTool      string                 `json:"source_tool,omitempty"`
+	CreatedAt       string                 `json:"created_at,omitempty"`
 	ScoreBreakdown  *recall.ScoreBreakdown `json:"score_breakdown,omitempty"`
 }
 

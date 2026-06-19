@@ -8,7 +8,6 @@ import (
 	"io"
 	"net/http"
 	"sync/atomic"
-	"time"
 )
 
 const defaultOllamaURL = "http://localhost:11434"
@@ -34,7 +33,7 @@ func NewOllama(cfg OllamaConfig) *Ollama {
 		url:   url,
 		model: cfg.Model,
 		client: &http.Client{
-			Timeout: 30 * time.Second,
+			Timeout: embedTimeout(),
 		},
 	}
 }

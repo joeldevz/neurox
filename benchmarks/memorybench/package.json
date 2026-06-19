@@ -1,0 +1,16 @@
+{
+  "name": "neurox-memorybench",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Memorybench harness for Neurox provider adapter",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "test": "node --test src/**/*.test.js"
+  },
+  "dependencies": {
+    "commander": "^11.1.0",
+    "node-fetch": "^3.3.2"
+  },
+  "devDependencies": {}
+}

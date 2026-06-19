@@ -3479,3 +3479,185 @@ func TestSearchNoRegressionWhenFTSSaturated(t *testing.T) {
 	t.Log("Expected: top 10 results should be the strong FTS matches, not weak semantic")
 	t.Log("Validate via: benchmarks/longmemeval/ on knowledge-update scenario")
 }
+
+// ============================================================================
+// TESTS: Staleness filtering behavior (fresh, revalidated vs stale, expired)
+// ============================================================================
+
+// TestStalenessDefaultExcludesStaleAndExpired verifies that normal recall
+// (without IncludeStale and without IntentHistory) hides both stale and expired
+// observations, returning only fresh and revalidated ones.
+func TestStalenessDefaultExcludesStaleAndExpired(t *testing.T) {
+	engine, store, database := newTestEngine(t)
+	defer database.Close()
+
+	ctx := context.Background()
+
+	// Create 3 observations with different staleness states
+	fresh, err := store.Save(ctx, observation.Observation{
+		Title:   "Fresh observation",
+		Content: "This is still valid and fresh",
+	})
+	if err != nil {
+		t.Fatalf("save fresh: %v", err)
+	}
+
+	stale, err := store.Save(ctx, observation.Observation{
+		Title:   "Stale observation",
+		Content: "This was updated but is now stale",
+	})
+	if err != nil {
+		t.Fatalf("save stale: %v", err)
+	}
+
+	expired, err := store.Save(ctx, observation.Observation{
+		Title:   "Expired observation",
+		Content: "This is completely expired",
+	})
+	if err != nil {
+		t.Fatalf("save expired: %v", err)
+	}
+
+	// Set staleness directly
+	setObservationFields(t, database, fresh.ID, map[string]any{
+		"staleness": "'fresh'",
+	})
+	setObservationFields(t, database, stale.ID, map[string]any{
+		"staleness": "'stale'",
+	})
+	setObservationFields(t, database, expired.ID, map[string]any{
+		"staleness": "'expired'",
+	})
+
+	// Normal recall (no IncludeStale, no history intent)
+	results, err := engine.Search(ctx, SearchOptions{
+		Query: "observation",
+		Limit: 10,
+	})
+	if err != nil {
+		t.Fatalf("Search returned error: %v", err)
+	}
+
+	// Should only get the fresh observation
+	if len(results) != 1 {
+		t.Fatalf("len(results) = %d, want 1 (only fresh). Got: %v",
+			len(results), formatResultsForError(results))
+	}
+	if results[0].ID != fresh.ID {
+		t.Fatalf("result ID = %q, want %q (fresh)", results[0].ID, fresh.ID)
+	}
+	if results[0].Staleness != "fresh" {
+		t.Fatalf("result staleness = %q, want 'fresh'", results[0].Staleness)
+	}
+}
+
+// TestStalenessRevalidatedIncludedInDefault verifies that revalidated
+// observations (which are explicitly marked as re-checked) do appear in
+// normal recall, just like fresh ones.
+func TestStalenessRevalidatedIncludedInDefault(t *testing.T) {
+	engine, store, database := newTestEngine(t)
+	defer database.Close()
+
+	ctx := context.Background()
+
+	revalidated, err := store.Save(ctx, observation.Observation{
+		Title:   "Revalidated observation",
+		Content: "This was checked and is still valid",
+	})
+	if err != nil {
+		t.Fatalf("save revalidated: %v", err)
+	}
+
+	setObservationFields(t, database, revalidated.ID, map[string]any{
+		"staleness": "'revalidated'",
+	})
+
+	results, err := engine.Search(ctx, SearchOptions{
+		Query: "observation",
+		Limit: 10,
+	})
+	if err != nil {
+		t.Fatalf("Search returned error: %v", err)
+	}
+
+	if len(results) != 1 {
+		t.Fatalf("len(results) = %d, want 1", len(results))
+	}
+	if results[0].ID != revalidated.ID {
+		t.Fatalf("result ID = %q, want %q", results[0].ID, revalidated.ID)
+	}
+	if results[0].Staleness != "revalidated" {
+		t.Fatalf("result staleness = %q, want 'revalidated'", results[0].Staleness)
+	}
+}
+
+// TestStalenessHistoryIntentIncludesStaleAndExpired verifies that when
+// a history intent is detected (e.g., "what did I use to prefer"), IncludeStale
+// is set to true, allowing stale and expired observations to appear in results.
+func TestStalenessHistoryIntentIncludesStaleAndExpired(t *testing.T) {
+	engine, store, database := newTestEngine(t)
+	defer database.Close()
+
+	ctx := context.Background()
+
+	stale, err := store.Save(ctx, observation.Observation{
+		Title:   "Old approach",
+		Content: "This used to be our preferred approach before",
+	})
+	if err != nil {
+		t.Fatalf("save stale: %v", err)
+	}
+
+	expired, err := store.Save(ctx, observation.Observation{
+		Title:   "Expired pattern",
+		Content: "This was an earlier decision before we changed it",
+	})
+	if err != nil {
+		t.Fatalf("save expired: %v", err)
+	}
+
+	setObservationFields(t, database, stale.ID, map[string]any{
+		"staleness": "'stale'",
+	})
+	setObservationFields(t, database, expired.ID, map[string]any{
+		"staleness": "'expired'",
+	})
+
+	// History query: "before" triggers IntentHistory and sets IncludeStale=true
+	results, err := engine.Search(ctx, SearchOptions{
+		Query: "before approach decision",
+		Limit: 10,
+	})
+	if err != nil {
+		t.Fatalf("Search returned error: %v", err)
+	}
+
+	// Should get both stale and expired observations
+	if len(results) != 2 {
+		t.Fatalf("len(results) = %d, want 2 (stale + expired). Got: %v",
+			len(results), formatResultsForError(results))
+	}
+
+	resultIDs := make(map[string]bool)
+	for _, r := range results {
+		resultIDs[r.ID] = true
+	}
+	if !resultIDs[stale.ID] {
+		t.Fatalf("stale observation %q not in results", stale.ID)
+	}
+	if !resultIDs[expired.ID] {
+		t.Fatalf("expired observation %q not in results", expired.ID)
+	}
+}
+
+// Helper to format results for error messages
+func formatResultsForError(results []Result) string {
+	var buf strings.Builder
+	for i, r := range results {
+		if i > 0 {
+			buf.WriteString(", ")
+		}
+		buf.WriteString(fmt.Sprintf("{ID:%q Staleness:%q}", r.ID, r.Staleness))
+	}
+	return buf.String()
+}

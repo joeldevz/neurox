@@ -1,0 +1,534 @@
+{
+  "config": {
+    "version": "1.0",
+    "dataset_type": "synthetic",
+    "num_users": 20,
+    "description": "Synthetic Memora dataset with FAMA test cases: temporal evolution, invalidation, and memory staleness"
+  },
+  "users": [
+    {
+      "user_id": "user-001",
+      "sessions": [
+        {
+          "session_id": "sess-001-a",
+          "date": "2026-01-01T10:00:00Z",
+          "turns": [
+            {"role": "user", "content": "I love coffee"},
+            {"role": "assistant", "content": "Noted: user enjoys coffee"},
+            {"role": "user", "content": "My favorite is espresso"},
+            {"role": "assistant", "content": "Updated: espresso is the favorite"}
+          ]
+        },
+        {
+          "session_id": "sess-001-b",
+          "date": "2026-02-01T10:00:00Z",
+          "turns": [
+            {"role": "user", "content": "I stopped drinking coffee"},
+            {"role": "assistant", "content": "Noted: no longer drinks coffee"},
+            {"role": "user", "content": "I prefer tea now"},
+            {"role": "assistant", "content": "Updated: tea is now the beverage of choice"}
+          ]
+        },
+        {
+          "session_id": "sess-001-c",
+          "date": "2026-03-01T10:00:00Z",
+          "turns": [
+            {"role": "user", "content": "Tea has too much caffeine for me"},
+            {"role": "assistant", "content": "Noted: caffeine sensitivity"},
+            {"role": "user", "content": "I prefer herbal infusions"},
+            {"role": "assistant", "content": "Updated: herbal infusions are preferred"}
+          ]
+        }
+      ]
+    },
+    {
+      "user_id": "user-002",
+      "sessions": [
+        {
+          "session_id": "sess-002-a",
+          "date": "2026-01-05T09:30:00Z",
+          "turns": [
+            {"role": "user", "content": "I work as a software engineer"},
+            {"role": "assistant", "content": "Noted: profession is software engineer"},
+            {"role": "user", "content": "I specialize in backend systems"},
+            {"role": "assistant", "content": "Updated: specialization in backend"}
+          ]
+        },
+        {
+          "session_id": "sess-002-b",
+          "date": "2026-02-10T14:15:00Z",
+          "turns": [
+            {"role": "user", "content": "I took a new job as a product manager"},
+            {"role": "assistant", "content": "Noted: career change to product management"},
+            {"role": "user", "content": "I now focus on strategy and user experience"},
+            {"role": "assistant", "content": "Updated: focus shifted to strategy and UX"}
+          ]
+        },
+        {
+          "session_id": "sess-002-c",
+          "date": "2026-03-15T11:00:00Z",
+          "turns": [
+            {"role": "user", "content": "I'm still learning the PM role"},
+            {"role": "assistant", "content": "Noted: in learning phase"},
+            {"role": "user", "content": "But I miss some technical aspects"},
+            {"role": "assistant", "content": "Noted: technical nostalgia"}
+          ]
+        }
+      ]
+    },
+    {
+      "user_id": "user-003",
+      "sessions": [
+        {
+          "session_id": "sess-003-a",
+          "date": "2026-01-10T08:00:00Z",
+          "turns": [
+            {"role": "user", "content": "I live in San Francisco"},
+            {"role": "assistant", "content": "Noted: location is San Francisco"},
+            {"role": "user", "content": "The weather is pleasant year-round"},
+            {"role": "assistant", "content": "Noted: appreciates SF weather"}
+          ]
+        },
+        {
+          "session_id": "sess-003-b",
+          "date": "2026-02-05T16:30:00Z",
+          "turns": [
+            {"role": "user", "content": "I moved to New York"},
+            {"role": "assistant", "content": "Noted: relocated to New York"},
+            {"role": "user", "content": "The winters are much colder"},
+            {"role": "assistant", "content": "Updated: now in New York with cold winters"}
+          ]
+        },
+        {
+          "session_id": "sess-003-c",
+          "date": "2026-03-20T13:45:00Z",
+          "turns": [
+            {"role": "user", "content": "I'm adjusting to the East Coast"},
+            {"role": "assistant", "content": "Noted: adjusting to new location"},
+            {"role": "user", "content": "I enjoy the seasons here"},
+            {"role": "assistant", "content": "Noted: appreciates seasonal variety"}
+          ]
+        }
+      ]
+    },
+    {
+      "user_id": "user-004",
+      "sessions": [
+        {
+          "session_id": "sess-004-a",
+          "date": "2026-01-15T10:00:00Z",
+          "turns": [
+            {"role": "user", "content": "I have three pets"},
+            {"role": "assistant", "content": "Noted: has 3 pets"},
+            {"role": "user", "content": "Two dogs and one cat"},
+            {"role": "assistant", "content": "Updated: 2 dogs, 1 cat"}
+          ]
+        },
+        {
+          "session_id": "sess-004-b",
+          "date": "2026-02-08T15:20:00Z",
+          "turns": [
+            {"role": "user", "content": "One of my dogs passed away"},
+            {"role": "assistant", "content": "Noted: sad update about pet"},
+            {"role": "user", "content": "Now I have one dog and one cat"},
+            {"role": "assistant", "content": "Updated: now 1 dog, 1 cat"}
+          ]
+        },
+        {
+          "session_id": "sess-004-c",
+          "date": "2026-03-10T09:15:00Z",
+          "turns": [
+            {"role": "user", "content": "I adopted a new puppy"},
+            {"role": "assistant", "content": "Noted: new pet acquired"},
+            {"role": "user", "content": "So now I have two dogs again"},
+            {"role": "assistant", "content": "Updated: back to 2 dogs, 1 cat"}
+          ]
+        }
+      ]
+    },
+    {
+      "user_id": "user-005",
+      "sessions": [
+        {
+          "session_id": "sess-005-a",
+          "date": "2026-01-20T11:30:00Z",
+          "turns": [
+            {"role": "user", "content": "My hobby is painting"},
+            {"role": "assistant", "content": "Noted: hobby is painting"},
+            {"role": "user", "content": "I prefer watercolor"},
+            {"role": "assistant", "content": "Updated: watercolor is preferred medium"}
+          ]
+        },
+        {
+          "session_id": "sess-005-b",
+          "date": "2026-02-12T14:00:00Z",
+          "turns": [
+            {"role": "user", "content": "I switched to oil painting"},
+            {"role": "assistant", "content": "Noted: switched to oil medium"},
+            {"role": "user", "content": "I find it more expressive"},
+            {"role": "assistant", "content": "Updated: oil painting for expressiveness"}
+          ]
+        },
+        {
+          "session_id": "sess-005-c",
+          "date": "2026-03-18T10:45:00Z",
+          "turns": [
+            {"role": "user", "content": "I'm taking an oil painting class"},
+            {"role": "assistant", "content": "Noted: formal training in oil"},
+            {"role": "user", "content": "Learning from a professional artist"},
+            {"role": "assistant", "content": "Updated: learning from professional"}
+          ]
+        }
+      ]
+    },
+    {
+      "user_id": "user-006",
+      "sessions": [
+        {
+          "session_id": "sess-006-a",
+          "date": "2026-01-25T09:00:00Z",
+          "turns": [
+            {"role": "user", "content": "I'm studying computer science"},
+            {"role": "assistant", "content": "Noted: studying CS"},
+            {"role": "user", "content": "In my third year"},
+            {"role": "assistant", "content": "Updated: third year CS student"}
+          ]
+        },
+        {
+          "session_id": "sess-006-b",
+          "date": "2026-02-15T16:00:00Z",
+          "turns": [
+            {"role": "user", "content": "I graduated from college"},
+            {"role": "assistant", "content": "Noted: graduated"},
+            {"role": "user", "content": "I got my degree in CS"},
+            {"role": "assistant", "content": "Updated: CS degree holder"}
+          ]
+        },
+        {
+          "session_id": "sess-006-c",
+          "date": "2026-03-25T10:30:00Z",
+          "turns": [
+            {"role": "user", "content": "I started a new job"},
+            {"role": "assistant", "content": "Noted: employment status changed"},
+            {"role": "user", "content": "As a junior software developer"},
+            {"role": "assistant", "content": "Updated: junior developer position"}
+          ]
+        }
+      ]
+    },
+    {
+      "user_id": "user-007",
+      "sessions": [
+        {"session_id": "sess-007-a", "date": "2026-01-12T10:00:00Z", "turns": [{"role": "user", "content": "I like hiking"}, {"role": "assistant", "content": "Noted: enjoys hiking"}]},
+        {"session_id": "sess-007-b", "date": "2026-02-18T14:30:00Z", "turns": [{"role": "user", "content": "I injured my knee"}, {"role": "assistant", "content": "Noted: knee injury"}]},
+        {"session_id": "sess-007-c", "date": "2026-03-22T09:20:00Z", "turns": [{"role": "user", "content": "I'm recovering from the injury"}, {"role": "assistant", "content": "Noted: recovery in progress"}]}
+      ]
+    },
+    {
+      "user_id": "user-008",
+      "sessions": [
+        {"session_id": "sess-008-a", "date": "2026-01-08T13:15:00Z", "turns": [{"role": "user", "content": "My salary is $80k per year"}, {"role": "assistant", "content": "Noted: salary is $80k"}]},
+        {"session_id": "sess-008-b", "date": "2026-02-20T11:45:00Z", "turns": [{"role": "user", "content": "I got a raise to $100k"}, {"role": "assistant", "content": "Noted: salary increased to $100k"}]},
+        {"session_id": "sess-008-c", "date": "2026-03-28T15:00:00Z", "turns": [{"role": "user", "content": "Very happy with the new salary"}, {"role": "assistant", "content": "Noted: satisfied with compensation"}]}
+      ]
+    },
+    {
+      "user_id": "user-009",
+      "sessions": [
+        {"session_id": "sess-009-a", "date": "2026-01-18T10:00:00Z", "turns": [{"role": "user", "content": "I'm learning Spanish"}, {"role": "assistant", "content": "Noted: learning Spanish"}]},
+        {"session_id": "sess-009-b", "date": "2026-02-22T14:15:00Z", "turns": [{"role": "user", "content": "I now speak intermediate Spanish"}, {"role": "assistant", "content": "Noted: intermediate Spanish level"}]},
+        {"session_id": "sess-009-c", "date": "2026-03-30T09:30:00Z", "turns": [{"role": "user", "content": "I'm considering learning French now"}, {"role": "assistant", "content": "Noted: interested in French"}]}
+      ]
+    },
+    {
+      "user_id": "user-010",
+      "sessions": [
+        {"session_id": "sess-010-a", "date": "2026-01-22T11:00:00Z", "turns": [{"role": "user", "content": "I have a car"}, {"role": "assistant", "content": "Noted: owns a car"}]},
+        {"session_id": "sess-010-b", "date": "2026-02-25T16:30:00Z", "turns": [{"role": "user", "content": "I sold my car and bought a bicycle"}, {"role": "assistant", "content": "Noted: uses bicycle instead"}]},
+        {"session_id": "sess-010-c", "date": "2026-03-31T10:15:00Z", "turns": [{"role": "user", "content": "The bicycle is great for exercise"}, {"role": "assistant", "content": "Noted: bicycle for fitness"}]}
+      ]
+    },
+    {
+      "user_id": "user-011",
+      "sessions": [
+        {"session_id": "sess-011-a", "date": "2026-01-11T10:00:00Z", "turns": [{"role": "user", "content": "My favorite food is pizza"}, {"role": "assistant", "content": "Noted: loves pizza"}]},
+        {"session_id": "sess-011-b", "date": "2026-02-14T12:30:00Z", "turns": [{"role": "user", "content": "I became vegetarian"}, {"role": "assistant", "content": "Noted: vegetarian diet"}]},
+        {"session_id": "sess-011-c", "date": "2026-03-29T13:45:00Z", "turns": [{"role": "user", "content": "Vegetarian pizza is my favorite now"}, {"role": "assistant", "content": "Noted: favorite pizza is vegetarian"}]}
+      ]
+    },
+    {
+      "user_id": "user-012",
+      "sessions": [
+        {"session_id": "sess-012-a", "date": "2026-01-16T09:30:00Z", "turns": [{"role": "user", "content": "I live with my family"}, {"role": "assistant", "content": "Noted: living situation"}]},
+        {"session_id": "sess-012-b", "date": "2026-02-19T15:15:00Z", "turns": [{"role": "user", "content": "I moved out and live alone"}, {"role": "assistant", "content": "Noted: now living alone"}]},
+        {"session_id": "sess-012-c", "date": "2026-03-26T11:00:00Z", "turns": [{"role": "user", "content": "I got a roommate"}, {"role": "assistant", "content": "Noted: now has roommate"}]}
+      ]
+    },
+    {
+      "user_id": "user-013",
+      "sessions": [
+        {"session_id": "sess-013-a", "date": "2026-01-19T10:00:00Z", "turns": [{"role": "user", "content": "I'm 25 years old"}, {"role": "assistant", "content": "Noted: age is 25"}]},
+        {"session_id": "sess-013-b", "date": "2026-02-21T14:00:00Z", "turns": [{"role": "user", "content": "Today is my birthday"}, {"role": "assistant", "content": "Noted: birthday celebrated"}]},
+        {"session_id": "sess-013-c", "date": "2026-03-24T10:30:00Z", "turns": [{"role": "user", "content": "I'm now 26 years old"}, {"role": "assistant", "content": "Noted: age updated to 26"}]}
+      ]
+    },
+    {
+      "user_id": "user-014",
+      "sessions": [
+        {"session_id": "sess-014-a", "date": "2026-01-14T11:15:00Z", "turns": [{"role": "user", "content": "I code in Python"}, {"role": "assistant", "content": "Noted: uses Python"}]},
+        {"session_id": "sess-014-b", "date": "2026-02-23T13:45:00Z", "turns": [{"role": "user", "content": "I switched to Go for backend"}, {"role": "assistant", "content": "Noted: primary language is Go"}]},
+        {"session_id": "sess-014-c", "date": "2026-03-27T09:00:00Z", "turns": [{"role": "user", "content": "I still use Python for data analysis"}, {"role": "assistant", "content": "Noted: Python for specific tasks"}]}
+      ]
+    },
+    {
+      "user_id": "user-015",
+      "sessions": [
+        {"session_id": "sess-015-a", "date": "2026-01-17T10:00:00Z", "turns": [{"role": "user", "content": "I play guitar"}, {"role": "assistant", "content": "Noted: plays guitar"}]},
+        {"session_id": "sess-015-b", "date": "2026-02-24T16:00:00Z", "turns": [{"role": "user", "content": "I switched to piano"}, {"role": "assistant", "content": "Noted: now plays piano"}]},
+        {"session_id": "sess-015-c", "date": "2026-03-23T14:30:00Z", "turns": [{"role": "user", "content": "I play both guitar and piano now"}, {"role": "assistant", "content": "Noted: plays multiple instruments"}]}
+      ]
+    },
+    {
+      "user_id": "user-016",
+      "sessions": [
+        {"session_id": "sess-016-a", "date": "2026-01-13T09:45:00Z", "turns": [{"role": "user", "content": "I have a PhD"}, {"role": "assistant", "content": "Noted: doctorate holder"}]},
+        {"session_id": "sess-016-b", "date": "2026-02-26T17:30:00Z", "turns": [{"role": "user", "content": "I switched careers away from academia"}, {"role": "assistant", "content": "Noted: left academic path"}]},
+        {"session_id": "sess-016-c", "date": "2026-03-21T11:15:00Z", "turns": [{"role": "user", "content": "I'm applying knowledge to industry"}, {"role": "assistant", "content": "Noted: applying research in industry"}]}
+      ]
+    },
+    {
+      "user_id": "user-017",
+      "sessions": [
+        {"session_id": "sess-017-a", "date": "2026-01-21T10:00:00Z", "turns": [{"role": "user", "content": "I work at startup X"}, {"role": "assistant", "content": "Noted: employer is startup X"}]},
+        {"session_id": "sess-017-b", "date": "2026-02-27T12:45:00Z", "turns": [{"role": "user", "content": "I joined startup Y"}, {"role": "assistant", "content": "Noted: now at startup Y"}]},
+        {"session_id": "sess-017-c", "date": "2026-03-19T15:20:00Z", "turns": [{"role": "user", "content": "Startup Y is growing fast"}, {"role": "assistant", "content": "Noted: company growth"}]}
+      ]
+    },
+    {
+      "user_id": "user-018",
+      "sessions": [
+        {"session_id": "sess-018-a", "date": "2026-01-09T14:00:00Z", "turns": [{"role": "user", "content": "I'm married"}, {"role": "assistant", "content": "Noted: marital status"}]},
+        {"session_id": "sess-018-b", "date": "2026-02-28T10:30:00Z", "turns": [{"role": "user", "content": "My spouse got a new job"}, {"role": "assistant", "content": "Noted: spouse career update"}]},
+        {"session_id": "sess-018-c", "date": "2026-03-17T13:00:00Z", "turns": [{"role": "user", "content": "We're planning to move together"}, {"role": "assistant", "content": "Noted: relocation plans"}]}
+      ]
+    },
+    {
+      "user_id": "user-019",
+      "sessions": [
+        {"session_id": "sess-019-a", "date": "2026-01-06T11:00:00Z", "turns": [{"role": "user", "content": "I read a lot of science fiction"}, {"role": "assistant", "content": "Noted: likes sci-fi"}]},
+        {"session_id": "sess-019-b", "date": "2026-02-16T13:30:00Z", "turns": [{"role": "user", "content": "I'm now into fantasy books"}, {"role": "assistant", "content": "Noted: prefers fantasy"}]},
+        {"session_id": "sess-019-c", "date": "2026-03-16T10:15:00Z", "turns": [{"role": "user", "content": "I enjoy both sci-fi and fantasy"}, {"role": "assistant", "content": "Noted: enjoys both genres"}]}
+      ]
+    },
+    {
+      "user_id": "user-020",
+      "sessions": [
+        {"session_id": "sess-020-a", "date": "2026-01-07T10:00:00Z", "turns": [{"role": "user", "content": "I prefer Windows"}, {"role": "assistant", "content": "Noted: uses Windows"}]},
+        {"session_id": "sess-020-b", "date": "2026-02-17T15:45:00Z", "turns": [{"role": "user", "content": "I switched to Mac"}, {"role": "assistant", "content": "Noted: now uses Mac"}]},
+        {"session_id": "sess-020-c", "date": "2026-03-14T09:30:00Z", "turns": [{"role": "user", "content": "Mac is great for development"}, {"role": "assistant", "content": "Noted: satisfied with Mac"}]}
+      ]
+    }
+  ],
+  "questions": [
+    {
+      "q_id": "q-001",
+      "question_type": "remembering",
+      "question": "What is the user's current favorite beverage?",
+      "answer": "herbal infusions",
+      "invalidated_answer": "espresso",
+      "user_id": "user-001"
+    },
+    {
+      "q_id": "q-002",
+      "question_type": "remembering",
+      "question": "What is the user's current job title?",
+      "answer": "product manager",
+      "invalidated_answer": "software engineer",
+      "user_id": "user-002"
+    },
+    {
+      "q_id": "q-003",
+      "question_type": "remembering",
+      "question": "Where does the user currently live?",
+      "answer": "New York",
+      "invalidated_answer": "San Francisco",
+      "user_id": "user-003"
+    },
+    {
+      "q_id": "q-004",
+      "question_type": "remembering",
+      "question": "How many pets does the user have?",
+      "answer": "2 dogs and 1 cat",
+      "invalidated_answer": "2 dogs and 1 cat initially, then 1 dog and 1 cat, now 2 dogs and 1 cat",
+      "user_id": "user-004"
+    },
+    {
+      "q_id": "q-005",
+      "question_type": "remembering",
+      "question": "What painting medium does the user use?",
+      "answer": "oil painting",
+      "invalidated_answer": "watercolor",
+      "user_id": "user-005"
+    },
+    {
+      "q_id": "q-006",
+      "question_type": "remembering",
+      "question": "What is the user's education level?",
+      "answer": "graduated with CS degree",
+      "invalidated_answer": "third year CS student",
+      "user_id": "user-006"
+    },
+    {
+      "q_id": "q-007",
+      "question_type": "remembering",
+      "question": "What is the user's current salary?",
+      "answer": "$100k per year",
+      "invalidated_answer": "$80k per year",
+      "user_id": "user-008"
+    },
+    {
+      "q_id": "q-008",
+      "question_type": "remembering",
+      "question": "What language does the user speak?",
+      "answer": "intermediate Spanish",
+      "invalidated_answer": "learning Spanish",
+      "user_id": "user-009"
+    },
+    {
+      "q_id": "q-009",
+      "question_type": "remembering",
+      "question": "How does the user get around?",
+      "answer": "bicycle",
+      "invalidated_answer": "car",
+      "user_id": "user-010"
+    },
+    {
+      "q_id": "q-010",
+      "question_type": "remembering",
+      "question": "What is the user's current diet type?",
+      "answer": "vegetarian",
+      "invalidated_answer": "omnivore who loves pizza",
+      "user_id": "user-011"
+    },
+    {
+      "q_id": "q-011",
+      "question_type": "remembering",
+      "question": "Who does the user live with?",
+      "answer": "a roommate",
+      "invalidated_answer": "family",
+      "user_id": "user-012"
+    },
+    {
+      "q_id": "q-012",
+      "question_type": "remembering",
+      "question": "What is the user's current age?",
+      "answer": "26",
+      "invalidated_answer": "25",
+      "user_id": "user-013"
+    },
+    {
+      "q_id": "q-013",
+      "question_type": "remembering",
+      "question": "What is the user's primary programming language?",
+      "answer": "Go",
+      "invalidated_answer": "Python",
+      "user_id": "user-014"
+    },
+    {
+      "q_id": "q-014",
+      "question_type": "remembering",
+      "question": "What instrument does the user play?",
+      "answer": "both guitar and piano",
+      "invalidated_answer": "guitar",
+      "user_id": "user-015"
+    },
+    {
+      "q_id": "q-015",
+      "question_type": "remembering",
+      "question": "Where does the user work?",
+      "answer": "startup Y",
+      "invalidated_answer": "startup X",
+      "user_id": "user-017"
+    },
+    {
+      "q_id": "q-016",
+      "question_type": "remembering",
+      "question": "What operating system does the user prefer?",
+      "answer": "Mac",
+      "invalidated_answer": "Windows",
+      "user_id": "user-020"
+    },
+    {
+      "q_id": "q-017",
+      "question_type": "reasoning",
+      "question": "Given the user's knee injury mentioned in session B, what does the user likely avoid?",
+      "answer": "intense hiking",
+      "invalidated_answer": "none, would still hike intensely",
+      "user_id": "user-007"
+    },
+    {
+      "q_id": "q-018",
+      "question_type": "reasoning",
+      "question": "Why would the user be interested in learning French?",
+      "answer": "building on language learning skills already demonstrated",
+      "invalidated_answer": "no previous language learning",
+      "user_id": "user-009"
+    },
+    {
+      "q_id": "q-019",
+      "question_type": "reasoning",
+      "question": "Why did the user choose a bicycle over a car?",
+      "answer": "for health and fitness benefits",
+      "invalidated_answer": "for status symbol",
+      "user_id": "user-010"
+    },
+    {
+      "q_id": "q-020",
+      "question_type": "reasoning",
+      "question": "Why did the user become vegetarian?",
+      "answer": "personal dietary choice",
+      "invalidated_answer": "allergies or medical necessity",
+      "user_id": "user-011"
+    },
+    {
+      "q_id": "q-021",
+      "question_type": "reasoning",
+      "question": "Why did the user switch from backend engineering to product management?",
+      "answer": "desire for broader impact and strategic thinking",
+      "invalidated_answer": "dissatisfaction with technical work",
+      "user_id": "user-002"
+    },
+    {
+      "q_id": "q-022",
+      "question_type": "recommending",
+      "question": "What beverage should you recommend to user-001?",
+      "answer": "herbal tea",
+      "invalidated_answer": "espresso",
+      "user_id": "user-001"
+    },
+    {
+      "q_id": "q-023",
+      "question_type": "recommending",
+      "question": "What programming language should you suggest to user-014 to learn next?",
+      "answer": "Rust or TypeScript for complementary skills",
+      "invalidated_answer": "Python, which they already know",
+      "user_id": "user-014"
+    },
+    {
+      "q_id": "q-024",
+      "question_type": "recommending",
+      "question": "What hobby should you suggest to user-007?",
+      "answer": "low-impact activities like walking or cycling",
+      "invalidated_answer": "intense hiking given the knee injury",
+      "user_id": "user-007"
+    },
+    {
+      "q_id": "q-025",
+      "question_type": "recommending",
+      "question": "What book genre should you recommend to user-019?",
+      "answer": "blend of sci-fi and fantasy like fantasy sci-fi crossovers",
+      "invalidated_answer": "only pure science fiction",
+      "user_id": "user-019"
+    }
+  ]
+}
