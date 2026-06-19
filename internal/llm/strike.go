@@ -28,23 +28,3 @@ func NextStrike(current StrikeStatus) StrikeStatus {
 		return StrikeFinal
 	}
 }
-
-// ShouldRetry returns true if the observation should be retried at the given epoch,
-// based on its last rejection epoch and current strike status.
-func ShouldRetry(status StrikeStatus, rejectedAtEpoch, currentEpoch int) bool {
-	switch status {
-	case StrikeOne:
-		return currentEpoch-rejectedAtEpoch >= RetryAfterStrike1
-	case StrikeTwo:
-		return currentEpoch-rejectedAtEpoch >= RetryAfterStrike2
-	case StrikeFinal:
-		return false
-	default:
-		return true
-	}
-}
-
-// IsFinal returns true if no more retries are possible.
-func IsFinal(status StrikeStatus) bool {
-	return status == StrikeFinal
-}
