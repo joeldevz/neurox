@@ -19,6 +19,7 @@ internal-docs/
 
 # Compiled binaries
 longmemeval
+memora
 
 # Config files that may contain secrets
 config.yaml
@@ -26,3 +27,14 @@ config.yaml
 priorities.yaml
 .skynex/production-gate.json
 .skynex/audit.log
+
+# Node / JS tooling
+node_modules/
+
+# Python caches
+**/__pycache__/
+*.pyc
+
+# Benchmark run outputs (regenerable, large)
+benchmarks/memorybench/data/
+*.bak

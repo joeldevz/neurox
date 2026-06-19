@@ -255,25 +255,7 @@ func (e *BenchEnv) PersistPendingEmbeddings(ctx context.Context) error {
 	return nil
 }
 
-// MockLLM is a canned-response LLM provider for dimensions that need
-// LLM-dependent behaviour (e.g. reflection, extraction).
-// It returns a fixed response string for every prompt.
-type MockLLM struct {
-	Response string
-}
-
-// Complete returns the canned response regardless of the prompt.
-func (m MockLLM) Complete(_ context.Context, _ string) (string, error) {
-	return m.Response, nil
-}
-
-// Name identifies the mock provider.
-func (m MockLLM) Name() string { return "mock-llm" }
-
-// Ensure MockLLM satisfies the llm.Provider interface at compile time.
-var _ llm.Provider = MockLLM{}
-
-// Ensure MockLLM satisfies the embed.Provider check (FakeEmbedder only).
+// Ensure FakeEmbedder satisfies the embed.Provider check.
 var _ embed.Provider = (*FakeEmbedder)(nil)
 
 // idGen is used only to satisfy filelink.IDGenerator interface checks.

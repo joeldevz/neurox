@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.6] — 2026-06-19
+
 ### Added
 
 - Unified save pipeline across CLI, MCP, and HTTP surfaces (`internal/savepipeline`)
@@ -51,5 +53,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Git post-commit hook for automatic staleness marking
 - YAML configuration with environment variable overrides
 
-[Unreleased]: https://github.com/joeldevz/neurox/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/joeldevz/neurox/compare/v0.5.6...HEAD
+[0.5.6]: https://github.com/joeldevz/neurox/compare/v0.2.0...v0.5.6
 [0.2.0]: https://github.com/joeldevz/neurox/compare/v0.1.19...v0.2.0

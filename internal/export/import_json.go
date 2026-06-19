@@ -21,17 +21,6 @@ type ImportJSONStats struct {
 	ConsolidationRuns int
 }
 
-// ImportJSON reads a JSON export file and restores all data into the database.
-// Uses INSERT OR IGNORE to avoid conflicts on re-import, preserving existing data.
-// Returns the number of observations imported.
-func ImportJSON(ctx context.Context, db *sql.DB, sourcePath string) (int, error) {
-	stats, err := ImportJSONWithStats(ctx, db, sourcePath)
-	if err != nil {
-		return 0, err
-	}
-	return stats.Observations, nil
-}
-
 // ImportJSONWithStats reads a JSON export file and returns detailed import stats.
 func ImportJSONWithStats(ctx context.Context, db *sql.DB, sourcePath string) (ImportJSONStats, error) {
 	data, err := os.ReadFile(sourcePath)

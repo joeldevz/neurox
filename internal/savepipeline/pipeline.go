@@ -172,31 +172,6 @@ func AfterUpdate(ctx context.Context, deps Deps, updated observation.Observation
 	}
 }
 
-// PostSaveHook is a function called after an observation is persisted.
-// Used by SessionManager and other secondary paths that create observations
-// outside the main SaveQueue but still need embedding and fact extraction.
-type PostSaveHook func(ctx context.Context, id, title, content, namespace string)
-
-// BuildPostSaveHooks constructs a list of PostSaveHook callbacks from the
-// available deps.  This is the canonical way to wire embedding + fact
-// extraction into secondary observation-creation paths (e.g. session_end).
-func BuildPostSaveHooks(deps Deps) []PostSaveHook {
-	var hooks []PostSaveHook
-	if deps.FactExtractor != nil {
-		fe := deps.FactExtractor
-		hooks = append(hooks, func(_ context.Context, id, title, content, namespace string) {
-			go fe.ExtractAndSave(context.Background(), id, title, content, namespace)
-		})
-	}
-	if deps.EmbedQueue != nil {
-		eq := deps.EmbedQueue
-		hooks = append(hooks, func(_ context.Context, id, _, _, _ string) {
-			eq.Enqueue(id)
-		})
-	}
-	return hooks
-}
-
 // activeSessionID returns the ID of the most-recently-started active session
 // for the given namespace.  Returns "" on any error (best-effort).
 func activeSessionID(ctx context.Context, db *sql.DB, namespace string) string {

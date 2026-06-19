@@ -440,15 +440,6 @@ func TestAfterUpdate_TemporalReExtractionInStore(t *testing.T) {
 	}
 }
 
-// TestBuildPostSaveHooks_NilDeps verifies that BuildPostSaveHooks returns
-// no hooks when all deps are nil.
-func TestBuildPostSaveHooks_NilDeps(t *testing.T) {
-	hooks := savepipeline.BuildPostSaveHooks(savepipeline.Deps{})
-	if len(hooks) != 0 {
-		t.Errorf("expected 0 hooks with nil deps, got %d", len(hooks))
-	}
-}
-
 // testTemporalExtractor implements observation.TemporalExtractor for testing.
 type testTemporalExtractor struct {
 	calls *[]string

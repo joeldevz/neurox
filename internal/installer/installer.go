@@ -995,49 +995,6 @@ func (m model) toggleValue(key string) bool {
 	}
 }
 
-func (m model) integrationTargets() []string {
-	var files []string
-	if m.state.ConfigureClaude {
-		files = append(files, m.env.ClaudeConfigPath)
-	}
-	if m.state.ConfigureOpenCode {
-		files = append(files, m.env.OpenCodeConfig)
-	}
-	if m.state.ConfigureCursor {
-		files = append(files, m.env.CursorConfig)
-	}
-	if m.state.ConfigureAntigravity {
-		files = append(files, m.env.AntigravityConfig)
-	}
-	if m.state.InstallHook && m.env.GitRoot != "" {
-		files = append(files, filepath.Join(m.env.GitRoot, ".git", "hooks", "post-commit"))
-	}
-	return files
-}
-
-func (m model) configHints() []string {
-	var lines []string
-	if m.state.EmbedProvider == "disabled" && m.state.LLMProvider == "disabled" {
-		return []string{"No external providers required.", "Neurox will run with FTS5-only search."}
-	}
-	if m.state.EmbedProvider == "ollama" {
-		lines = append(lines, fmt.Sprintf("Embeddings use local Ollama model %s", fallback(m.env.OllamaEmbedModel, "detected")))
-	}
-	if m.state.EmbedProvider == "remote" {
-		lines = append(lines, "Need embeddings URL, API key, and model")
-	}
-	if m.state.LLMProvider == "ollama" {
-		lines = append(lines, fmt.Sprintf("LLM uses local Ollama model %s", fallback(m.env.OllamaLLMModel, "detected")))
-	}
-	if m.state.LLMProvider == "remote" {
-		lines = append(lines, "Need LLM URL, API key, and model")
-	}
-	if m.state.LLMProvider != "disabled" {
-		lines = append(lines, fmt.Sprintf("Gate mode will be %s", m.state.GateMode))
-	}
-	return lines
-}
-
 func (m model) validateProviders() error {
 	if m.state.EmbedProvider == "remote" {
 		if strings.TrimSpace(m.state.EmbedRemoteURL) == "" || strings.TrimSpace(m.state.EmbedRemoteKey) == "" || strings.TrimSpace(m.state.EmbedRemoteModel) == "" {
