@@ -1,11 +1,5 @@
 package llm
 
-// StrikeTracker implements the 3-strike system for rejected observations.
-// Strike 1: rejected → retry after 48 consolidation epochs
-// Strike 2: rejected-2 → retry after 144 consolidation epochs
-// Strike 3: rejected-final → never retry
-type StrikeTracker struct{}
-
 // StrikeStatus represents the current strike state.
 type StrikeStatus string
 

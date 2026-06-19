@@ -1,25 +1,8 @@
 package embed
 
 import (
-	"bytes"
-	"io"
-	"net/http"
 	"testing"
 )
-
-// mockHTTPClient mocks HTTP responses for testing.
-type mockHTTPClient struct {
-	responseBody string
-	statusCode   int
-}
-
-func (m *mockHTTPClient) Do(req *http.Request) (*http.Response, error) {
-	return &http.Response{
-		StatusCode: m.statusCode,
-		Body:       io.NopCloser(bytes.NewBufferString(m.responseBody)),
-		Header:     make(http.Header),
-	}, nil
-}
 
 // TestRemoteDimensionsZeroBeforeFirstEmbed verifies that Dimensions() returns 0
 // before the first successful embed when config.Dimensions is 0.

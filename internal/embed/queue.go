@@ -311,16 +311,6 @@ func (q *Queue) BackfillPending(ctx context.Context) {
 	}
 }
 
-// PendingCount returns the number of observations without embeddings.
-func PendingCount(ctx context.Context, db *sql.DB) (int, error) {
-	var count int
-	err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM observations WHERE embedding IS NULL AND deleted_at IS NULL").Scan(&count)
-	if err != nil {
-		return 0, fmt.Errorf("count pending embeddings: %w", err)
-	}
-	return count, nil
-}
-
 // pickBestEmbedModel queries Ollama for available models and returns the
 // highest-ranked embedding model from embedModelRanking, or "" if none found.
 func pickBestEmbedModel(ctx context.Context, baseURL string) string {
