@@ -30,6 +30,8 @@ priorities.yaml
 
 # Node / JS tooling
 node_modules/
+pnpm-lock.yaml
+.skynex/skill-registry.json
 
 # Python caches
 **/__pycache__/

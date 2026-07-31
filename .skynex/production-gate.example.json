@@ -1,0 +1,165 @@
+{
+  "mode": "strict",
+  "audit_log": {
+    "path": ".skynex/audit.log",
+    "auto_gitignore": true,
+    "rotate_at_mb": 50,
+    "retention_days": 365
+  },
+  "confirmation": {
+    "require_typed": true,
+    "typed_phrase": "yes apply",
+    "afk_behavior": "always_abort"
+  },
+  "safe_contexts": {
+    "kubectl": [
+      "minikube",
+      "kind-local",
+      "docker-desktop"
+    ],
+    "git_branches": [
+      "personal/*",
+      "feat/*",
+      "fix/*",
+      "chore/*"
+    ],
+    "comment": "Add YOUR staging/local contexts here."
+  },
+  "patterns": {
+    "kubectl": {
+      "enabled": true,
+      "block_verbs": [
+        "apply",
+        "delete",
+        "scale",
+        "rollout",
+        "drain",
+        "exec",
+        "edit",
+        "patch",
+        "replace"
+      ],
+      "always_allow_verbs": [
+        "get",
+        "describe",
+        "logs",
+        "top",
+        "explain",
+        "diff",
+        "version"
+      ]
+    },
+    "db_migrations": {
+      "enabled": true,
+      "tools": [
+        "prisma migrate deploy",
+        "rails db:migrate",
+        "alembic upgrade",
+        "knex migrate:latest",
+        "sqlx migrate run",
+        "flyway migrate",
+        "drizzle-kit push",
+        "atlas migrate apply"
+      ]
+    },
+    "db_direct": {
+      "enabled": true,
+      "regex_blockers": [
+        "(?i)\\bDELETE\\s+FROM\\b(?!.*\\bWHERE\\b)",
+        "(?i)\\bDROP\\s+(TABLE|INDEX|DATABASE|SCHEMA|VIEW)\\b",
+        "(?i)\\bTRUNCATE\\b",
+        "(?i)\\bALTER\\s+TABLE\\b",
+        "(?i)\\bUPDATE\\s+\\w+\\s+SET\\b(?!.*\\bWHERE\\b)",
+        "(?i)\\bFLUSHALL\\b",
+        "(?i)deleteMany\\("
+      ]
+    },
+    "terraform": {
+      "enabled": true,
+      "block_verbs": [
+        "apply",
+        "destroy",
+        "import"
+      ]
+    },
+    "pulumi": {
+      "enabled": true,
+      "block_verbs": [
+        "up",
+        "destroy",
+        "refresh"
+      ]
+    },
+    "helm": {
+      "enabled": true,
+      "block_verbs": [
+        "upgrade",
+        "uninstall",
+        "rollback",
+        "install"
+      ]
+    },
+    "git_force": {
+      "enabled": true
+    },
+    "git_main_push": {
+      "enabled": true,
+      "protected_branches": [
+        "main",
+        "master",
+        "production",
+        "prod",
+        "release/*"
+      ]
+    },
+    "publishing": {
+      "enabled": true,
+      "tools": [
+        "npm publish",
+        "pnpm publish",
+        "yarn publish",
+        "cargo publish",
+        "twine upload"
+      ]
+    },
+    "destructive_fs": {
+      "enabled": true,
+      "patterns": [
+        "rm -rf /",
+        "rm -rf /*",
+        "sudo rm",
+        "chmod 777 /",
+        "chown -R"
+      ]
+    },
+    "cloud_delete": {
+      "enabled": true,
+      "tools": [
+        "aws",
+        "gcloud",
+        "az"
+      ],
+      "verb_regex": "(?i)\\b(delete|remove|terminate|destroy)\\b"
+    },
+    "container_destructive": {
+      "enabled": true,
+      "patterns": [
+        "docker volume rm",
+        "docker system prune",
+        "kubectl delete pvc",
+        "podman volume rm"
+      ]
+    },
+    "service_control": {
+      "enabled": true,
+      "patterns": [
+        "systemctl restart",
+        "systemctl stop",
+        "pm2 reload --update-env",
+        "supervisorctl restart"
+      ]
+    }
+  },
+  "custom_patterns": [],
+  "_comment": "Copy to .skynex/production-gate.json and customize. Real file is gitignored."
+}
