@@ -11,7 +11,7 @@ Cursor is an AI-powered code editor that supports MCP servers. Connecting Neurox
 Requires **Go 1.26+** and a **C compiler** (CGO).
 
 ```bash
-CGO_ENABLED=1 go install -tags sqlite_fts5 github.com/joeldevz/neurox@main
+CGO_ENABLED=1 go install -tags fts5 github.com/joeldevz/neurox@main
 ```
 
 The binary is placed in `$(go env GOPATH)/bin/neurox`. Ensure this directory is in your `PATH`.
@@ -21,7 +21,7 @@ The binary is placed in `$(go env GOPATH)/bin/neurox`. Ensure this directory is 
 ```bash
 git clone https://github.com/joeldevz/neurox.git
 cd neurox
-CGO_ENABLED=1 go build -tags sqlite_fts5 -o neurox .
+CGO_ENABLED=1 go build -tags fts5 -o neurox .
 sudo mv neurox /usr/local/bin/
 ```
 

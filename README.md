@@ -72,7 +72,7 @@ curl -fsSL https://raw.githubusercontent.com/joeldevz/neurox/main/install.sh | b
 irm https://raw.githubusercontent.com/joeldevz/neurox/main/install.ps1 | iex
 
 # Build from source (requires C compiler — CGO SQLite driver for native FTS5 performance)
-CGO_ENABLED=1 go build -tags sqlite_fts5 -o neurox .
+CGO_ENABLED=1 go build -tags fts5 -o neurox .
 ```
 
 ### Configure your agent
@@ -260,7 +260,7 @@ Full tool inputs and parameters: [docs/reference.md](docs/reference.md#mcp-tool-
 
 **Homebrew** installs prebuilt binaries via the [joeldevz/tap](https://github.com/joeldevz/homebrew-tap).
 
-**Build from source** requires Go 1.26+ and a C compiler (`gcc`, `clang`, or MinGW on Windows) with `CGO_ENABLED=1 -tags sqlite_fts5`.
+**Build from source** requires Go 1.26+ and a C compiler (`gcc`, `clang`, or MinGW on Windows) with `CGO_ENABLED=1 -tags fts5`.
 
 ## License
 

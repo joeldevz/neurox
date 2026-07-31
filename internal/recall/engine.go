@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"log"
+	"math"
 	"sort"
 	"strings"
 	"time"
@@ -19,12 +20,37 @@ const (
 	maxLimit     = 50
 )
 
+// ftsPoolSize/semanticPoolSize/factsPoolSize compute per-channel retrieval
+// pool sizes. Retrieval is intentionally wider than the user-facing limit
+// so RRF fusion can surface strong candidates that rank outside the naive
+// top-N of any single channel. Final truncation to `limit` happens only
+// after applyScores sorts by fused score (engine.go, end of Search).
+func ftsPoolSize(limit int) int {
+	if limit*5 > 50 {
+		return limit * 5
+	}
+	return 50
+}
+
+func semanticPoolSize(limit int) int {
+	return ftsPoolSize(limit) // same formula: max(50, 5*limit)
+}
+
+func factsPoolSize(limit int) int {
+	if limit*3 > 25 {
+		return limit * 3
+	}
+	return 25
+}
+
 type Engine struct {
-	db              *sql.DB
-	embedder        embed.Provider
-	factStore       *facts.Store
-	disableBackfill bool
-	rrfK            int
+	db               *sql.DB
+	embedder         embed.Provider
+	factStore        *facts.Store
+	disableBackfill  bool
+	rrfK             int
+	semanticMinScore float64
+	accessQ          *accessQueue
 }
 
 type SearchOptions struct {
@@ -72,7 +98,7 @@ type Result struct {
 	SourceSurface   string                      `json:"source_surface,omitempty"`
 	SourceSessionID string                      `json:"source_session_id,omitempty"`
 	SourceTool      string                      `json:"source_tool,omitempty"`
-	CreatedAt       string                      `json:"created_at,omitempty"` // RFC3339 format
+	CreatedAt       string                      `json:"created_at,omitempty"`      // RFC3339 format
 	Breakdown       *ScoreBreakdown             `json:"score_breakdown,omitempty"` // non-nil only when debug mode is enabled
 }
 
@@ -89,13 +115,16 @@ type candidate struct {
 	index             int
 	FTSRank           int // 1-based rank in FTS results; 0 if not in FTS
 	SemRank           int // 1-based rank in semantic results; 0 if not in semantic
+	FactRank          int // 1-based rank in fact-FTS results; 0 if not fact-sourced
 }
 
 func NewEngine(database *sql.DB, opts ...EngineOption) *Engine {
-	e := &Engine{db: database, embedder: embed.Disabled{}, rrfK: 60}
+	e := &Engine{db: database, embedder: embed.Disabled{}, rrfK: 60, semanticMinScore: 0.2}
 	for _, opt := range opts {
 		opt(e)
 	}
+	e.accessQ = newAccessQueue(database)
+	e.accessQ.start(context.Background())
 	return e
 }
 
@@ -138,6 +167,17 @@ func WithRRFK(k int) EngineOption {
 	}
 }
 
+// WithSemanticMinScore overrides the minimum cosine similarity threshold for
+// semantic search results. Default is 0.2. Values must be in [0, 1] and not NaN/Inf.
+// Invalid values are ignored to preserve the default.
+func WithSemanticMinScore(v float64) EngineOption {
+	return func(e *Engine) {
+		if v >= 0 && v <= 1 && !math.IsNaN(v) {
+			e.semanticMinScore = v
+		}
+	}
+}
+
 // DisableBackfill reports whether the namespace backfill band-aid is
 // suppressed on this engine. Exposed for diagnostic and test purposes.
 func (e *Engine) DisableBackfill() bool { return e.disableBackfill }
@@ -145,6 +185,13 @@ func (e *Engine) DisableBackfill() bool { return e.disableBackfill }
 // RRFK reports the Reciprocal Rank Fusion smoothing constant in use on this
 // engine. Exposed for diagnostic and test purposes.
 func (e *Engine) RRFK() int { return e.rrfK }
+
+// Close gracefully shuts down the access queue, flushing any pending access bumps.
+func (e *Engine) Close() {
+	if e.accessQ != nil {
+		e.accessQ.stopAndWait()
+	}
+}
 
 func (e *Engine) Search(ctx context.Context, options SearchOptions) ([]Result, error) {
 	if e == nil || e.db == nil {
@@ -192,7 +239,7 @@ func (e *Engine) Search(ctx context.Context, options SearchOptions) ([]Result, e
 			IncludeStale: normalized.IncludeStale,
 			Staleness:    normalized.Staleness,
 		}
-		semScores, semErr := semanticSearch(ctx, e.db, e.embedder, normalized.Query, normalized.Limit*2, semFilter)
+		semScores, semErr := semanticSearch(ctx, e.db, e.embedder, normalized.Query, semanticPoolSize(normalized.Limit), semFilter, e.semanticMinScore)
 		if semErr != nil {
 			log.Printf("WARNING: semantic search unavailable (provider=%s, query=%q): %v — falling back to FTS-only",
 				e.embedder.Name(), truncateQuery(normalized.Query, 60), semErr)
@@ -252,7 +299,7 @@ func (e *Engine) Search(ctx context.Context, options SearchOptions) ([]Result, e
 
 			// Step 5: Load semantic-only candidates and assign ranks.
 			if len(semanticOnlyIDs) > 0 {
-				semCandidates, loadErr := loadObservationsByIDs(ctx, e.db, semanticOnlyIDs, normalized)
+				semCandidates, loadErr := loadObservationsByIDs(ctx, e.db, semanticOnlyIDs, normalized, intent)
 				if loadErr == nil {
 					for i := range semCandidates {
 						semCandidates[i].SemanticScore = semScores[semCandidates[i].ID]
@@ -267,21 +314,22 @@ func (e *Engine) Search(ctx context.Context, options SearchOptions) ([]Result, e
 	}
 
 	// Integrate fact-sourced observations into the candidate list.
-	// Facts are queried by LIKE matching on subject/object/predicate; when a fact
-	// references an observation that is NOT already in the candidate set, load it
-	// and add it as a candidate with a [fact] title prefix.
+	// If a fact's observation already exists in candidates, set FactRank on the
+	// existing candidate (don't duplicate). Otherwise, append as a new candidate.
 	if e.factStore != nil {
-		factCandidates, factErr := e.searchFacts(ctx, normalized)
+		factCandidates, factErr := e.searchFacts(ctx, normalized, intent)
 		if factErr != nil {
 			log.Printf("fact search: %v", factErr)
 		} else if len(factCandidates) > 0 {
-			existingIDs := make(map[string]struct{}, len(candidates))
-			for _, c := range candidates {
-				existingIDs[c.ID] = struct{}{}
+			indexByID := make(map[string]int, len(candidates))
+			for i, c := range candidates {
+				indexByID[c.ID] = i
 			}
 			for _, fc := range factCandidates {
-				if _, exists := existingIDs[fc.ID]; !exists {
-					existingIDs[fc.ID] = struct{}{}
+				if idx, exists := indexByID[fc.ID]; exists {
+					candidates[idx].FactRank = fc.FactRank
+				} else {
+					indexByID[fc.ID] = len(candidates)
 					candidates = append(candidates, fc)
 				}
 			}
@@ -337,9 +385,7 @@ func (e *Engine) Search(ctx context.Context, options SearchOptions) ([]Result, e
 	}
 
 	if len(ids) > 0 {
-		if err := e.bumpAccess(ctx, ids); err != nil {
-			return nil, err
-		}
+		e.accessQ.enqueue(ids)
 	}
 
 	return results, nil
@@ -448,32 +494,11 @@ func scanCandidate(scanner interface{ Scan(dest ...any) error }) (candidate, err
 	return item, nil
 }
 
-func (e *Engine) bumpAccess(ctx context.Context, ids []string) error {
-	placeholders := make([]string, 0, len(ids))
-	args := make([]any, 0, len(ids))
-	for _, id := range ids {
-		placeholders = append(placeholders, "?")
-		args = append(args, id)
-	}
-	if _, err := e.db.ExecContext(ctx, `
-		UPDATE observations
-		SET access_count = access_count + 1,
-		    last_accessed = datetime('now'),
-		    activation_level = MIN(1.0, activation_level + 0.08),
-		    consolidation_strength = MIN(1.0, consolidation_strength + 0.02)
-		WHERE deleted_at IS NULL AND id IN (`+strings.Join(placeholders, ",")+`)
-	`, args...); err != nil {
-		return fmt.Errorf("update recall access metrics: %w", err)
-	}
-	return nil
-}
-
 // searchFacts queries the knowledge graph for facts matching the search query,
 // then loads the source observations as candidates. Facts contribute results
-// with a [fact] prefix in the title and RawRelevance=0 (no FTS match), allowing
-// the scoring formula to rank them via importance and recency.
-func (e *Engine) searchFacts(ctx context.Context, options SearchOptions) ([]candidate, error) {
-	matchedFacts, err := e.factStore.Search(ctx, options.Query, options.Namespace, options.Limit)
+// with a [fact] prefix in the title and FactRank set for RRF fusion.
+func (e *Engine) searchFacts(ctx context.Context, options SearchOptions, intent TemporalIntent) ([]candidate, error) {
+	matchedFacts, err := e.factStore.SearchRanked(ctx, options.Query, options.Namespace, factsPoolSize(options.Limit))
 	if err != nil {
 		return nil, fmt.Errorf("fact store search: %w", err)
 	}
@@ -485,18 +510,20 @@ func (e *Engine) searchFacts(ctx context.Context, options SearchOptions) ([]cand
 	// no observation_id if it was manually inserted; skip those.
 	seen := make(map[string]struct{}, len(matchedFacts))
 	var obsIDs []string
-	// Keep a map of obsID → best fact for title prefix.
+	// Keep a map of obsID → best (lowest/first) fact rank for RRF scoring.
+	rankByObs := make(map[string]int, len(matchedFacts))
 	factByObs := make(map[string]facts.Fact, len(matchedFacts))
-	for _, f := range matchedFacts {
-		if f.ObservationID == "" {
+	for _, rf := range matchedFacts {
+		if rf.ObservationID == "" {
 			continue
 		}
-		if _, dup := seen[f.ObservationID]; dup {
-			continue
+		if _, dup := seen[rf.ObservationID]; dup {
+			continue // keep best (first/lowest) rank
 		}
-		seen[f.ObservationID] = struct{}{}
-		obsIDs = append(obsIDs, f.ObservationID)
-		factByObs[f.ObservationID] = f
+		seen[rf.ObservationID] = struct{}{}
+		obsIDs = append(obsIDs, rf.ObservationID)
+		rankByObs[rf.ObservationID] = rf.Rank
+		factByObs[rf.ObservationID] = rf.Fact
 	}
 	if len(obsIDs) == 0 {
 		return nil, nil
@@ -504,16 +531,17 @@ func (e *Engine) searchFacts(ctx context.Context, options SearchOptions) ([]cand
 
 	// Load the full observation data for these IDs, applying the same filters
 	// as the main search pipeline (type, kind, staleness, retention, files).
-	loaded, err := loadObservationsByIDs(ctx, e.db, obsIDs, options)
+	loaded, err := loadObservationsByIDs(ctx, e.db, obsIDs, options, intent)
 	if err != nil {
 		return nil, fmt.Errorf("load fact observations: %w", err)
 	}
 
-	// Prefix titles with [fact] and set minimal relevance so scoring works.
+	// Prefix titles with [fact] and set FactRank for RRF scoring.
 	for i := range loaded {
 		f := factByObs[loaded[i].ID]
 		loaded[i].Title = fmt.Sprintf("[fact] %s | %s | %s", f.Subject, f.Predicate, f.Object)
-		loaded[i].RawRelevance = 0 // no FTS match
+		loaded[i].RawRelevance = 0
+		loaded[i].FactRank = rankByObs[loaded[i].ID]
 	}
 
 	return loaded, nil

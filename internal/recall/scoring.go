@@ -43,34 +43,27 @@ func applyScores(items []candidate, weights ScoreWeights, now time.Time, intent 
 	// Detect observation type intent from the query
 	typeIntent := detectTypeIntent(query)
 
-	minRelevance := items[0].RawRelevance
-	maxRelevance := items[0].RawRelevance
 	for index := range items {
 		items[index].index = index
-		if items[index].RawRelevance < minRelevance {
-			minRelevance = items[index].RawRelevance
-		}
-		if items[index].RawRelevance > maxRelevance {
-			maxRelevance = items[index].RawRelevance
-		}
 	}
 
 	for index := range items {
 		recency := recencyScore(items[index], now)
-		ftsRelevance := normalizeRelevance(items[index].RawRelevance, minRelevance, maxRelevance)
 
 		// Hybrid: Reciprocal Rank Fusion replaces max(FTS, semantic).
 		// FTS-only, semantic-only, and dual-channel docs all contribute via ranks.
 		// Raw RRF is ~0.011-0.033 (scale [0, 2/(k+1)]), while recency/importance are [0,1].
 		// Normalize RRF to [0,1]: raw * (k+1) / 2.0 → rank-1-both ≈ 1.0, rank-1-single ≈ 0.5.
-		rrf := rrfScore(items[index].FTSRank, items[index].SemRank, rrfK)
+		// FactRank is a 0.5-weight additive bonus channel on top of the FTS+semantic base scale.
+		rrf := rrfScore(items[index].FTSRank, items[index].SemRank, items[index].FactRank, rrfK)
 		relevance := rrf * float64(rrfK+1) / 2.0
 
 		items[index].Score = (weights.Recency * recency) + (weights.Importance * items[index].Importance) + (weights.Relevance * relevance)
 
-		// Cross-signal boost: if appears in both FTS and semantic, boost score
+		// Cross-signal boost: if appears in both FTS and semantic channels
+		// (by rank membership, not normalized score), boost score.
 		csBoost := 1.0
-		if items[index].SemanticScore > 0 && ftsRelevance > 0 {
+		if items[index].FTSRank > 0 && items[index].SemRank > 0 {
 			csBoost = crossSignalBoost
 			items[index].Score *= csBoost
 		}
@@ -113,24 +106,11 @@ func applyScores(items []candidate, weights ScoreWeights, now time.Time, intent 
 
 func recencyScore(item candidate, now time.Time) float64 {
 	reference := item.CreatedAt
-	if item.LastAccessed != nil && item.LastAccessed.After(reference) {
-		reference = *item.LastAccessed
-	}
 	days := now.Sub(reference).Hours() / 24
 	if days <= 0 {
 		return 1
 	}
 	return math.Exp(-math.Ln2 * (days / defaultHalfLifeDays))
-}
-
-func normalizeRelevance(raw float64, min float64, max float64) float64 {
-	if max == min {
-		if max <= 0 {
-			return 0
-		}
-		return 1
-	}
-	return 1 - ((raw - min) / (max - min))
 }
 
 // typeIntentKeywords maps query keywords to observation types.
@@ -203,17 +183,20 @@ func detectTypeIntent(query string) observation.ObservationType {
 }
 
 // rrfScore computes the Reciprocal Rank Fusion score for a single document.
-// Returns 1/(k+rank_fts) + 1/(k+rank_sem), where rank_fts and rank_sem are
+// Returns 1/(k+rank_fts) + 1/(k+rank_sem) + 0.5/(k+rank_fact), where ranks are
 // 1-based integers; 0 means absent in that channel and contributes nothing.
 // k is the smoothing constant (60 is the zero-shot production default,
 // Cormack et al. 2009, Bruch et al. 2022).
-func rrfScore(ftsRank, semRank, k int) float64 {
+func rrfScore(ftsRank, semRank, factRank, k int) float64 {
 	score := 0.0
 	if ftsRank > 0 {
 		score += 1.0 / float64(k+ftsRank)
 	}
 	if semRank > 0 {
 		score += 1.0 / float64(k+semRank)
+	}
+	if factRank > 0 {
+		score += 0.5 / float64(k+factRank)
 	}
 	return score
 }

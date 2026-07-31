@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -81,8 +82,9 @@ type RRFConfig struct {
 }
 
 type RecallConfig struct {
-	RRF             RRFConfig `yaml:"rrf"`
-	DisableBackfill bool      `yaml:"disable_backfill"`
+	RRF              RRFConfig `yaml:"rrf"`
+	DisableBackfill  bool      `yaml:"disable_backfill"`
+	SemanticMinScore float64   `yaml:"semantic_min_score"`
 }
 
 type MetaConfig struct {
@@ -151,8 +153,9 @@ func defaultConfig(configDir string, configPath string) Config {
 			Path: filepath.Join(configDir, "neurox.db"),
 		},
 		Recall: RecallConfig{
-			RRF:             RRFConfig{K: 60},
-			DisableBackfill: false,
+			RRF:              RRFConfig{K: 60},
+			DisableBackfill:  false,
+			SemanticMinScore: 0.2,
 		},
 		Meta: MetaConfig{
 			ConfigDir:  configDir,
@@ -267,6 +270,13 @@ func applyEnvOverrides(cfg *Config, configPath string, configDir string) {
 	if value := strings.TrimSpace(os.Getenv(envPrefix + "RECALL_DISABLE_BACKFILL")); value != "" {
 		if v, err := strconv.ParseBool(value); err == nil {
 			cfg.Recall.DisableBackfill = v
+			cfg.Meta.Source = "env"
+		}
+	}
+
+	if value := strings.TrimSpace(os.Getenv(envPrefix + "RECALL_SEMANTIC_MIN_SCORE")); value != "" {
+		if v, err := strconv.ParseFloat(value, 64); err == nil && !math.IsNaN(v) && !math.IsInf(v, 0) && v >= 0 && v <= 1 {
+			cfg.Recall.SemanticMinScore = v
 			cfg.Meta.Source = "env"
 		}
 	}

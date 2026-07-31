@@ -328,3 +328,42 @@ func TestTraverseSupersededExcluded(t *testing.T) {
 		t.Errorf("expected pg16, got %s", results[0].Fact.Object)
 	}
 }
+
+func TestSearchRankedMatchesMultiWordTokensNotContiguousSubstring(t *testing.T) {
+	s, _ := setupTest(t)
+	ctx := context.Background()
+
+	// Save a fact with tokens that match query but not as contiguous substring
+	saved, err := s.Save(ctx, Fact{
+		Subject:   "auth",
+		Predicate: "uses",
+		Object:    "jwt token",
+		Namespace: "app",
+	})
+	if err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	if saved.ID == "" {
+		t.Fatal("expected ID to be set")
+	}
+
+	// Search with reordered tokens ("token auth") — not a contiguous substring
+	results, err := s.SearchRanked(ctx, "token auth", "app", 10)
+	if err != nil {
+		t.Fatalf("search ranked: %v", err)
+	}
+
+	// Should find the fact because tokens are matched individually via FTS
+	if len(results) == 0 {
+		t.Fatal("expected to find the fact via multi-word FTS match")
+	}
+	if results[0].ID != saved.ID {
+		t.Errorf("first result ID = %q, want %q", results[0].ID, saved.ID)
+	}
+	if results[0].Rank != 1 {
+		t.Errorf("rank = %d, want 1", results[0].Rank)
+	}
+	if results[0].Subject != "auth" {
+		t.Errorf("subject = %q, want 'auth'", results[0].Subject)
+	}
+}

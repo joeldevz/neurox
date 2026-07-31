@@ -255,10 +255,10 @@ func parseRecallArgs(args []string) (query string, opts recallFlags, err error) 
 	includeStale := fs.Bool("include-stale", false, "Include stale/expired observations")
 	debug := fs.Bool("debug", false, "Include score breakdown per result")
 	limit := fs.Int("limit", 10, "Max results")
-	
+
 	var positionals []string
 	rest := args
-	
+
 	// Iteratively parse: fs.Parse stops at first non-flag, then we collect positionals.
 	for len(rest) > 0 {
 		// Parse the next chunk. ContinueOnError allows us to handle errors gracefully.
@@ -272,13 +272,13 @@ func parseRecallArgs(args []string) (query string, opts recallFlags, err error) 
 			rest = rest[1:]
 		}
 	}
-	
+
 	// Join positional arguments as the query.
 	if len(positionals) == 0 {
 		return "", recallFlags{}, nil // Empty query
 	}
 	query = strings.Join(positionals, " ")
-	
+
 	opts = recallFlags{
 		obsType:      *obsType,
 		kind:         *kind,
@@ -287,11 +287,11 @@ func parseRecallArgs(args []string) (query string, opts recallFlags, err error) 
 		debug:        *debug,
 		limit:        *limit,
 	}
-	
+
 	if *filesFlag != "" {
 		opts.files = splitCSV(*filesFlag)
 	}
-	
+
 	return
 }
 
@@ -411,7 +411,8 @@ func runRecall(ctx context.Context, database *sql.DB, cfg config.Config) {
 	})
 	idGen := observation.NewULIDGenerator()
 	factStore := facts.NewStore(database, idGen)
-	engine := recall.NewEngine(database, recall.WithEmbedder(embedder), recall.WithFactStore(factStore))
+	engine := recall.NewEngine(database, recall.WithEmbedder(embedder), recall.WithFactStore(factStore), recall.WithSemanticMinScore(cfg.Recall.SemanticMinScore))
+	defer engine.Close()
 
 	searchOpts := recall.SearchOptions{
 		Query:           query,
@@ -925,6 +926,7 @@ func runSessionEnd(ctx context.Context, database *sql.DB, cfg config.Config) {
 
 func runConsolidate(ctx context.Context, database *sql.DB, cfg config.Config) {
 	d := initDeps(ctx, database, cfg)
+	defer d.recallEngine.Close()
 
 	fmt.Println("Forcing full consolidation (all promotions, dedup, reflect)...")
 	if err := d.pipeline.ForceRun(ctx); err != nil {
@@ -1196,6 +1198,7 @@ func runMCP(ctx context.Context, database *sql.DB, cfg config.Config) {
 	if d.embedQueue != nil {
 		defer d.embedQueue.Stop()
 	}
+	defer d.recallEngine.Close()
 
 	// Async save queue: decouple MCP handler from SQLite writes.
 	// All heavy work (LLM gate, SQLite write, facts, embeddings) runs in the
@@ -1281,6 +1284,7 @@ func runHTTP(ctx context.Context, database *sql.DB, cfg config.Config) {
 	if d.embedQueue != nil {
 		defer d.embedQueue.Stop()
 	}
+	defer d.recallEngine.Close()
 
 	// Async save queue: decouple HTTP handler from SQLite writes,
 	// mirroring the MCP save queue setup.
@@ -1412,7 +1416,7 @@ func initDeps(ctx context.Context, database *sql.DB, cfg config.Config) *deps {
 	obsStore := observation.NewStore(database, nil)
 	linkStore := links.NewStore(database, idGen)
 	factStore := facts.NewStore(database, idGen)
-	recallEngine := recall.NewEngine(database, recall.WithEmbedder(embedder), recall.WithFactStore(factStore))
+	recallEngine := recall.NewEngine(database, recall.WithEmbedder(embedder), recall.WithFactStore(factStore), recall.WithSemanticMinScore(cfg.Recall.SemanticMinScore))
 	factExtractor := facts.NewExtractor(llmProvider, factStore)
 
 	// Use curator provider for reflections when available; fall back to llmProvider.

@@ -57,6 +57,9 @@ func buildSearchQuery(options SearchOptions, intent TemporalIntent) (string, []a
 		)`, strings.Join(placeholders, ",")))
 	}
 
+	// bm25() weights are positional across ALL fts5 columns, including
+	// UNINDEXED ones: id, title, content, tags. 0.0 disables id (it never
+	// matches text), then title > content > tags by design.
 	query := `
 		WITH matched AS (
 			SELECT
@@ -72,7 +75,7 @@ func buildSearchQuery(options SearchOptions, intent TemporalIntent) (string, []a
 				o.tags,
 				o.staleness,
 				o.retention,
-				bm25(observations_fts, 2.0, 1.0, 0.5) AS relevance,
+				bm25(observations_fts, 0.0, 2.0, 1.0, 0.5) AS relevance,
 				o.created_at,
 				o.last_accessed,
 				o.access_count,
@@ -113,6 +116,6 @@ func buildSearchQuery(options SearchOptions, intent TemporalIntent) (string, []a
 		GROUP BY matched.rowid
 		ORDER BY matched.relevance ASC, matched.importance DESC, matched.created_at DESC
 	`
-	args = append(args, options.Limit)
+	args = append(args, ftsPoolSize(options.Limit))
 	return query, args
 }

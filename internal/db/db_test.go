@@ -413,3 +413,41 @@ func TestMigration011ReconcileScores(t *testing.T) {
 		t.Errorf("idx_obs_importance_layer index count = %d, want 1", indexCount)
 	}
 }
+
+// TestOpenVerifiesFTS5Available tests that Open() succeeds when FTS5 is available.
+// This test passes under the fts5 build tag. The negative path (missing FTS5) cannot
+// be tested under the fts5 tag, as the build itself includes FTS5 support.
+// To verify the error path, manually run: CGO_ENABLED=1 go build ./... (no -tags)
+// and verify the binary fails with "FTS5 support is not compiled in" on startup.
+func TestOpenVerifiesFTS5Available(t *testing.T) {
+	ctx := context.Background()
+	databasePath := filepath.Join(t.TempDir(), "neurox.db")
+
+	database, err := Open(ctx, databasePath)
+	if err != nil {
+		t.Fatalf("Open returned error: %v", err)
+	}
+	defer func() {
+		if closeErr := database.Close(); closeErr != nil {
+			t.Fatalf("Close returned error: %v", closeErr)
+		}
+	}()
+
+	// Verify that FTS5 support is available by checking pragma_compile_options
+	var fts5Count int
+	if err := database.QueryRowContext(ctx, "SELECT count(*) FROM pragma_compile_options WHERE compile_options LIKE 'ENABLE_FTS5%'").Scan(&fts5Count); err != nil {
+		t.Fatalf("pragma_compile_options query failed: %v", err)
+	}
+	if fts5Count == 0 {
+		t.Fatalf("FTS5 not found in compile options, but Open() succeeded unexpectedly")
+	}
+
+	// Verify the FTS5 virtual table exists and is queryable
+	var tableType string
+	if err := database.QueryRowContext(ctx, "SELECT type FROM sqlite_master WHERE name = 'observations_fts' AND type = 'table'").Scan(&tableType); err != nil {
+		t.Fatalf("observations_fts lookup failed: %v", err)
+	}
+	if tableType != "table" {
+		t.Fatalf("observations_fts exists but is not a table (type=%s)", tableType)
+	}
+}

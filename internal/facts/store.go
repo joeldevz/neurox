@@ -157,6 +157,70 @@ func (s *Store) Search(ctx context.Context, query string, namespace string, limi
 	return scanFacts(rows)
 }
 
+// RankedFact pairs a Fact with its 1-based FTS rank (best match = 1).
+type RankedFact struct {
+	Fact
+	Rank int
+}
+
+// SearchRanked finds active facts matching query via FTS5 (tokenized,
+// BM25-ranked), scoped to namespace, returning results best-first with
+// their scan-order rank.
+func (s *Store) SearchRanked(ctx context.Context, query string, namespace string, limit int) ([]RankedFact, error) {
+	if limit <= 0 {
+		limit = 20
+	}
+	matchQuery := buildFactsMatchQuery(query)
+	if matchQuery == "" {
+		return nil, nil
+	}
+
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT f.id, f.subject, f.predicate, f.object, f.observation_id,
+		       f.namespace, f.valid_from, f.valid_until, f.superseded_by, f.created_at
+		FROM facts_fts
+		JOIN facts f ON f.rowid = facts_fts.rowid
+		WHERE facts_fts MATCH ?
+		  AND f.valid_until IS NULL
+		  AND f.namespace = ?
+		ORDER BY bm25(facts_fts) ASC
+		LIMIT ?
+	`, matchQuery, namespace, limit)
+	if err != nil {
+		return nil, fmt.Errorf("search facts fts: %w", err)
+	}
+	defer rows.Close()
+
+	facts, err := scanFacts(rows)
+	if err != nil {
+		return nil, err
+	}
+	ranked := make([]RankedFact, len(facts))
+	for i, f := range facts {
+		ranked[i] = RankedFact{Fact: f, Rank: i + 1}
+	}
+	return ranked, nil
+}
+
+// buildFactsMatchQuery tokenizes a query into a quoted OR-joined FTS5
+// MATCH expression. Simpler than recall's buildFTSMatchQuery (no
+// stopwords/prefix expansion needed for short subject/predicate/object
+// triples) — kept local to avoid an internal/recall <-> internal/facts
+// import cycle (recall already imports facts).
+func buildFactsMatchQuery(query string) string {
+	tokens := strings.Fields(query)
+	parts := make([]string, 0, len(tokens))
+	for _, token := range tokens {
+		trimmed := strings.TrimSpace(token)
+		if trimmed == "" {
+			continue
+		}
+		escaped := strings.ReplaceAll(trimmed, `"`, `""`)
+		parts = append(parts, `"`+escaped+`"`)
+	}
+	return strings.Join(parts, " OR ")
+}
+
 // ByObservation returns all active facts linked to an observation.
 func (s *Store) ByObservation(ctx context.Context, observationID string) ([]Fact, error) {
 	rows, err := s.db.QueryContext(ctx, `

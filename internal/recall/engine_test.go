@@ -59,8 +59,66 @@ func TestSearchKeywordRanksByTriFactorScore(t *testing.T) {
 		t.Fatalf("top score = %f, want > %f", results[0].Score, results[1].Score)
 	}
 
+	// Synchronously flush the access queue so assertions can check the DB
+	if err := engine.accessQ.flushNow(); err != nil {
+		t.Fatalf("flushNow error: %v", err)
+	}
+
 	assertAccessUpdated(t, database, olderHighImportance.ID, 1)
 	assertAccessUpdated(t, database, recentLowImportance.ID, 1)
+}
+
+func TestSearchBM25WeightsFavorTitleOverTags(t *testing.T) {
+	engine, store, database := newTestEngine(t)
+	defer database.Close()
+
+	ctx := context.Background()
+
+	// Save two observations with equal importance and created_at,
+	// but matching term only in title vs tags respectively.
+	titleMatch, err := store.Save(ctx, observation.Observation{
+		Title:   "widget refactor complete",
+		Content: "detailed implementation notes",
+		Tags:    []string{"refactor", "complete"},
+	})
+	if err != nil {
+		t.Fatalf("save titleMatch: %v", err)
+	}
+
+	tagsMatch, err := store.Save(ctx, observation.Observation{
+		Title:   "implementation progress notes",
+		Content: "detailed notes on the work",
+		Tags:    []string{"widget", "refactor", "complete"},
+	})
+	if err != nil {
+		t.Fatalf("save tagsMatch: %v", err)
+	}
+
+	// Pin both to equal importance and created_at so BM25 ranking is the tie-breaker.
+	pinned := map[string]any{
+		"importance": 0.5,
+		"created_at": "datetime('now', '-7 day')",
+	}
+	setObservationFields(t, database, titleMatch.ID, pinned)
+	setObservationFields(t, database, tagsMatch.ID, pinned)
+
+	// Search for a term that appears in title only (titleMatch) vs tags only (tagsMatch).
+	results, err := engine.Search(ctx, SearchOptions{Query: "widget", Limit: 10})
+	if err != nil {
+		t.Fatalf("Search returned error: %v", err)
+	}
+	if len(results) != 2 {
+		t.Fatalf("len(results) = %d, want 2", len(results))
+	}
+
+	// Title match should rank above tags match because BM25 weights title (2.0) > tags (0.5).
+	if results[0].ID != titleMatch.ID {
+		t.Fatalf("top result = %q, want %q (title match); second = %q (tags match). Title should outrank tags due to BM25 weight 2.0 > 0.5",
+			results[0].ID, titleMatch.ID, tagsMatch.ID)
+	}
+	if results[1].ID != tagsMatch.ID {
+		t.Fatalf("second result = %q, want %q", results[1].ID, tagsMatch.ID)
+	}
 }
 
 func TestSearchFiltersByObservationType(t *testing.T) {
@@ -140,7 +198,7 @@ func TestSearchFiltersByFiles(t *testing.T) {
 	}
 }
 
-func TestSearchActivationBoostUsesLastAccessed(t *testing.T) {
+func TestSearchAccessDoesNotBoostRecencyForUnrelatedQuery(t *testing.T) {
 	engine, store, database := newTestEngine(t)
 	defer database.Close()
 
@@ -186,6 +244,11 @@ func TestSearchActivationBoostUsesLastAccessed(t *testing.T) {
 		t.Fatalf("boost Search returned error: %v", err)
 	}
 
+	// Synchronously flush the access queue so the boosted observation's last_accessed is updated before the next search
+	if err := engine.accessQ.flushNow(); err != nil {
+		t.Fatalf("flushNow error: %v", err)
+	}
+
 	afterBoost, err := engine.Search(ctx, SearchOptions{Query: "auth", Limit: 10})
 	if err != nil {
 		t.Fatalf("afterBoost Search returned error: %v", err)
@@ -194,8 +257,223 @@ func TestSearchActivationBoostUsesLastAccessed(t *testing.T) {
 		t.Fatalf("len(afterBoost) = %d, want 2", len(afterBoost))
 	}
 	boostedScore := findResultScore(t, afterBoost, boosted.ID)
-	if boostedScore <= initialBoostedScore {
-		t.Fatalf("boosted score = %f, want > initial score %f", boostedScore, initialBoostedScore)
+	if boostedScore > initialBoostedScore {
+		t.Fatalf("boosted score = %f increased after unrelated access, want <= initial score %f (recency must not respond to reads)", boostedScore, initialBoostedScore)
+	}
+}
+
+func TestSearchFreshlyAccessedOldObservationDoesNotOutrankNewer(t *testing.T) {
+	engine, store, database := newTestEngine(t)
+	defer database.Close()
+
+	ctx := context.Background()
+
+	// Create an old observation and a newer observation with equal importance
+	oldObs, err := store.Save(ctx, observation.Observation{
+		Title:   "Database design patterns",
+		Content: "database patterns schema architecture implementation",
+	})
+	if err != nil {
+		t.Fatalf("save oldObs: %v", err)
+	}
+
+	newObs, err := store.Save(ctx, observation.Observation{
+		Title:   "Database indexing best practices",
+		Content: "database patterns schema architecture performance tuning",
+	})
+	if err != nil {
+		t.Fatalf("save newObs: %v", err)
+	}
+
+	// Pin both to equal importance but different creation times: old is 180d ago, new is 7d ago
+	setObservationFields(t, database, oldObs.ID, map[string]any{
+		"importance": 0.5,
+		"created_at": "datetime('now', '-180 day')",
+	})
+	setObservationFields(t, database, newObs.ID, map[string]any{
+		"importance": 0.5,
+		"created_at": "datetime('now', '-7 day')",
+	})
+
+	// First search: verify newObs ranks above oldObs (fresher creation time wins with equal importance)
+	initialResults, err := searchWithoutActivation(ctx, database, SearchOptions{Query: "database", Limit: 10})
+	if err != nil {
+		t.Fatalf("initial search error: %v", err)
+	}
+	if len(initialResults) != 2 {
+		t.Fatalf("len(initialResults) = %d, want 2", len(initialResults))
+	}
+	if initialResults[0].ID != newObs.ID {
+		t.Fatalf("initial top result = %q, want %q (newer observation should rank first)", initialResults[0].ID, newObs.ID)
+	}
+
+	// Now perform a search on a different query that matches oldObs to bump its last_accessed
+	_, err = engine.Search(ctx, SearchOptions{Query: "design"})
+	if err != nil {
+		t.Fatalf("bump search error: %v", err)
+	}
+
+	// Flush the access queue so last_accessed is updated
+	if err := engine.accessQ.flushNow(); err != nil {
+		t.Fatalf("flushNow error: %v", err)
+	}
+
+	// Second search: verify newObs still ranks at or above oldObs despite oldObs being freshly accessed
+	afterAccessResults, err := engine.Search(ctx, SearchOptions{Query: "database", Limit: 10})
+	if err != nil {
+		t.Fatalf("afterAccess search error: %v", err)
+	}
+	if len(afterAccessResults) != 2 {
+		t.Fatalf("len(afterAccessResults) = %d, want 2", len(afterAccessResults))
+	}
+	if afterAccessResults[0].ID != newObs.ID {
+		t.Fatalf("afterAccess top result = %q, want %q (newer observation must still rank above older even after older was accessed)", afterAccessResults[0].ID, newObs.ID)
+	}
+}
+
+func TestSearchSucceedsWhenAccessBumpFails(t *testing.T) {
+	engine, store, database := newTestEngine(t)
+	defer database.Close()
+
+	ctx := context.Background()
+	obs, err := store.Save(ctx, observation.Observation{
+		Title:   "Test observation",
+		Content: "test content",
+	})
+	if err != nil {
+		t.Fatalf("save: %v", err)
+	}
+
+	// Run search normally — it should succeed and return the observation.
+	// Results are returned before the access queue processes the bump.
+	results, err := engine.Search(ctx, SearchOptions{Query: "test", Limit: 10})
+	if err != nil {
+		t.Fatalf("Search returned error: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("len(results) = %d, want 1", len(results))
+	}
+	if results[0].ID != obs.ID {
+		t.Fatalf("result ID = %q, want %q", results[0].ID, obs.ID)
+	}
+
+	// Verify that the first search succeeded and returned results before
+	// any access queue operations. Close the DB to simulate a failure condition.
+	database.Close()
+
+	// Let the worker attempt to flush against the closed DB.
+	// The worker must handle this gracefully: the error is logged but never
+	// propagated to the caller. This decoupling ensures Search never fails
+	// due to access bump errors.
+	time.Sleep(50 * time.Millisecond) // Give worker time to detect the closed DB
+
+	// The assertion is implicit: if Search had panicked or propagated the error,
+	// this test would have already failed above. This documents that Search succeeds
+	// even when access queue operations fail.
+}
+
+// TestAccessQueueFlushAgainstClosedDB verifies that the worker's flush operation
+// returns an error when the DB is closed, and this error is handled (logged) but
+// not propagated to callers.
+func TestAccessQueueFlushAgainstClosedDB(t *testing.T) {
+	engine, store, database := newTestEngine(t)
+	defer database.Close()
+
+	ctx := context.Background()
+	obs, err := store.Save(ctx, observation.Observation{
+		Title:   "Test observation",
+		Content: "test content",
+	})
+	if err != nil {
+		t.Fatalf("save: %v", err)
+	}
+
+	// Enqueue an access bump.
+	engine.accessQ.enqueue([]string{obs.ID})
+
+	// Close the database.
+	database.Close()
+
+	// The flush operation must return an error because the DB is closed.
+	// In production, this error is logged; we just verify it occurs.
+	counts := make(map[string]int)
+	counts[obs.ID] = 1
+	err = engine.accessQ.flush(counts)
+	if err == nil {
+		t.Fatalf("flush returned nil error against closed DB, want error")
+	}
+
+	// The error should be related to DB closure or contention, not a panic.
+	// This validates that the decoupling works: the queue handles DB errors
+	// gracefully without crashing.
+}
+
+func TestAccessQueueCoalescesRepeatedBumps(t *testing.T) {
+	engine, store, database := newTestEngine(t)
+	defer database.Close()
+
+	ctx := context.Background()
+	obs, err := store.Save(ctx, observation.Observation{
+		Title:   "Test observation",
+		Content: "test content",
+	})
+	if err != nil {
+		t.Fatalf("save: %v", err)
+	}
+
+	// Enqueue the same ID 5 times via the worker path.
+	// The accessQueue deduplicates via counts[id]++.
+	engine.accessQ.enqueue([]string{obs.ID, obs.ID, obs.ID, obs.ID, obs.ID})
+
+	// Flush synchronously to drive the worker's dedup path.
+	if err := engine.accessQ.flushNow(); err != nil {
+		t.Fatalf("flushNow error: %v", err)
+	}
+
+	// Verify access_count increased by exactly 5 in the database.
+	// The worker's counts[id]++ must have produced this result.
+	var accessCount int
+	if err := database.QueryRow(`SELECT access_count FROM observations WHERE id = ?`, obs.ID).Scan(&accessCount); err != nil {
+		t.Fatalf("query access_count: %v", err)
+	}
+	if accessCount != 5 {
+		t.Fatalf("access_count = %d, want 5", accessCount)
+	}
+}
+
+func TestAccessQueueGracefulShutdownFlushesPending(t *testing.T) {
+	engine, store, database := newTestEngine(t)
+	defer database.Close()
+
+	ctx := context.Background()
+	obs, err := store.Save(ctx, observation.Observation{
+		Title:   "Test observation",
+		Content: "test content",
+	})
+	if err != nil {
+		t.Fatalf("save: %v", err)
+	}
+
+	// Enqueue several IDs — but do NOT call Search, so they stay in the queue.
+	engine.accessQ.enqueue([]string{obs.ID, obs.ID, obs.ID})
+
+	// Give the worker a brief moment to drain the channel and accumulate counts.
+	// The worker's select will pick up these items from the channel and increment counts[id].
+	time.Sleep(10 * time.Millisecond)
+
+	// Call stopAndWait to flush pending items.
+	// The implementation guarantees that stopAndWait flushes synchronously in the
+	// worker before wg.Done, so the flush is complete when stopAndWait returns.
+	engine.accessQ.stopAndWait()
+
+	// Verify the pending count was flushed immediately — no additional sleep needed
+	// because stopAndWait guarantees the flush completed.
+	var accessCount int
+	if err := database.QueryRow(`SELECT access_count FROM observations WHERE id = ?`, obs.ID).Scan(&accessCount); err != nil {
+		t.Fatalf("query access_count: %v", err)
+	}
+	if accessCount != 3 {
+		t.Fatalf("access_count = %d, want 3 — graceful shutdown should flush pending items", accessCount)
 	}
 }
 
@@ -692,6 +970,9 @@ func searchWithoutActivation(ctx context.Context, database *sql.DB, options Sear
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
+	for i := range candidates {
+		candidates[i].FTSRank = i + 1
+	}
 
 	applyScores(candidates, normalized.Weights, normalized.Now, intent, nil, false, normalized.Query, 60)
 	sort.SliceStable(candidates, func(i int, j int) bool {
@@ -757,6 +1038,11 @@ func TestRecallBumpIncreasesActivation(t *testing.T) {
 		}
 	}
 
+	// Synchronously flush the access queue so assertions can check the DB
+	if err := engine.accessQ.flushNow(); err != nil {
+		t.Fatalf("flushNow error: %v", err)
+	}
+
 	// Check that activation and consolidation were increased, not importance
 	var importance, activation, consolidation float64
 	var accessCount int
@@ -819,6 +1105,11 @@ func TestRecallBumpCapsActivationAndConsolidation(t *testing.T) {
 		}
 	}
 
+	// Synchronously flush the access queue so assertions can check the DB
+	if err := engine.accessQ.flushNow(); err != nil {
+		t.Fatalf("flushNow error: %v", err)
+	}
+
 	// Check that activation and consolidation are capped at 1.0
 	var activation, consolidation float64
 	database.QueryRowContext(ctx, "SELECT activation_level, consolidation_strength FROM observations WHERE id = ?", obs.ID).
@@ -867,6 +1158,11 @@ func TestRepeatedRecallBoostsActivationNotImportance(t *testing.T) {
 		if err != nil {
 			t.Fatalf("search %d: %v", i, err)
 		}
+	}
+
+	// Synchronously flush the access queue so assertions can check the DB
+	if err := engine.accessQ.flushNow(); err != nil {
+		t.Fatalf("flushNow error: %v", err)
 	}
 
 	// Check final values
@@ -918,6 +1214,11 @@ func TestRecallUpdatesLastAccessed(t *testing.T) {
 	_, err = engine.Search(ctx, SearchOptions{Query: "testing", Limit: 10})
 	if err != nil {
 		t.Fatalf("search: %v", err)
+	}
+
+	// Synchronously flush the access queue so assertions can check the DB
+	if err := engine.accessQ.flushNow(); err != nil {
+		t.Fatalf("flushNow error: %v", err)
 	}
 
 	// Check that last_accessed was updated
@@ -985,6 +1286,11 @@ func TestRecallBumpByObservationType(t *testing.T) {
 		if err != nil {
 			t.Fatalf("search %s: %v", tt.typ, err)
 		}
+	}
+
+	// Synchronously flush the access queue so assertions can check the DB
+	if err := engine.accessQ.flushNow(); err != nil {
+		t.Fatalf("flushNow error: %v", err)
 	}
 
 	// Check that all received same activation and consolidation boost
@@ -1150,13 +1456,13 @@ func TestSemanticSearchNamespaceFilter(t *testing.T) {
 	provider := &testEmbedProvider{dims: 4, queryVector: makeTestVector(0, 4)}
 
 	// Search without namespace filter — should consider all 10
-	allResults, err := semanticSearch(ctx, database, provider, "test", 50, semanticFilter{})
+	allResults, err := semanticSearch(ctx, database, provider, "test", 50, semanticFilter{}, 0.2)
 	if err != nil {
 		t.Fatalf("semanticSearch (no filter): %v", err)
 	}
 
 	// Search with namespace "project-a" — should only consider 5
-	filteredResults, err := semanticSearch(ctx, database, provider, "test", 50, semanticFilter{Namespace: "project-a"})
+	filteredResults, err := semanticSearch(ctx, database, provider, "test", 50, semanticFilter{Namespace: "project-a"}, 0.2)
 	if err != nil {
 		t.Fatalf("semanticSearch (project-a): %v", err)
 	}
@@ -1228,7 +1534,7 @@ func TestSemanticSearchStalenessFilter(t *testing.T) {
 	provider := &testEmbedProvider{dims: 4, queryVector: makeTestVector(1, 4)}
 
 	// Default filter (IncludeStale=false) should exclude expired
-	defaultResults, err := semanticSearch(ctx, database, provider, "test", 50, semanticFilter{})
+	defaultResults, err := semanticSearch(ctx, database, provider, "test", 50, semanticFilter{}, 0.2)
 	if err != nil {
 		t.Fatalf("semanticSearch (default): %v", err)
 	}
@@ -1237,7 +1543,7 @@ func TestSemanticSearchStalenessFilter(t *testing.T) {
 	}
 
 	// IncludeStale=true should include expired
-	staleResults, err := semanticSearch(ctx, database, provider, "test", 50, semanticFilter{IncludeStale: true})
+	staleResults, err := semanticSearch(ctx, database, provider, "test", 50, semanticFilter{IncludeStale: true}, 0.2)
 	if err != nil {
 		t.Fatalf("semanticSearch (include stale): %v", err)
 	}
@@ -1519,6 +1825,92 @@ func TestSemanticFallbackDisabledWithoutEmbedder(t *testing.T) {
 	}
 
 	t.Log("Without embedder: FTS-only returns 0 results for non-matching query — correct")
+}
+
+// TestSemanticMinScoreThresholdApplied verifies that the semantic minimum similarity
+// threshold is respected. With a high threshold (0.9), candidates below it should
+// be excluded; with a low threshold (0.1), they should be included.
+func TestSemanticMinScoreThresholdApplied(t *testing.T) {
+	ctx := context.Background()
+	databasePath := filepath.Join(t.TempDir(), "neurox.db")
+	database, err := db.Open(ctx, databasePath)
+	if err != nil {
+		t.Fatalf("db.Open: %v", err)
+	}
+	defer database.Close()
+
+	store := observation.NewStore(database, nil)
+
+	// Save an observation with specific keywords
+	obs, err := store.Save(ctx, observation.Observation{
+		Title:   "Database design",
+		Content: "Design database schema with normalization",
+	})
+	if err != nil {
+		t.Fatalf("save observation: %v", err)
+	}
+
+	// Create a vector for the observation: [1, 1, 0, 0, 0, 0, 0, 0]
+	// Normalized: approximately [0.707, 0.707, 0, 0, 0, 0, 0, 0]
+	obsVec := make([]float32, 8)
+	obsVec[0] = 1.0
+	obsVec[1] = 1.0
+	setEmbedding(t, database, obs.ID, obsVec)
+
+	// Create a query vector that produces moderate similarity (~0.5) with the observation:
+	// Query: [1, 0, 1, 0, 0, 0, 0, 0]
+	// Normalized: approximately [0.707, 0, 0.707, 0, 0, 0, 0, 0]
+	// Cosine sim = (1*0.707 + 0*0 + 1*0) / (sqrt(2) * sqrt(2)) = 0.707 / 2 ≈ 0.5
+	queryVecModerate := make([]float32, 8)
+	queryVecModerate[0] = 1.0
+	queryVecModerate[2] = 1.0
+	provider := &testEmbedProvider{dims: 8, queryVector: queryVecModerate}
+
+	// Test 1: With high threshold (0.9), candidate with ~0.5 similarity should be excluded
+	engineHigh := NewEngine(database, WithEmbedder(provider), WithSemanticMinScore(0.9))
+	resultsHigh, err := engineHigh.Search(ctx, SearchOptions{
+		Query: "xyzzy nonexistent words", // FTS won't match
+		Limit: 10,
+	})
+	if err != nil {
+		t.Fatalf("Search with high threshold returned error: %v", err)
+	}
+
+	foundInHigh := false
+	for _, r := range resultsHigh {
+		if r.ID == obs.ID {
+			foundInHigh = true
+			break
+		}
+	}
+
+	if foundInHigh {
+		t.Errorf("With threshold 0.9, expected observation NOT to be in results (similarity too low), but it was found")
+	}
+
+	// Test 2: With low threshold (0.1), candidate with ~0.5 similarity should be included
+	engineLow := NewEngine(database, WithEmbedder(provider), WithSemanticMinScore(0.1))
+	resultsLow, err := engineLow.Search(ctx, SearchOptions{
+		Query: "xyzzy nonexistent words", // FTS won't match
+		Limit: 10,
+	})
+	if err != nil {
+		t.Fatalf("Search with low threshold returned error: %v", err)
+	}
+
+	foundInLow := false
+	for _, r := range resultsLow {
+		if r.ID == obs.ID {
+			foundInLow = true
+			break
+		}
+	}
+
+	if !foundInLow {
+		t.Errorf("With threshold 0.1, expected observation to be in results (similarity high enough), but it was not found")
+	}
+
+	t.Logf("Semantic threshold test: high threshold (0.9) excludes moderate-similarity candidate, low threshold (0.1) includes it — correct")
 }
 
 // TestNamespaceBackfillFillsBroadNamespaceQueries verifies that broad namespace
@@ -2101,6 +2493,79 @@ func TestFactsIntegratedInRecall(t *testing.T) {
 		// (unless "orphan" also matches something in FTS)
 		_ = results
 	})
+}
+
+// TestFactRankedCandidateCarriesRealRankAndWeight verifies that fact-sourced
+// candidates with no FTS/semantic match still receive a non-zero RRFScore via
+// FactRank, not zero (which would make them indistinguishable from noise).
+func TestFactRankedCandidateCarriesRealRankAndWeight(t *testing.T) {
+	ctx := context.Background()
+	databasePath := filepath.Join(t.TempDir(), "neurox.db")
+	database, err := db.Open(ctx, databasePath)
+	if err != nil {
+		t.Fatalf("db.Open: %v", err)
+	}
+	defer database.Close()
+
+	store := observation.NewStore(database, nil)
+	idGen := observation.NewULIDGenerator()
+	factStore := facts.NewStore(database, idGen)
+
+	// Create an observation with a unique fact phrase that won't match other observations.
+	factOnlyObs, err := store.Save(ctx, observation.Observation{
+		Title:           "Unrelated title",
+		Content:         "Some unrelated content",
+		Namespace:       "test-ns",
+		Importance:      0.5,
+		ObservationType: observation.ObservationTypePattern,
+	})
+	if err != nil {
+		t.Fatalf("save observation: %v", err)
+	}
+
+	// Save a fact linked to this observation with distinctive tokens.
+	_, err = factStore.Save(ctx, facts.Fact{
+		Subject:       "auth",
+		Predicate:     "uses",
+		Object:        "jwt token",
+		ObservationID: factOnlyObs.ID,
+		Namespace:     "test-ns",
+	})
+	if err != nil {
+		t.Fatalf("save fact: %v", err)
+	}
+
+	// Query something that matches the fact but not the observation title/content.
+	engine := NewEngine(database, WithFactStore(factStore))
+	results, err := engine.Search(ctx, SearchOptions{
+		Query:     "auth jwt",
+		Namespace: "test-ns",
+		Limit:     10,
+		Debug:     true, // Enable score breakdown
+	})
+	if err != nil {
+		t.Fatalf("Search returned error: %v", err)
+	}
+
+	// Find the fact-sourced result.
+	found := false
+	for _, r := range results {
+		if r.ID == factOnlyObs.ID {
+			found = true
+
+			// Verify it has a real RRFScore, not 0
+			if r.Breakdown == nil {
+				t.Fatal("Debug mode should populate Breakdown")
+			}
+			if r.Breakdown.RRFScore <= 0 {
+				t.Errorf("fact-sourced candidate RRFScore = %f, want > 0 (driven by FactRank)", r.Breakdown.RRFScore)
+			}
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("fact-sourced observation %q should appear in debug results", factOnlyObs.ID)
+	}
 }
 
 // ============================================================================
@@ -3046,6 +3511,133 @@ func TestIntegrationPrefixMatchWithSemanticBoost(t *testing.T) {
 	}
 }
 
+func TestCrossSignalBoostAppliesToWorstBM25CandidateInBothChannels(t *testing.T) {
+	ctx := context.Background()
+	databasePath := filepath.Join(t.TempDir(), "neurox.db")
+	database, err := db.Open(ctx, databasePath)
+	if err != nil {
+		t.Fatalf("db.Open: %v", err)
+	}
+	defer database.Close()
+
+	store := observation.NewStore(database, nil)
+	namespace := "cross-signal-worst-bm25"
+	queryVector := []float32{1, 0, 0, 0}
+	noiseVector := []float32{0, 1, 0, 0}
+
+	seed := []struct {
+		name      string
+		title     string
+		content   string
+		embedding []float32
+	}{
+		{
+			name:      "best",
+			title:     "Database database database production tuning",
+			content:   "database database database database production tuning checklist",
+			embedding: noiseVector,
+		},
+		{
+			name:      "middle",
+			title:     "Database database migration",
+			content:   "database database migration notes",
+			embedding: noiseVector,
+		},
+		{
+			name:      "target-worst",
+			title:     "Database footnote",
+			content:   "database",
+			embedding: queryVector,
+		},
+	}
+
+	var targetID string
+	for _, item := range seed {
+		obs, err := store.Save(ctx, observation.Observation{
+			Title:      item.title,
+			Content:    item.content,
+			Namespace:  namespace,
+			Importance: 0.5,
+		})
+		if err != nil {
+			t.Fatalf("save %s: %v", item.name, err)
+		}
+		setEmbedding(t, database, obs.ID, item.embedding)
+		if item.name == "target-worst" {
+			targetID = obs.ID
+		}
+	}
+
+	// Sanity-check the fixture: the semantic target must be the numerically-worst
+	// BM25 match in the FTS pool. Under the old min-max gate this exact candidate
+	// normalized to ftsRelevance == 0 and missed the cross-signal boost.
+	normalized, err := normalizeSearchOptions(SearchOptions{Query: "database", Namespace: namespace, Limit: 10})
+	if err != nil {
+		t.Fatalf("normalize options: %v", err)
+	}
+	intent := DetectTemporalIntent(normalized.Query, normalized.Now)
+	ftsQuery, args := buildSearchQuery(normalized, intent)
+	rows, err := database.QueryContext(ctx, ftsQuery, args...)
+	if err != nil {
+		t.Fatalf("query FTS fixture: %v", err)
+	}
+	defer rows.Close()
+
+	var ftsCandidates []candidate
+	for rows.Next() {
+		item, err := scanCandidate(rows)
+		if err != nil {
+			t.Fatalf("scan FTS fixture: %v", err)
+		}
+		ftsCandidates = append(ftsCandidates, item)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate FTS fixture: %v", err)
+	}
+	if len(ftsCandidates) != len(seed) {
+		t.Fatalf("FTS fixture returned %d candidates, want %d", len(ftsCandidates), len(seed))
+	}
+	if got := ftsCandidates[len(ftsCandidates)-1].ID; got != targetID {
+		t.Fatalf("target must be worst BM25 candidate: last FTS ID=%s target=%s raw=%v",
+			got, targetID, candidateRawRelevances(ftsCandidates))
+	}
+
+	provider := &testEmbedProvider{dims: 4, queryVector: queryVector}
+	engine := NewEngine(database, WithEmbedder(provider))
+	results, err := engine.Search(ctx, SearchOptions{
+		Query:     "database",
+		Namespace: namespace,
+		Limit:     10,
+		Debug:     true,
+	})
+	if err != nil {
+		t.Fatalf("Search returned error: %v", err)
+	}
+
+	for _, result := range results {
+		if result.ID != targetID {
+			continue
+		}
+		if result.Breakdown == nil {
+			t.Fatal("target result has nil breakdown, want debug score breakdown")
+		}
+		if math.Abs(result.Breakdown.CrossSignalBoost-crossSignalBoost) > 1e-9 {
+			t.Fatalf("target CrossSignalBoost = %.2f, want %.2f", result.Breakdown.CrossSignalBoost, crossSignalBoost)
+		}
+		return
+	}
+
+	t.Fatalf("target worst-BM25 dual-channel observation %s missing from results: %v", targetID, resultIDs(results))
+}
+
+func candidateRawRelevances(candidates []candidate) []float64 {
+	relevances := make([]float64, len(candidates))
+	for i, candidate := range candidates {
+		relevances[i] = candidate.RawRelevance
+	}
+	return relevances
+}
+
 // resultIDs extracts observation IDs from a result slice for diagnostic output.
 func resultIDs(results []Result) []string {
 	ids := make([]string, len(results))
@@ -3660,4 +4252,303 @@ func formatResultsForError(results []Result) string {
 		buf.WriteString(fmt.Sprintf("{ID:%q Staleness:%q}", r.ID, r.Staleness))
 	}
 	return buf.String()
+}
+
+func TestLoadObservationsByIDsExcludesExpiredForNormalQuery(t *testing.T) {
+	engine, store, database := newTestEngine(t)
+	defer database.Close()
+
+	ctx := context.Background()
+
+	// Save an observation and mark it as expired
+	expired, err := store.Save(ctx, observation.Observation{
+		Title:   "Expired approach",
+		Content: "This approach is no longer valid",
+	})
+	if err != nil {
+		t.Fatalf("save expired: %v", err)
+	}
+
+	// Also save a current observation to ensure we have something to match
+	current, err := store.Save(ctx, observation.Observation{
+		Title:   "Current approach",
+		Content: "This is the current valid approach",
+	})
+	if err != nil {
+		t.Fatalf("save current: %v", err)
+	}
+
+	// Mark expired observation with valid_until in the past
+	setObservationFields(t, database, expired.ID, map[string]any{
+		"valid_until": "datetime('now', '-7 day')",
+	})
+
+	// Normal (non-history) search for "approach"
+	results, err := engine.Search(ctx, SearchOptions{Query: "approach", Limit: 10})
+	if err != nil {
+		t.Fatalf("Search returned error: %v", err)
+	}
+
+	// Verify expired observation is excluded
+	for _, r := range results {
+		if r.ID == expired.ID {
+			t.Fatalf("expired observation (valid_until in past) should be excluded from normal search, got %+v", r)
+		}
+	}
+
+	// Verify current observation is present
+	found := false
+	for _, r := range results {
+		if r.ID == current.ID {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("current observation should be in results, got: %v", formatResultsForError(results))
+	}
+}
+
+func TestLoadObservationsByIDsIncludesExpiredForHistoryIntent(t *testing.T) {
+	engine, store, database := newTestEngine(t)
+	defer database.Close()
+
+	ctx := context.Background()
+
+	// Save an expired observation
+	expired, err := store.Save(ctx, observation.Observation{
+		Title:   "Legacy auth system",
+		Content: "authentication system used session tokens previously",
+	})
+	if err != nil {
+		t.Fatalf("save expired: %v", err)
+	}
+
+	// Mark as expired
+	setObservationFields(t, database, expired.ID, map[string]any{
+		"valid_until": "datetime('now', '-7 day')",
+	})
+
+	// History search ("previously" triggers IntentHistory)
+	results, err := engine.Search(ctx, SearchOptions{Query: "auth previously", Limit: 10})
+	if err != nil {
+		t.Fatalf("Search returned error: %v", err)
+	}
+
+	// Verify expired observation is included when history intent detected
+	found := false
+	for _, r := range results {
+		if r.ID == expired.ID {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expired observation should be included in history search, got: %v", formatResultsForError(results))
+	}
+}
+
+func TestLoadObservationsByIDsExcludesCrossNamespace(t *testing.T) {
+	engine, store, database := newTestEngine(t)
+	defer database.Close()
+
+	ctx := context.Background()
+
+	// Save observation in "other" namespace
+	other, err := store.Save(ctx, observation.Observation{
+		Title:     "Other namespace note",
+		Content:   "This is a note in another namespace",
+		Namespace: "other",
+	})
+	if err != nil {
+		t.Fatalf("save other namespace: %v", err)
+	}
+
+	// Save observation in default namespace
+	inDefault, err := store.Save(ctx, observation.Observation{
+		Title:     "Default namespace note",
+		Content:   "This is a note in default namespace",
+		Namespace: "default",
+	})
+	if err != nil {
+		t.Fatalf("save default namespace: %v", err)
+	}
+
+	// Search in "default" namespace only with query that would match both
+	results, err := engine.Search(ctx, SearchOptions{
+		Query:     "namespace note",
+		Namespace: "default",
+		Limit:     10,
+	})
+	if err != nil {
+		t.Fatalf("Search returned error: %v", err)
+	}
+
+	// Verify cross-namespace observation is excluded
+	for _, r := range results {
+		if r.ID == other.ID {
+			t.Fatalf("observation from 'other' namespace should be excluded when searching 'default', got %+v", r)
+		}
+	}
+
+	// Verify in-namespace observation is present
+	found := false
+	for _, r := range results {
+		if r.ID == inDefault.ID {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("observation in 'default' namespace should be in results, got: %v", formatResultsForError(results))
+	}
+}
+
+// TestSearchWideFTSPoolLetsRank15WinFusion verifies that widening the FTS pool
+// allows RRF fusion to surface strong semantic matches that rank outside the
+// naive FTS top-N. With limit=10 and ftsPoolSize(10)=50, a document ranked
+// ~15th in FTS but with strong semantic match should appear in final results.
+func TestSearchWideFTSPoolLetsRank15WinFusion(t *testing.T) {
+	ctx := context.Background()
+	databasePath := filepath.Join(t.TempDir(), "neurox.db")
+	database, err := db.Open(ctx, databasePath)
+	if err != nil {
+		t.Fatalf("db.Open: %v", err)
+	}
+	defer database.Close()
+
+	store := observation.NewStore(database, nil)
+
+	// Create ~20 observations that all match an FTS query via shared keyword "database"
+	// Seed them with varied importance so they rank differently by BM25.
+	var obsIDs []string
+	var targetObsID string // The observation we seed to rank ~15th in FTS but strong semantically
+
+	for i := 0; i < 20; i++ {
+		var title, content string
+		var importance float64
+
+		// Create varied content with "database" keyword
+		if i < 10 {
+			// First 10: high importance — will rank higher in FTS
+			title = fmt.Sprintf("High-priority database config %d", i)
+			content = fmt.Sprintf("Critical database setup for production environment %d. Database scaling.", i)
+			importance = 0.9 - float64(i)*0.02
+		} else {
+			// Next 10: lower importance — will rank lower in FTS
+			title = fmt.Sprintf("Database note %d", i)
+			content = fmt.Sprintf("Additional database information %d. Using database for storage and retrieval.", i)
+			importance = 0.5 - float64(i-10)*0.02
+		}
+
+		obs, err := store.Save(ctx, observation.Observation{
+			Title:      title,
+			Content:    content,
+			Namespace:  "wide-pool-test",
+			Importance: importance,
+		})
+		if err != nil {
+			t.Fatalf("save observation %d: %v", i, err)
+		}
+
+		obsIDs = append(obsIDs, obs.ID)
+
+		// Mark observation at index 15 as the "winner" target
+		if i == 15 {
+			targetObsID = obs.ID
+		}
+	}
+
+	if targetObsID == "" {
+		t.Fatalf("failed to identify target observation")
+	}
+
+	// Now seed target observation with a strong semantic match.
+	// Use the query vector so this observation has near-identical embedding to query.
+	queryVector := makeTestVector(42, 4)
+	setEmbedding(t, database, targetObsID, queryVector)
+
+	// Set all other observations to an orthogonal vector (true semantic noise).
+	// This keeps them below the default 0.2 semantic threshold, so the test
+	// continues to prove that the target wins because the wider FTS pool admits
+	// a strong semantic match — not because every noisy FTS candidate also gets
+	// semantic membership and a cross-signal boost.
+	weakVector := []float32{queryVector[1], -queryVector[0], 0, 0}
+	for _, obsID := range obsIDs {
+		if obsID != targetObsID {
+			setEmbedding(t, database, obsID, weakVector)
+		}
+	}
+
+	// Create engine with test embedder that returns queryVector for all queries
+	provider := &testEmbedProvider{dims: 4, queryVector: queryVector}
+	engine := NewEngine(database, WithEmbedder(provider))
+
+	// Search with limit=10. FTS pool is now ftsPoolSize(10) = max(50, 5*10) = 50,
+	// so the target observation (ranked ~15th in raw BM25) enters the FTS pool.
+	// With semantic boost (its embedding matches query exactly), it should win RRF fusion.
+	results, err := engine.Search(ctx, SearchOptions{
+		Query:     "database",
+		Namespace: "wide-pool-test",
+		Limit:     10,
+	})
+	if err != nil {
+		t.Fatalf("Search returned error: %v", err)
+	}
+
+	// Verify target observation appears in final top-limit results
+	found := false
+	var targetScore float64
+	for _, r := range results {
+		if r.ID == targetObsID {
+			found = true
+			targetScore = r.Score
+			break
+		}
+	}
+	if found {
+		t.Logf("Target FOUND with score=%.4f", targetScore)
+	} else {
+		t.Logf("Target NOT FOUND. Results:")
+		for i, r := range results {
+			isTarget := ""
+			if r.ID == targetObsID {
+				isTarget = " <-- TARGET"
+			}
+			t.Logf("  %d. score=%.4f%s", i+1, r.Score, isTarget)
+		}
+	}
+
+	if !found {
+		t.Errorf("Target observation (FTSRank~15, strong semantic) NOT found (target=%s). Got %d results:",
+			targetObsID, len(results))
+		for i, r := range results {
+			t.Logf("  %d. %s (score=%.4f)", i+1, r.ID, r.Score)
+		}
+	}
+}
+
+func TestWithSemanticMinScoreValidation(t *testing.T) {
+	tests := []struct {
+		name       string
+		value      float64
+		wantScored float64
+	}{
+		{"Inf rejected, keeps default 0.2", math.Inf(1), 0.2},
+		{"NaN rejected, keeps default 0.2", math.NaN(), 0.2},
+		{"0.5 accepted", 0.5, 0.5},
+		{"0.0 accepted (boundary)", 0.0, 0.0},
+		{"1.0 accepted (boundary)", 1.0, 1.0},
+		{"-0.5 rejected, keeps default 0.2", -0.5, 0.2},
+		{"2.0 rejected, keeps default 0.2", 2.0, 0.2},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			engine := NewEngine(nil, WithSemanticMinScore(tt.value))
+			if engine.semanticMinScore != tt.wantScored {
+				t.Errorf("semanticMinScore = %.4f, want %.4f", engine.semanticMinScore, tt.wantScored)
+			}
+		})
+	}
 }

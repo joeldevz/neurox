@@ -335,6 +335,49 @@ func TestRecallEnvOverridesYAML(t *testing.T) {
 	}
 }
 
+func TestRecallSemanticMinScoreDefaults(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv(envPrefix+"CONFIG_DIR", "")
+	t.Setenv(envPrefix+"CONFIG_PATH", "")
+	t.Setenv(envPrefix+"RECALL_SEMANTIC_MIN_SCORE", "")
+
+	cfg, err := Load("")
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+
+	if cfg.Recall.SemanticMinScore != 0.2 {
+		t.Errorf("Recall.SemanticMinScore = %f, want 0.2", cfg.Recall.SemanticMinScore)
+	}
+}
+
+func TestRecallSemanticMinScoreEnvOverride(t *testing.T) {
+	root := t.TempDir()
+	configDir := filepath.Join(root, "cfg")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll returned error: %v", err)
+	}
+
+	configPath := filepath.Join(configDir, "config.yaml")
+	if err := os.WriteFile(configPath, []byte(""), 0o644); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+
+	t.Setenv(envPrefix+"RECALL_SEMANTIC_MIN_SCORE", "0.5")
+
+	cfg, err := Load(configPath)
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+
+	if cfg.Recall.SemanticMinScore != 0.5 {
+		t.Errorf("Recall.SemanticMinScore = %f, want 0.5", cfg.Recall.SemanticMinScore)
+	}
+	if cfg.Meta.Source != "env" {
+		t.Errorf("Meta.Source = %q, want env", cfg.Meta.Source)
+	}
+}
+
 func TestRecallInvalidKReturnsError(t *testing.T) {
 	root := t.TempDir()
 	configDir := filepath.Join(root, "cfg")
@@ -344,7 +387,7 @@ func TestRecallInvalidKReturnsError(t *testing.T) {
 
 	configPath := filepath.Join(configDir, "config.yaml")
 	content := []byte(`recall:
-  rrf:
+   rrf:
     k: 0
 `)
 	if err := os.WriteFile(configPath, content, 0o644); err != nil {
@@ -360,5 +403,55 @@ func TestRecallInvalidKReturnsError(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "recall.rrf.k") {
 		t.Errorf("error = %q, want message mentioning recall.rrf.k", err.Error())
+	}
+}
+
+func TestRecallSemanticMinScoreEnvValidation(t *testing.T) {
+	tests := []struct {
+		name     string
+		envValue string
+		want     float64
+		envSet   bool
+		accepted bool
+	}{
+		{"Inf rejected, keeps default", "Inf", 0.2, true, false},
+		{"NaN rejected, keeps default", "NaN", 0.2, true, false},
+		{"-0.5 rejected, keeps default", "-0.5", 0.2, true, false},
+		{"2.0 rejected, keeps default", "2.0", 0.2, true, false},
+		{"0.5 accepted", "0.5", 0.5, true, true},
+		{"0.0 accepted (boundary)", "0.0", 0.0, true, true},
+		{"1.0 accepted (boundary)", "1.0", 1.0, true, true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			configDir := filepath.Join(root, "cfg")
+			if err := os.MkdirAll(configDir, 0o755); err != nil {
+				t.Fatalf("MkdirAll returned error: %v", err)
+			}
+
+			configPath := filepath.Join(configDir, "config.yaml")
+			if err := os.WriteFile(configPath, []byte(""), 0o644); err != nil {
+				t.Fatalf("WriteFile returned error: %v", err)
+			}
+
+			t.Setenv(envPrefix+"RECALL_SEMANTIC_MIN_SCORE", tt.envValue)
+
+			cfg, err := Load(configPath)
+			if err != nil {
+				t.Fatalf("Load returned error: %v", err)
+			}
+
+			if cfg.Recall.SemanticMinScore != tt.want {
+				t.Errorf("SemanticMinScore = %f, want %f", cfg.Recall.SemanticMinScore, tt.want)
+			}
+			if tt.accepted && cfg.Meta.Source != "env" {
+				t.Errorf("Meta.Source = %q, want env (value was accepted)", cfg.Meta.Source)
+			}
+			if !tt.accepted && cfg.Meta.Source == "env" {
+				t.Errorf("Meta.Source = %q, want not env (value was rejected)", cfg.Meta.Source)
+			}
+		})
 	}
 }

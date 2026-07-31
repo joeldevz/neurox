@@ -13,7 +13,6 @@ import (
 const (
 	crossSignalBoost       = 1.2   // multiplier when result appears in both FTS and semantic
 	maxEmbeddingsPerSearch = 10000 // hard cap to prevent excessive memory usage
-	minSemanticSimilarity  = 0.4   // minimum cosine similarity threshold (conservative, typically 0.4-0.7 for related content)
 )
 
 // semanticFilter contains prefilter parameters for semantic search.
@@ -26,7 +25,7 @@ type semanticFilter struct {
 // semanticSearch performs cosine similarity search against stored embeddings,
 // prefiltered by namespace and staleness to avoid loading the entire database.
 // Returns a map of observation ID → cosine similarity score.
-func semanticSearch(ctx context.Context, db *sql.DB, provider embed.Provider, query string, limit int, filter semanticFilter) (map[string]float64, error) {
+func semanticSearch(ctx context.Context, db *sql.DB, provider embed.Provider, query string, limit int, filter semanticFilter, minScore float64) (map[string]float64, error) {
 	// Embed the query
 	queryVec, err := provider.Embed(ctx, query)
 	if err != nil {
@@ -87,7 +86,7 @@ func semanticSearch(ctx context.Context, db *sql.DB, provider embed.Provider, qu
 			continue
 		}
 		sim := embed.CosineSimilarity(queryVec, vec)
-		if sim > minSemanticSimilarity {
+		if sim > minScore {
 			candidates = append(candidates, scored{id: id, score: sim})
 		}
 	}
@@ -114,7 +113,7 @@ func semanticSearch(ctx context.Context, db *sql.DB, provider embed.Provider, qu
 // results (those that didn't appear in FTS search) into the candidate pipeline.
 // Filters (namespace, staleness, retention, etc.) from SearchOptions are applied
 // to ensure consistency with the FTS path.
-func loadObservationsByIDs(ctx context.Context, db *sql.DB, ids []string, options SearchOptions) ([]candidate, error) {
+func loadObservationsByIDs(ctx context.Context, db *sql.DB, ids []string, options SearchOptions, intent TemporalIntent) ([]candidate, error) {
 	if len(ids) == 0 {
 		return nil, nil
 	}
@@ -129,6 +128,17 @@ func loadObservationsByIDs(ctx context.Context, db *sql.DB, ids []string, option
 	clauses := []string{
 		"o.id IN (" + strings.Join(placeholders, ",") + ")",
 		"o.deleted_at IS NULL",
+	}
+
+	// Apply valid_until filter (skipped for history intent), mirroring filters.go:19-21
+	if intent.Kind != IntentHistory {
+		clauses = append(clauses, "(o.valid_until IS NULL OR o.valid_until > datetime('now'))")
+	}
+
+	// Apply namespace filter when scoped, mirroring filters.go:23-26
+	if options.Namespace != "" {
+		clauses = append(clauses, "o.namespace = ?")
+		args = append(args, options.Namespace)
 	}
 
 	// Apply the same filters as the FTS path for consistency

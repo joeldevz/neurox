@@ -12,10 +12,10 @@ import (
 // TESTS: RRF scoring (Subtask 3 of recall-merge-fix)
 //
 // The relevance term of the tri-factor score is replaced with Reciprocal Rank
-// Fusion: 1/(k+rank_fts) + 1/(k+rank_sem). This file tests:
-//   - rrfScore(): pure function formula for the 4 channel combinations
+// Fusion: 1/(k+rank_fts) + 1/(k+rank_sem) + 0.5/(k+rank_fact). This file tests:
+//   - rrfScore(): pure function formula for the channel combinations
 //   - deriveSemanticRanks(): stable sort with ID-asc tie-break
-//   - applyScores(): consumes FTSRank/SemRank (not RawRelevance/SemanticScore)
+//   - applyScores(): consumes FTSRank/SemRank/FactRank (not RawRelevance/SemanticScore)
 //     to compute the relevance term, and populates RRFScore in breakdown
 // ============================================================================
 
@@ -24,11 +24,12 @@ import (
 // (Cormack et al. 2009, Bruch et al. 2022).
 func TestRRFScore(t *testing.T) {
 	tests := []struct {
-		name    string
-		ftsRank int
-		semRank int
-		k       int
-		want    float64
+		name     string
+		ftsRank  int
+		semRank  int
+		factRank int
+		k        int
+		want     float64
 	}{
 		{
 			name:    "dual channel: FTS rank 3, semantic rank 1, k=60",
@@ -52,7 +53,15 @@ func TestRRFScore(t *testing.T) {
 			want:    1.0 / 62.0, // ≈ 0.0161
 		},
 		{
-			name:    "both absent (defensive, should not happen post-merge)",
+			name:     "fact-only at rank 1, k=60",
+			ftsRank:  0,
+			semRank:  0,
+			factRank: 1,
+			k:        60,
+			want:     0.5 / 61.0,
+		},
+		{
+			name:    "all absent (defensive, should not happen post-merge)",
 			ftsRank: 0,
 			semRank: 0,
 			k:       60,
@@ -66,6 +75,14 @@ func TestRRFScore(t *testing.T) {
 			want:    1.0/33.0 + 1.0/31.0, // larger magnitude than k=60
 		},
 		{
+			name:     "FTS + semantic + fact additive channels, k=60",
+			ftsRank:  2,
+			semRank:  3,
+			factRank: 4,
+			k:        60,
+			want:     1.0/62.0 + 1.0/63.0 + 0.5/64.0,
+		},
+		{
 			name:    "FTS-only at rank 10, k=60 (lower bound of RRF)",
 			ftsRank: 10,
 			semRank: 0,
@@ -76,10 +93,10 @@ func TestRRFScore(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := rrfScore(tt.ftsRank, tt.semRank, tt.k)
+			got := rrfScore(tt.ftsRank, tt.semRank, tt.factRank, tt.k)
 			if math.Abs(got-tt.want) > 1e-9 {
-				t.Errorf("rrfScore(%d, %d, %d) = %.9f, want %.9f (diff %.9f)",
-					tt.ftsRank, tt.semRank, tt.k, got, tt.want, got-tt.want)
+				t.Errorf("rrfScore(%d, %d, %d, %d) = %.9f, want %.9f (diff %.9f)",
+					tt.ftsRank, tt.semRank, tt.factRank, tt.k, got, tt.want, got-tt.want)
 			}
 		})
 	}
@@ -140,11 +157,11 @@ func TestApplyScores_RRFPopulatesBreakdown(t *testing.T) {
 	const k = 60
 	candidates := []candidate{
 		{
-			Result:      Result{ID: "fts-only", ObservationType: observation.ObservationTypeDiscovery},
-			Importance:  0.5,
-			CreatedAt:   now,
-			FTSRank:     1,
-			SemRank:     0,
+			Result:     Result{ID: "fts-only", ObservationType: observation.ObservationTypeDiscovery},
+			Importance: 0.5,
+			CreatedAt:  now,
+			FTSRank:    1,
+			SemRank:    0,
 		},
 	}
 
@@ -178,20 +195,20 @@ func TestApplyScores_RRFDualChannel(t *testing.T) {
 	candidates := []candidate{
 		{
 			// Dual channel: FTS rank 3, semantic rank 1
-			Result:      Result{ID: "dual", ObservationType: observation.ObservationTypeDiscovery},
-			Importance:  0.5,
-			CreatedAt:   now,
-			FTSRank:     3,
-			SemRank:     1,
+			Result:     Result{ID: "dual", ObservationType: observation.ObservationTypeDiscovery},
+			Importance: 0.5,
+			CreatedAt:  now,
+			FTSRank:    3,
+			SemRank:    1,
 		},
 		{
 			// FTS-only at rank 1 (would have been higher in the old max() world
 			// if no semantic score was set; here it has no semantic match).
-			Result:      Result{ID: "fts-only", ObservationType: observation.ObservationTypeDiscovery},
-			Importance:  0.5,
-			CreatedAt:   now,
-			FTSRank:     1,
-			SemRank:     0,
+			Result:     Result{ID: "fts-only", ObservationType: observation.ObservationTypeDiscovery},
+			Importance: 0.5,
+			CreatedAt:  now,
+			FTSRank:    1,
+			SemRank:    0,
 		},
 	}
 
@@ -271,7 +288,7 @@ func TestRRFNormalization(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			raw := rrfScore(tt.ftsRank, tt.semRank, k)
+			raw := rrfScore(tt.ftsRank, tt.semRank, 0, k)
 			normalized := raw * float64(k+1) / 2.0
 
 			if normalized < tt.wantMin || normalized > tt.wantMax {
@@ -318,4 +335,64 @@ func TestApplyScores_NormalizedRRFContributes(t *testing.T) {
 		t.Errorf("score ratio (old-high-RRF / recent-low-RRF) = %.3f, want >= 0.6 (RRF should compete with recency)",
 			scoreRatio)
 	}
+}
+
+// TestCrossSignalBoostGatedOnMembership verifies that the cross-signal boost
+// (1.2x) is applied based on rank membership (FTSRank > 0 && SemRank > 0),
+// not on normalized score thresholds.
+//
+// This is a unit test of applyScores directly, independent of the full search
+// engine. It creates a minimal candidate pool where one candidate appears in
+// both FTS and semantic channels and verifies the boost is applied.
+func TestCrossSignalBoostGatedOnMembership(t *testing.T) {
+	now := time.Date(2026, 6, 3, 12, 0, 0, 0, time.UTC)
+
+	// Create 2 candidates:
+	// - dualChannel: appears in both FTS (rank 2) and semantic (rank 1)
+	// - ftsOnly: appears only in FTS (rank 1)
+	candidates := []candidate{
+		{
+			Result:        Result{ID: "dual", ObservationType: observation.ObservationTypeDiscovery},
+			Importance:    0.5,
+			CreatedAt:     now,
+			FTSRank:       2,     // in FTS
+			SemRank:       1,     // in semantic
+			RawRelevance:  -10.0, // arbitrary (not used in new gate)
+			SemanticScore: 0.8,
+		},
+		{
+			Result:        Result{ID: "fts-only", ObservationType: observation.ObservationTypeDiscovery},
+			Importance:    0.5,
+			CreatedAt:     now,
+			FTSRank:       1,    // in FTS
+			SemRank:       0,    // NOT in semantic
+			RawRelevance:  -5.0, // better BM25 than dual
+			SemanticScore: 0.0,
+		},
+	}
+
+	applyScores(candidates, ScoreWeights{}.withDefaults(), now, TemporalIntent{}, nil, true, "test", 60)
+
+	// Verify: dual-channel should have cross-signal boost
+	if candidates[0].Breakdown == nil {
+		t.Fatal("Breakdown is nil, want non-nil (debug=true)")
+	}
+	if candidates[0].Breakdown.CrossSignalBoost != 1.2 {
+		t.Errorf("dual-channel CrossSignalBoost = %.2f, want 1.2 (membership gate should apply)",
+			candidates[0].Breakdown.CrossSignalBoost)
+	}
+
+	// Verify: FTS-only should NOT have boost
+	if candidates[1].Breakdown == nil {
+		t.Fatal("Breakdown[1] is nil, want non-nil (debug=true)")
+	}
+	if candidates[1].Breakdown.CrossSignalBoost != 1.0 {
+		t.Errorf("fts-only CrossSignalBoost = %.2f, want 1.0 (no semantic rank)",
+			candidates[1].Breakdown.CrossSignalBoost)
+	}
+
+	t.Logf("dual-channel: FTSRank=%d, SemRank=%d, CrossSignalBoost=%.2f, Score=%.4f",
+		candidates[0].FTSRank, candidates[0].SemRank, candidates[0].Breakdown.CrossSignalBoost, candidates[0].Score)
+	t.Logf("fts-only: FTSRank=%d, SemRank=%d, CrossSignalBoost=%.2f, Score=%.4f",
+		candidates[1].FTSRank, candidates[1].SemRank, candidates[1].Breakdown.CrossSignalBoost, candidates[1].Score)
 }

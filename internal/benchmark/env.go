@@ -110,6 +110,12 @@ func NewBenchEnv(ctx context.Context, scale ScaleConfig) (*BenchEnv, error) {
 			recallOpts = append(recallOpts, recall.WithRRFK(k))
 		}
 	}
+	// Honor NEUROX_RECALL_SEMANTIC_MIN_SCORE (semantic threshold override).
+	if v := strings.TrimSpace(os.Getenv("NEUROX_RECALL_SEMANTIC_MIN_SCORE")); v != "" {
+		if score, err := strconv.ParseFloat(v, 64); err == nil && score > 0 {
+			recallOpts = append(recallOpts, recall.WithSemanticMinScore(score))
+		}
+	}
 	recallEngine := recall.NewEngine(database, recallOpts...)
 
 	// --- links ---

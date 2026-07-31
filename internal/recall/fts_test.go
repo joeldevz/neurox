@@ -8,10 +8,10 @@ import (
 // Spanish/English stopwords should not pollute the FTS match expression.
 func TestStopwordFiltering(t *testing.T) {
 	tests := []struct {
-		name      string
-		query     string
+		name       string
+		query      string
 		wantTokens map[string]bool // tokens that should appear in FTS query
-		notTokens map[string]bool  // tokens that should NOT appear
+		notTokens  map[string]bool // tokens that should NOT appear
 	}{
 		{
 			name:  "Spanish orquestacion with stopword de",
@@ -39,7 +39,7 @@ func TestStopwordFiltering(t *testing.T) {
 			name:  "Degenerate all-stopwords falls back to original",
 			query: "de la el",
 			wantTokens: map[string]bool{
-				"de": true,  // should preserve original tokens
+				"de": true, // should preserve original tokens
 				"la": true,
 				"el": true,
 			},
@@ -49,19 +49,19 @@ func TestStopwordFiltering(t *testing.T) {
 			name:  "Multiple stopwords interspersed",
 			query: "como usar el API en y con containers de la orquesta",
 			wantTokens: map[string]bool{
-				"usar":        true,
-				"API":         true,
-				"containers":  true,
-				"orquesta":    true,
+				"usar":       true,
+				"API":        true,
+				"containers": true,
+				"orquesta":   true,
 			},
 			notTokens: map[string]bool{
-				"como":  true,
-				"el":    true,
-				"en":    true,
-				"y":     true,
-				"con":   true,
-				"de":    true,
-				"la":    true,
+				"como": true,
+				"el":   true,
+				"en":   true,
+				"y":    true,
+				"con":  true,
+				"de":   true,
+				"la":   true,
 			},
 		},
 		{
@@ -73,7 +73,7 @@ func TestStopwordFiltering(t *testing.T) {
 				"instance":   true,
 			},
 			notTokens: map[string]bool{
-				"a": true,
+				"a":   true,
 				"use": true, // "use" is a stopword
 			},
 		},
@@ -121,27 +121,27 @@ func TestStopwordFiltering(t *testing.T) {
 // and only semantic stopwords are filtered, not case-insensitive variations in content.
 func TestStopwordFilteringPreservesCaseSensitiveMatches(t *testing.T) {
 	tests := []struct {
-		name      string
-		query     string
-		wantToken string
+		name         string
+		query        string
+		wantToken    string
 		notWantToken string
 	}{
 		{
-			name:      "API preserved as identifier",
-			query:     "the API",
-			wantToken: "API",
+			name:         "API preserved as identifier",
+			query:        "the API",
+			wantToken:    "API",
 			notWantToken: "the",
 		},
 		{
-			name:      "GO preserved as identifier",
-			query:     "USE GO language",
-			wantToken: "GO",
+			name:         "GO preserved as identifier",
+			query:        "USE GO language",
+			wantToken:    "GO",
 			notWantToken: "USE", // "use" is a stopword (case-insensitive)
 		},
 		{
-			name:      "FTS is a code acronym",
-			query:     "FTS search feature in db",
-			wantToken: "FTS",
+			name:         "FTS is a code acronym",
+			query:        "FTS search feature in db",
+			wantToken:    "FTS",
 			notWantToken: "in",
 		},
 	}

@@ -24,6 +24,7 @@ import (
 //go:embed 010_activation_signals.sql
 //go:embed 011_reconcile_scores.sql
 //go:embed 012_provenance.sql
+//go:embed 013_facts_fts.sql
 var schemaFS embed.FS
 
 type migration struct {
@@ -93,6 +94,11 @@ var migrations = []migration{
 		name:    "provenance",
 		path:    "012_provenance.sql",
 	},
+	{
+		version: 13,
+		name:    "facts_fts",
+		path:    "013_facts_fts.sql",
+	},
 }
 
 func Open(ctx context.Context, databasePath string) (*sql.DB, error) {
@@ -125,6 +131,13 @@ func Open(ctx context.Context, databasePath string) (*sql.DB, error) {
 	if err := Migrate(ctx, database); err != nil {
 		_ = database.Close()
 		return nil, err
+	}
+
+	// FTS5 availability check: fail fast if FTS5 isn't compiled in
+	var fts5Check int
+	if err := database.QueryRowContext(ctx, "SELECT count(*) FROM pragma_compile_options WHERE compile_options LIKE 'ENABLE_FTS5%'").Scan(&fts5Check); err != nil || fts5Check == 0 {
+		_ = database.Close()
+		return nil, fmt.Errorf("FTS5 support is not compiled in — rebuild with `CGO_ENABLED=1 go build -tags fts5 ./...`")
 	}
 
 	return database, nil

@@ -38,7 +38,7 @@ jobs:
           CC: ${{ matrix.goarch == 'arm64' && 'aarch64-linux-gnu-gcc' || 'gcc' }}
         run: |
           BINARY="neurox_linux_${{ matrix.goarch }}"
-          go build -tags sqlite_fts5 -ldflags "-s -w -X main.version=${GITHUB_REF_NAME#v}" -o "dist/${BINARY}" .
+          go build -tags fts5 -ldflags "-s -w -X main.version=${GITHUB_REF_NAME#v}" -o "dist/${BINARY}" .
 
       - name: Package
         run: |
@@ -73,7 +73,7 @@ jobs:
           GOARCH: ${{ matrix.goarch }}
         run: |
           BINARY="neurox_darwin_${{ matrix.goarch }}"
-          go build -tags sqlite_fts5 -ldflags "-s -w -X main.version=${GITHUB_REF_NAME#v}" -o "dist/${BINARY}" .
+          go build -tags fts5 -ldflags "-s -w -X main.version=${GITHUB_REF_NAME#v}" -o "dist/${BINARY}" .
 
       - name: Package
         run: |
@@ -105,7 +105,7 @@ jobs:
           GOARCH: amd64
         shell: bash
         run: |
-          go build -tags sqlite_fts5 -ldflags "-s -w -X main.version=${GITHUB_REF_NAME#v}" -o "dist/neurox.exe" .
+          go build -tags fts5 -ldflags "-s -w -X main.version=${GITHUB_REF_NAME#v}" -o "dist/neurox.exe" .
 
       - name: Package
         shell: bash
