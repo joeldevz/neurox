@@ -65,6 +65,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		"total": total, "buffer": buffer, "working": working, "core": core,
 		"stale": stale, "expired": expired, "links": linkCount, "active_sessions": sessions,
 		"facts": factCount, "temporal_mentions": temporalCount,
+		"version": s.deps.Version,
 		"llm_provider": s.deps.LLMProviderName, "embedding_provider": s.deps.EmbedProviderName,
 		"gate_mode":          s.deps.GateMode,
 		"embeddings_total":   embeddingsTotal,
