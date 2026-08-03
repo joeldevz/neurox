@@ -2,9 +2,12 @@ package session
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/joeldevz/neurox/internal/db"
 	"github.com/joeldevz/neurox/internal/llm"
@@ -334,5 +337,194 @@ func TestParseExtractions(t *testing.T) {
 				t.Errorf("parseExtractions() = %d, want %d", len(got), tt.want)
 			}
 		})
+	}
+}
+
+func TestParseExtractionsDoesNotTreatNonethelessAsNone(t *testing.T) {
+	// Regression test: "Nonetheless" contains "NONE" when uppercased.
+	// parseExtractions should only treat the literal word "NONE" as "no extractions".
+	response := "discovery | Update database | What: Nonetheless the schema is good. Why: Nonetheless we proceeded."
+	got := parseExtractions(response)
+	if len(got) != 1 {
+		t.Errorf("parseExtractions('Nonetheless...') = %d, want 1", len(got))
+	}
+	if len(got) > 0 && got[0].title != "Update database" {
+		t.Errorf("title = %q, want 'Update database'", got[0].title)
+	}
+}
+
+func TestWaitForExtractionReturnsRealCountAndError(t *testing.T) {
+	// Direct test: End() -> WaitForExtraction() -> verify count and error.
+	// Does NOT use mgr.WaitBackground as substitute.
+	dbPath := filepath.Join(t.TempDir(), "neurox.db")
+	database, err := db.Open(context.Background(), dbPath)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	t.Cleanup(func() { database.Close() })
+
+	mock := &mockLLM{response: `decision | Choice A | Content A
+bugfix | Fix B | Content B
+discovery | Find C | Content C`}
+
+	idGen := observation.NewULIDGenerator()
+	mgr := NewManager(database, mock, idGen)
+	ctx := context.Background()
+
+	start, _ := mgr.Start(ctx, "Test", "", "", "ns")
+	endResult, err := mgr.End(ctx, start.SessionID, "Some summary", "cli")
+	if err != nil {
+		t.Fatalf("end: %v", err)
+	}
+
+	// Before waiting: should be -1 (async signal)
+	if endResult.ObservationsExtracted != -1 {
+		t.Errorf("before wait: extracted = %d, want -1 (async)", endResult.ObservationsExtracted)
+	}
+
+	// Call WaitForExtraction directly (not mgr.WaitBackground).
+	// This is what the CLI seam uses.
+	count, extractErr := endResult.WaitForExtraction()
+
+	// Should get actual count and nil error
+	if count != 3 {
+		t.Errorf("WaitForExtraction count = %d, want 3", count)
+	}
+	if extractErr != nil {
+		t.Errorf("WaitForExtraction error = %v, want nil", extractErr)
+	}
+
+	// Verify that 3 observations were actually persisted in DB
+	var dbCount int
+	database.QueryRowContext(ctx, "SELECT COUNT(*) FROM observations WHERE namespace = 'ns' AND source = 'consolidator' AND deleted_at IS NULL").Scan(&dbCount)
+	if dbCount != 3 {
+		t.Errorf("observations in DB = %d, want 3", dbCount)
+	}
+}
+
+func TestWaitForExtractionReportsLLMError(t *testing.T) {
+	// Test that CLI seam can observe LLM errors through WaitForExtraction.
+	dbPath := filepath.Join(t.TempDir(), "neurox.db")
+	database, err := db.Open(context.Background(), dbPath)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	t.Cleanup(func() { database.Close() })
+
+	// Mock LLM that fails
+	mock := &mockLLM{err: fmt.Errorf("rate limited")}
+
+	idGen := observation.NewULIDGenerator()
+	mgr := NewManager(database, mock, idGen)
+	ctx := context.Background()
+
+	start, _ := mgr.Start(ctx, "Test", "", "", "ns")
+	endResult, err := mgr.End(ctx, start.SessionID, "Some summary", "cli")
+	if err != nil {
+		t.Fatalf("end: %v", err)
+	}
+
+	// Call WaitForExtraction to wait for and retrieve the error
+	count, extractErr := endResult.WaitForExtraction()
+
+	// Should get 0 count and non-nil error
+	if count != 0 {
+		t.Errorf("WaitForExtraction count = %d, want 0 (LLM failed)", count)
+	}
+	if extractErr == nil {
+		t.Errorf("WaitForExtraction error = nil, want non-nil (should report LLM failure)")
+	}
+	if extractErr != nil && !strings.Contains(extractErr.Error(), "rate limited") {
+		t.Errorf("extractErr = %v, should contain 'rate limited'", extractErr)
+	}
+}
+
+func TestWaitForExtractionWhenNoLLM(t *testing.T) {
+	// When LLM is not available, WaitForExtraction should return synchronously
+	// with count=0 and error=nil (no async extraction was launched).
+	dbPath := filepath.Join(t.TempDir(), "neurox.db")
+	database, err := db.Open(context.Background(), dbPath)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	t.Cleanup(func() { database.Close() })
+
+	idGen := observation.NewULIDGenerator()
+	mgr := NewManager(database, llm.Disabled{}, idGen) // No LLM
+	ctx := context.Background()
+
+	start, _ := mgr.Start(ctx, "Test", "", "", "ns")
+	endResult, err := mgr.End(ctx, start.SessionID, "Some summary", "cli")
+	if err != nil {
+		t.Fatalf("end: %v", err)
+	}
+
+	// ObservationsExtracted should be 0 (sync, no LLM)
+	if endResult.ObservationsExtracted != 0 {
+		t.Errorf("ObservationsExtracted = %d, want 0 (no LLM)", endResult.ObservationsExtracted)
+	}
+	if endResult.Warning == "" {
+		t.Error("expected warning when LLM is disabled")
+	}
+
+	// WaitForExtraction should return immediately with the sync count and nil error
+	count, extractErr := endResult.WaitForExtraction()
+	if count != 0 {
+		t.Errorf("WaitForExtraction count = %d, want 0", count)
+	}
+	if extractErr != nil {
+		t.Errorf("WaitForExtraction error = %v, want nil", extractErr)
+	}
+}
+
+func TestWaitForExtractionIdempotent(t *testing.T) {
+	// Regression test for R4-double-wait: calling WaitForExtraction twice
+	// must return the same result without blocking.
+	dbPath := filepath.Join(t.TempDir(), "neurox.db")
+	database, err := db.Open(context.Background(), dbPath)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	t.Cleanup(func() { database.Close() })
+
+	mock := &mockLLM{response: `decision | First call | Content`}
+	idGen := observation.NewULIDGenerator()
+	mgr := NewManager(database, mock, idGen)
+	ctx := context.Background()
+
+	start, _ := mgr.Start(ctx, "Test", "", "", "ns")
+	endResult, err := mgr.End(ctx, start.SessionID, "Some summary", "cli")
+	if err != nil {
+		t.Fatalf("end: %v", err)
+	}
+
+	// First call: should block and get result from channel
+	count1, err1 := endResult.WaitForExtraction()
+	if count1 != 1 {
+		t.Errorf("first WaitForExtraction count = %d, want 1", count1)
+	}
+	if err1 != nil {
+		t.Errorf("first WaitForExtraction error = %v, want nil", err1)
+	}
+
+	// Second call: must return same result immediately (no block)
+	// Use a channel to detect timeout (if it blocks, test will timeout)
+	done := make(chan bool, 1)
+	go func() {
+		count2, err2 := endResult.WaitForExtraction()
+		if count2 != count1 {
+			t.Errorf("second WaitForExtraction count = %d, want %d", count2, count1)
+		}
+		if err2 != err1 {
+			t.Errorf("second WaitForExtraction error = %v, want %v", err2, err1)
+		}
+		done <- true
+	}()
+
+	select {
+	case <-done:
+		// Second call completed quickly — idempotence works
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("second WaitForExtraction() blocked; not idempotent")
 	}
 }

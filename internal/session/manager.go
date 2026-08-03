@@ -49,8 +49,10 @@ func (m *Manager) OnPostSave(hook PostSaveHook) {
 }
 
 // WaitBackground blocks until all background goroutines (e.g. LLM extraction
-// started by End) have completed.  Intended for tests only — production
-// callers should not need this.
+// started by End) have completed.  Intended for tests that need to verify
+// side effects in the database after extraction — not typically called in production.
+// CLI callers should use EndResult.WaitForExtraction() instead to wait for
+// a specific extraction and handle its error.
 func (m *Manager) WaitBackground() {
 	m.bgWG.Wait()
 }
@@ -92,11 +94,51 @@ func (m *Manager) Start(ctx context.Context, title, directory, branch, namespace
 	}, nil
 }
 
+// extractionResult holds the outcome of background extraction.
+type extractionResult struct {
+	count int
+	err   error
+}
+
+// extractionWaitState is private state shared across EndResult copies.
+// It holds sync.Once and cached results so that multiple EndResult copies
+// safely share the same idempotent WaitForExtraction behavior.
+type extractionWaitState struct {
+	once       sync.Once
+	count      int
+	err        error
+	resultChan chan extractionResult
+}
+
 // EndResult holds the result of ending a session.
 type EndResult struct {
 	SessionID             string
 	ObservationsExtracted int
 	Warning               string
+	// waitState is a pointer to shared synchronization state.
+	// nil when no async extraction was launched (no LLM available).
+	waitState *extractionWaitState
+}
+
+// WaitForExtraction blocks until async extraction completes and returns the actual count and error.
+// Should only be called by CLI callers that need a real count and error status before exiting.
+// For MCP/HTTP callers, do NOT call this — ObservationsExtracted=-1 signals async.
+// If no extraction was launched (no LLM), returns the synchronous count and nil error.
+// Idempotent and concurrent-safe: subsequent calls return the same cached result.
+func (r *EndResult) WaitForExtraction() (int, error) {
+	if r.waitState == nil {
+		// No async extraction was launched (no LLM available).
+		// Return the synchronous count (0) and nil error.
+		return r.ObservationsExtracted, nil
+	}
+	// Use sync.Once to ensure we read from the channel exactly once,
+	// even if WaitForExtraction() is called multiple times concurrently.
+	r.waitState.once.Do(func() {
+		result := <-r.waitState.resultChan
+		r.waitState.count = result.count
+		r.waitState.err = result.err
+	})
+	return r.waitState.count, r.waitState.err
 }
 
 // End completes a session. If LLM is available, extracts atomic observations
@@ -136,6 +178,13 @@ func (m *Manager) End(ctx context.Context, sessionID, summary, surface string) (
 	// Extract atomic observations if LLM available — run in background
 	// so that the MCP/HTTP caller is never blocked by slow LLM inference.
 	if llm.IsAvailable(m.llm) {
+		// Create shared wait state to hold sync.Once and cached results.
+		// This allows EndResult copies to safely share idempotent behavior.
+		waitState := &extractionWaitState{
+			resultChan: make(chan extractionResult, 1),
+		}
+		endResult.waitState = waitState
+
 		m.bgWG.Add(1)
 		go func() {
 			defer m.bgWG.Done()
@@ -146,6 +195,8 @@ func (m *Manager) End(ctx context.Context, sessionID, summary, surface string) (
 			} else {
 				log.Printf("[INFO] session_end %s: extracted %d observations in background", sessionID, extracted)
 			}
+			// Send result to buffered channel (producer never blocks).
+			waitState.resultChan <- extractionResult{count: extracted, err: extractErr}
 		}()
 		endResult.ObservationsExtracted = -1 // signals async; caller should not rely on count
 	} else {
@@ -181,27 +232,39 @@ Output observations (one per line, pipe-separated):`, summary)
 
 	observations := parseExtractions(resp)
 	saved := 0
+	var firstInsertErr error
 	for _, obs := range observations {
 		id := m.idGen.New()
 		_, err := m.db.ExecContext(ctx, `
 			INSERT INTO observations(id, title, content, observation_type, layer, confidence, importance, kind, namespace, source, source_surface, source_session_id, source_tool)
 			VALUES(?, ?, ?, ?, 0, 0.6, 0.5, 'semantic', ?, 'consolidator', ?, ?, 'session_end')
 		`, id, obs.title, obs.content, obs.obsType, namespace, nullStr(surface), nullStr(sessionID))
-		if err == nil {
-			saved++
-			// Best-effort temporal extraction — do not block on failure.
-			if m.temporal != nil {
-				_, _ = m.temporal.Extract(ctx, id, obs.content)
+		if err != nil {
+			// Record first INSERT error; continue trying other observations.
+			// CLI will see the error when calling WaitForExtraction.
+			if firstInsertErr == nil {
+				firstInsertErr = err
 			}
-			// Run post-save hooks (fact extraction, embedding enqueue, etc.)
-			// so session-derived observations get equivalent quality to
-			// observations saved through the main pipeline.
-			for _, hook := range m.postSaveHooks {
-				hook(ctx, id, obs.title, obs.content, namespace)
-			}
+			log.Printf("[WARN] session_end %s: failed to insert observation %q: %v", sessionID, obs.title, err)
+			continue
+		}
+		saved++
+		// Best-effort temporal extraction — do not block on failure.
+		if m.temporal != nil {
+			_, _ = m.temporal.Extract(ctx, id, obs.content)
+		}
+		// Run post-save hooks (fact extraction, embedding enqueue, etc.)
+		// so session-derived observations get equivalent quality to
+		// observations saved through the main pipeline.
+		for _, hook := range m.postSaveHooks {
+			hook(ctx, id, obs.title, obs.content, namespace)
 		}
 	}
 
+	// If any INSERT failed, return the error with the count of successful inserts.
+	if firstInsertErr != nil {
+		return saved, fmt.Errorf("observation insertion failed (saved %d/%d): %w", saved, len(observations), firstInsertErr)
+	}
 	return saved, nil
 }
 
@@ -212,7 +275,13 @@ type extraction struct {
 }
 
 func parseExtractions(response string) []extraction {
-	if strings.TrimSpace(response) == "" || strings.Contains(strings.ToUpper(response), "NONE") {
+	if strings.TrimSpace(response) == "" {
+		return nil
+	}
+	// Check if the response is exactly "NONE" (or just whitespace + NONE).
+	// Do not treat "Nonetheless" or other words containing "NONE" as a signal for no extractions.
+	trimmed := strings.TrimSpace(response)
+	if strings.EqualFold(trimmed, "NONE") {
 		return nil
 	}
 
