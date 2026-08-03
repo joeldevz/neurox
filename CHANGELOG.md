@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.7] — 2026-08-03
+
+### Added
+
+- Redesigned observability dashboard with Overview, lazy relationship graph, Explorer, and Brain Power health views
+- FTS5-backed fact candidates as a first-class RRF recall channel
+
+### Fixed
+
+- Recall BM25 weighting, namespace and expiration filtering, candidate-pool sizing, and cross-signal ranking
+- CLI `session-end` now waits for observation extraction, reports the final count, and surfaces extraction failures
+
+### Changed
+
+- Access telemetry now uses an asynchronous coalesced queue and no longer influences recency ranking
+- Standardized FTS5 build configuration and removed unused helpers and dead code
+
+### Known limitations
+
+- CLI `session-end` fact post-processing remains best-effort and asynchronous after observation extraction
+
 ## [0.5.6] — 2026-06-19
 
 ### Added
@@ -53,6 +74,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Git post-commit hook for automatic staleness marking
 - YAML configuration with environment variable overrides
 
-[Unreleased]: https://github.com/joeldevz/neurox/compare/v0.5.6...HEAD
+[Unreleased]: https://github.com/joeldevz/neurox/compare/v0.5.7...HEAD
+[0.5.7]: https://github.com/joeldevz/neurox/compare/v0.5.6...v0.5.7
 [0.5.6]: https://github.com/joeldevz/neurox/compare/v0.2.0...v0.5.6
 [0.2.0]: https://github.com/joeldevz/neurox/compare/v0.1.19...v0.2.0
