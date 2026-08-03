@@ -912,13 +912,24 @@ func runSessionEnd(ctx context.Context, database *sql.DB, cfg config.Config) {
 		log.Fatalf("session end: %v", err)
 	}
 
+	// CLI must wait for async extraction to complete before closing the database.
+	// MCP/HTTP callers do NOT call this — they get -1 and process continues.
+	actualCount, extractErr := endResult.WaitForExtraction()
+
 	resp := map[string]any{
 		"session_id":             endResult.SessionID,
-		"observations_extracted": endResult.ObservationsExtracted,
+		"observations_extracted": actualCount,
 		"message":                "session completed",
 	}
 	if endResult.Warning != "" {
 		resp["warning"] = endResult.Warning
+	}
+	// Report extraction error if it occurred.
+	if extractErr != nil {
+		resp["extraction_error"] = extractErr.Error()
+		// Still report the count and exit with error code.
+		printJSON(resp)
+		log.Fatalf("session end: extraction error: %v", extractErr)
 	}
 
 	printJSON(resp)
